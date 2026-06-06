@@ -11,3 +11,9 @@ out/
 .idea/
 .code24/
 .claude/
+
+# Electron app build + deps
+app/node_modules/
+app/out/
+app/dist/
+app/tsconfig.node.tsbuildinfo

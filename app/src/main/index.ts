@@ -1,0 +1,203 @@
+/**
+ * Electron main process entry.
+ *
+ * Per PRD NF6 (renderer hardening): contextIsolation true,
+ * nodeIntegration false, sandbox true. Renderer talks to main only
+ * through the typed IPC bus in src/main/ipc/bus.ts.
+ *
+ * Per PRD F10.1 / F10.2: single internal IPC channel for control
+ * verbs; pty.data lives on its own channel.
+ */
+
+// `ELECTRON_DISABLE_SECURITY_WARNINGS=true` is set by the npm `dev`
+// script so the renderer console isn't dominated by the "Insecure CSP"
+// warning while we use 'unsafe-eval' for Vite HMR. The packaged prod
+// build runs without the env var and uses the tight CSP from installCsp().
+import { app, BrowserWindow, session, shell } from 'electron';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { electronApp, optimizer, is } from '@electron-toolkit/utils';
+
+import { registerControlBus } from './ipc/bus.js';
+import { initDatabase, closeDatabase } from './database/index.js';
+import { getSessionManager } from './services/sessionManager.js';
+import { addProject } from './services/projectStore.js';
+
+/**
+ * Per PRD NF6: tight CSP in production. In dev we relax it just
+ * enough to let Vite's HMR + inline scripts work (`'unsafe-eval'`,
+ * `'unsafe-inline'`, `ws:` for the HMR WebSocket). The dev branch
+ * also silences the loud "Electron Security Warning" in the console.
+ */
+function installCsp(): void {
+  const dev =
+    "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:* data:; " +
+    "img-src 'self' data: http://localhost:*; " +
+    "font-src 'self' data:;";
+  const prod =
+    "default-src 'self'; " +
+    "script-src 'self'; " +
+    "style-src 'self' 'unsafe-inline'; " +
+    "img-src 'self' data:; " +
+    "font-src 'self'; " +
+    "connect-src 'self' https://api.anthropic.com;";
+  const policy = is.dev ? dev : prod;
+  session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
+    cb({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [policy],
+      },
+    });
+  });
+}
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
+
+let mainWindow: BrowserWindow | null = null;
+
+function createWindow(): void {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 900,
+    minWidth: 1100,
+    minHeight: 720,
+    show: false,
+    autoHideMenuBar: true,
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#0a0b0d', // matches --bg in design mockups
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      sandbox: true,            // NF6
+      contextIsolation: true,   // NF6
+      nodeIntegration: false,   // NF6
+      webSecurity: true,
+    },
+  });
+
+  mainWindow.on('ready-to-show', () => {
+    mainWindow?.show();
+    // NOTE: auto-opening DevTools here was triggering a renderer
+    // reload (WebSocket drop + second mount) on some Electron
+    // versions. Press Cmd+Opt+I in the window to open them
+    // manually if you need them.
+  });
+
+  // CODE24_TEST=1 → after first render, auto-add the project at
+  // CODE24_TEST_PATH (default = repo root) and spawn a Claude Code
+  // session in it. Used to verify the full flow end-to-end without
+  // a human at the keyboard. Strictly dev-only.
+  if (process.env['CODE24_TEST'] === '1') {
+    const target = process.env['CODE24_TEST_PATH'] ?? process.cwd();
+    mainWindow.webContents.once('did-finish-load', () => {
+      setTimeout(async () => {
+        try {
+          const p = addProject(target);
+          console.log(`[CODE24_TEST] addProject ok: id=${p.id} path=${p.path}`);
+          const s = await getSessionManager().spawn({
+            projectId: p.id,
+            backendId: 'claude-code',
+            cwd: p.path,
+          });
+          console.log(`[CODE24_TEST] spawn ok: session=${s.id} pid=${(s as { id: string }).id}`);
+        } catch (err) {
+          console.error('[CODE24_TEST] failed:', err);
+        }
+      }, 1500);
+    });
+  }
+
+  // Forward renderer console + crashes to the main process stdout
+  // so they're visible in the `npm run dev` terminal. Without this
+  // the renderer can silently fail and look like a blank window.
+  mainWindow.webContents.on('console-message', (...args: unknown[]) => {
+    // Cross-version safe: Electron 28+ uses (event,level,message,line,src);
+    // newer drafts use a single event object.
+    const a = args as [unknown, number?, string?, number?, string?];
+    const level = a[1] ?? -1;
+    const message = a[2] ?? '';
+    const line = a[3] ?? 0;
+    const src = a[4] ?? '';
+    const lvlName = ['debug', 'info', 'warn', 'error'][level] ?? 'log';
+    console.log(`[renderer ${lvlName}] ${message} (${src}:${line})`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.error('[renderer] render-process-gone:', details);
+  });
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.error(`[renderer] did-fail-load: ${code} ${desc} ${url}`);
+  });
+  mainWindow.webContents.on(
+    'preload-error',
+    (_e, preloadPath, error) => {
+      console.error(`[preload] error in ${preloadPath}:`, error);
+    }
+  );
+
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    shell.openExternal(details.url);
+    return { action: 'deny' };
+  });
+
+  const rendererUrl = process.env['ELECTRON_RENDERER_URL'];
+  if (is.dev && rendererUrl) {
+    // Wait until Vite is actually accepting connections before
+    // loading. Avoids the ERR_CONNECTION_REFUSED race on cold boot
+    // (and the spurious "second page render" my earlier retry caused).
+    void waitForUrl(rendererUrl).then(() => mainWindow?.loadURL(rendererUrl));
+  } else {
+    mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
+  }
+}
+
+async function waitForUrl(url: string, maxMs = 6000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    try {
+      const res = await fetch(url, { method: 'HEAD' });
+      if (res.ok || res.status === 404) return; // 404 also means it's listening
+    } catch {
+      // not listening yet
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+app.whenReady().then(() => {
+  electronApp.setAppUserModelId('com.code24.app');
+
+  app.on('browser-window-created', (_event, window) => {
+    optimizer.watchWindowShortcuts(window);
+  });
+
+  // Production-only CSP. In dev, leave the renderer without a CSP
+  // header so Vite's WebSocket HMR isn't disturbed.
+  if (!is.dev) installCsp();
+
+  // Initialise SQLite — F2.4 / F12.3 / NF4 (crash recovery substrate).
+  initDatabase();
+
+  // Wire the control-channel IPC bus before the window opens so the
+  // renderer can call ping/meta/session.list immediately on mount.
+  registerControlBus();
+
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  closeDatabase();
+  if (process.platform !== 'darwin') {
+    app.quit();
+  }
+});
+
+app.on('before-quit', () => {
+  getSessionManager().killAll();
+  closeDatabase();
+});

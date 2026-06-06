@@ -38,10 +38,26 @@ design/
 
 ## Status
 
-Pre-build. v0 plan in [`PRD.md` §12](PRD.md). 4-week solo build
-producing the demoable radar + summary loop.
+W1 scaffold landed in [`app/`](app/) — Electron + React + Zustand +
+typed IPC bus + SQLite + 3-column split layout. No agents yet. See
+[`app/README.md`](app/README.md) for the dev path and what's
+intentionally not there yet.
+
+v0 plan in [`PRD.md` §12](PRD.md). 4-week solo build producing the
+demoable radar + summary loop.
 
 ## Viewing the mockups
 
 `open design/mockup.html` (etc.). All mockups are standalone HTML,
 dark theme, no build step.
+
+## Running the app
+
+```bash
+cd app
+npm install
+npm run dev
+```
+
+See [`app/README.md`](app/README.md) for the rebuild-native-modules
+caveat.

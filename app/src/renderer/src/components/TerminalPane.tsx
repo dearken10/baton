@@ -1,0 +1,110 @@
+import { useEffect, useRef } from 'react';
+import { Terminal } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import { WebglAddon } from '@xterm/addon-webgl';
+import '@xterm/xterm/css/xterm.css';
+
+interface Props {
+  sessionId: string;
+}
+
+/**
+ * xterm.js terminal bound to a single session. Lifecycle:
+ *   1. On mount, create xterm + FitAddon + WebglAddon.
+ *   2. Subscribe to pty.data; only write frames matching our sessionId.
+ *   3. Forward user keystrokes via pty.write.
+ *   4. On unmount, dispose addons + terminal.
+ *
+ * One pane = one terminal = one session. Selecting a different
+ * session re-mounts the pane via React's `key={sessionId}` on the
+ * parent.
+ */
+export function TerminalPane({ sessionId }: Props): JSX.Element {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const termRef = useRef<Terminal | null>(null);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+
+    const term = new Terminal({
+      cursorBlink: true,
+      fontFamily: 'ui-monospace, SF Mono, Menlo, monospace',
+      fontSize: 13,
+      lineHeight: 1.2,
+      theme: {
+        background: '#0a0b0d',
+        foreground: '#e6e8eb',
+        cursor: '#5b8def',
+        cursorAccent: '#0a0b0d',
+        selectionBackground: 'rgba(91, 141, 239, 0.35)',
+      },
+      allowProposedApi: true,
+      scrollback: 10000,
+    });
+    termRef.current = term;
+
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    let webglOk = false;
+    try {
+      const webgl = new WebglAddon();
+      term.loadAddon(webgl);
+      webglOk = true;
+    } catch {
+      // Fall back to canvas — webgl can fail on some sandboxed contexts.
+    }
+
+    term.open(host);
+    // Defer the first fit() so the host element has measured layout.
+    // Without this, xterm throws "Cannot read properties of undefined
+    // (reading 'dimensions')" on early ANSI input.
+    requestAnimationFrame(() => {
+      try { fit.fit(); } catch { /* host may be unmounting */ }
+    });
+
+    // Refit when the host element resizes (split-handle drags, window
+    // resize, font-load shifts).
+    const ro = new ResizeObserver(() => {
+      try { fit.fit(); } catch { /* ignore */ }
+    });
+    ro.observe(host);
+
+    // Forward user input (keystrokes, paste) to the pty.
+    const dataSub = term.onData((data) => {
+      const encoded = btoa(unescape(encodeURIComponent(data)));
+      void window.code24.call('pty.write', { sessionId, data: encoded });
+    });
+
+    // Resize the pty when the terminal is resized.
+    const resizeSub = term.onResize(({ cols, rows }) => {
+      void window.code24.call('pty.resize', { sessionId, cols, rows });
+    });
+
+    // Subscribe to pty data for this session only.
+    const offData = window.code24.onPtyData((frame) => {
+      if (frame.sessionId !== sessionId) return;
+      const bytes = atob(frame.data);
+      term.write(bytes);
+    });
+
+    // Fit on window resize.
+    const onWinResize = (): void => {
+      try { fit.fit(); } catch { /* ignore mid-mount fit errors */ }
+    };
+    window.addEventListener('resize', onWinResize);
+
+    return () => {
+      window.removeEventListener('resize', onWinResize);
+      ro.disconnect();
+      offData();
+      dataSub.dispose();
+      resizeSub.dispose();
+      term.dispose();
+      termRef.current = null;
+      void webglOk; // silence the lint; useful for future telemetry
+    };
+  }, [sessionId]);
+
+  return <div className="terminal-host" ref={hostRef} />;
+}
