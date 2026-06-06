@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>code24 · Command palette</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --running:#5b8def; --needs:#f0a945; --done:#2fbf71;
+    --errored:#ef5454; --paused:#6b7280;
+  }
+  * { box-sizing: border-box; }
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(91,141,239,0.25);
+    border-radius: 4px;
+  }
+  html, body {
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+    font-size:13px; line-height:1.45; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+
+  .app { display:grid; grid-template-rows:36px 1fr; height:100vh; }
+  .titlebar {
+    display:flex; align-items:center; gap:12px; padding:0 12px;
+    background:var(--bg-1); border-bottom:1px solid var(--border);
+    font-size:12px; color:var(--text-dim);
+  }
+  .titlebar .dots { display:flex; gap:6px; }
+  .titlebar .dot { width:11px; height:11px; border-radius:50%; background:#3a3f4a; }
+  .titlebar .dot.red { background:#ff5f57; }
+  .titlebar .dot.yellow { background:#febc2e; }
+  .titlebar .dot.green { background:#28c840; }
+  .titlebar .title { color:var(--text); font-weight:500; margin-left:8px; }
+  .titlebar .spacer { flex:1; }
+  .titlebar .pill { padding:2px 8px; border-radius:999px; background:var(--bg-2); border:1px solid var(--border); font-size:11px; }
+  .titlebar .pill.variant { color:var(--accent); border-color:var(--accent); background:var(--accent-2); font-weight:600; }
+  .titlebar .pill.alert { color:var(--needs); border-color:var(--needs); }
+
+  /* faint sketch of workspace behind */
+  .workspace-sketch {
+    position:absolute; inset:36px 0 0 0;
+    display:grid; grid-template-columns: 320px 1fr 380px;
+    opacity:0.4;
+  }
+  .workspace-sketch .col { border-right:1px solid var(--border); background:var(--bg); }
+  .workspace-sketch .col-head {
+    padding:10px 14px; border-bottom:1px solid var(--border); background:var(--bg-1);
+    font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-faint);
+  }
+  .workspace-sketch .ghost { padding:14px; color:var(--text-faint); font-size:12px; line-height:2; }
+
+  .scrim {
+    position:absolute; inset:36px 0 0 0;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(2px);
+    display:flex; align-items:flex-start; justify-content:center;
+    padding-top:80px;
+  }
+
+  .palette {
+    width:640px; max-width:94vw;
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:10px;
+    box-shadow:0 30px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(91,141,239,0.15);
+    overflow:hidden;
+    display:flex; flex-direction:column;
+    max-height:540px;
+  }
+
+  /* Input row */
+  .p-input {
+    display:flex; align-items:center; gap:10px;
+    padding:12px 14px;
+    border-bottom:1px solid var(--border);
+  }
+  .p-input .icon { color:var(--text-dim); font-size:14px; }
+  .p-input input {
+    flex:1; background:transparent; border:none; outline:none;
+    color:var(--text); font-size:15px;
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+  }
+  .p-input input::placeholder { color:var(--text-faint); }
+  .p-input .scope {
+    background:var(--accent-2); color:var(--accent);
+    padding:2px 8px; border-radius:5px;
+    font-size:11px; font-weight:600;
+    display:flex; align-items:center; gap:5px;
+  }
+  .p-input .scope .x { color:var(--accent); opacity:0.7; cursor:pointer; }
+
+  /* Results */
+  .p-results { flex:1; overflow-y:auto; padding:6px 0; min-height:0; }
+  .p-section {
+    padding:6px 14px 4px;
+    font-size:10.5px; color:var(--text-faint);
+    text-transform:uppercase; letter-spacing:0.06em;
+    display:flex; align-items:center; gap:6px;
+  }
+  .p-section .count {
+    color:var(--text-faint);
+    font-weight:400;
+    text-transform:none;
+    letter-spacing:0;
+    font-size:11px;
+  }
+
+  .p-row {
+    display:flex; align-items:center; gap:10px;
+    padding:7px 14px;
+    cursor:pointer;
+    border-left:2px solid transparent;
+  }
+  .p-row:hover { background:var(--bg-2); }
+  .p-row.selected {
+    background:var(--bg-2);
+    border-left-color:var(--accent);
+  }
+  .p-row .glyph {
+    width:22px; height:22px; border-radius:5px;
+    background:var(--bg-2); border:1px solid var(--border);
+    display:grid; place-items:center; font-size:12px;
+    color:var(--text-dim);
+    flex:0 0 auto;
+  }
+  .p-row.selected .glyph { background:var(--bg-3); }
+  .p-row .body { flex:1; min-width:0; }
+  .p-row .label-row {
+    display:flex; align-items:center; gap:6px;
+    font-size:13px; color:var(--text);
+  }
+  .p-row .label-row .branch {
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    color:var(--text);
+  }
+  .p-row .label-row mark {
+    background:rgba(91,141,239,0.22);
+    color:var(--text);
+    padding:0;
+    border-radius:2px;
+  }
+  .p-row .sub {
+    margin-top:2px;
+    font-size:11.5px; color:var(--text-dim);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .p-row .right {
+    color:var(--text-faint); font-size:11px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    flex:0 0 auto;
+  }
+  .p-row .kbd-hint {
+    background:var(--bg-3); padding:1px 5px; border-radius:3px;
+    font-size:10.5px; color:var(--text-dim);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+
+  /* status mini badges inside rows */
+  .mini-status {
+    width:8px; height:8px; border-radius:50%;
+    flex:0 0 auto;
+  }
+  .mini-status.running { background:var(--running); box-shadow:0 0 4px var(--running); }
+  .mini-status.needs { background:var(--needs); }
+  .mini-status.done { background:var(--done); }
+  .mini-status.errored { background:var(--errored); }
+  .mini-status.paused { background:var(--paused); }
+
+  .badge {
+    background:var(--bg-3); padding:1px 7px; border-radius:999px;
+    font-size:10px; color:var(--text-dim);
+  }
+  .badge.needs { color:var(--needs); background:rgba(240,169,69,0.12); }
+  .badge.run { color:var(--running); background:rgba(91,141,239,0.12); }
+
+  /* Footer */
+  .p-foot {
+    display:flex; align-items:center; gap:14px;
+    padding:8px 14px;
+    border-top:1px solid var(--border);
+    background:var(--bg);
+    font-size:11px; color:var(--text-faint);
+  }
+  .p-foot .kbd {
+    background:var(--bg-2); padding:1px 5px; border-radius:3px;
+    font-size:10.5px; color:var(--text-dim);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    border:1px solid var(--border);
+  }
+  .p-foot .group { display:inline-flex; align-items:center; gap:5px; }
+  .p-foot .sep { color:var(--border-2); }
+  .p-foot .spacer { flex:1; }
+
+  .modes {
+    display:flex; gap:6px;
+    padding:4px 14px 8px;
+    border-bottom:1px solid var(--border);
+    background:var(--bg-1);
+  }
+  .mode-chip {
+    padding:2px 8px;
+    border-radius:5px;
+    background:var(--bg-2);
+    border:1px solid var(--border);
+    color:var(--text-faint);
+    font-size:11px;
+    cursor:pointer;
+  }
+  .mode-chip strong { color:var(--text-dim); }
+  .mode-chip:hover { color:var(--text-dim); }
+  @media (prefers-reduced-motion: reduce) {
+    .status::before,
+    .status.running::before,
+    .status.needs::before { animation: none !important; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <div class="title">code24</div>
+    <div class="spacer"></div>
+    <div class="pill variant">Layout: overlay — command palette</div>
+    <div class="pill alert">⚠ 2 need input</div>
+    <div class="pill">5 running</div>
+  </div>
+
+  <div class="workspace-sketch">
+    <div class="col">
+      <div class="col-head">Projects · Sessions</div>
+      <div class="ghost">llm-docker<br>web-app<br>infra<br>mobile</div>
+    </div>
+    <div class="col">
+      <div class="col-head">Conversation</div>
+      <div class="ghost">llm-docker · tts/fix-retries</div>
+    </div>
+    <div class="col">
+      <div class="col-head">Files · Git</div>
+      <div class="ghost">…</div>
+    </div>
+  </div>
+
+  <div class="scrim">
+    <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette">
+
+      <div class="p-input">
+        <span class="icon">⌘K</span>
+        <span class="scope" title="Press backspace to clear scope">in: needs-input <span class="x">×</span></span>
+        <input type="text" value="auth" placeholder="Jump to session, file, project, or run a command…" autofocus>
+      </div>
+
+      <!-- mode hint row — what prefixes do -->
+      <div class="modes">
+        <span class="mode-chip"><strong>&gt;</strong> commands</span>
+        <span class="mode-chip"><strong>#</strong> sessions</span>
+        <span class="mode-chip"><strong>:</strong> files in selected wt</span>
+        <span class="mode-chip"><strong>@</strong> projects</span>
+        <span class="mode-chip" style="margin-left:auto;">no prefix = fuzzy across all</span>
+      </div>
+
+      <div class="p-results">
+
+        <div class="p-section">
+          Sessions
+          <span class="count">— 2 matches</span>
+        </div>
+
+        <div class="p-row selected" tabindex="0">
+          <span class="glyph">⌬</span>
+          <div class="body">
+            <div class="label-row">
+              <span class="branch">feat/<mark>auth</mark>-passkeys</span>
+              <span class="mini-status needs"></span>
+              <span class="badge needs">needs input</span>
+            </div>
+            <div class="sub">web-app · wt-b · "wants permission to run rm -rf node_modules" · 00:42 · $0.09</div>
+          </div>
+          <span class="kbd-hint">↩ focus</span>
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">⌬</span>
+          <div class="body">
+            <div class="label-row">
+              <span class="branch">feat/<mark>auth</mark>-passkeys</span>
+              <span class="mini-status running"></span>
+              <span class="badge run">running</span>
+            </div>
+            <div class="sub">web-app · wt-a · "Implementing the WebAuthn registration handler" · 03:18 · $0.41</div>
+          </div>
+          <span class="kbd-hint">↩ focus</span>
+        </div>
+
+        <div class="p-section">
+          Files <span class="count">— in selected worktree (wt-a)</span>
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">📄</span>
+          <div class="body">
+            <div class="label-row"><span class="branch">src/<mark>auth</mark>/session.ts</span></div>
+            <div class="sub">web-app · modified by wt-a · last touched 00:11 ago</div>
+          </div>
+          <span class="right">⌘P</span>
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">📄</span>
+          <div class="body">
+            <div class="label-row"><span class="branch">src/<mark>auth</mark>/webauthn.ts</span></div>
+            <div class="sub">web-app · new file (untracked)</div>
+          </div>
+          <span class="right">⌘P</span>
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">📄</span>
+          <div class="body">
+            <div class="label-row"><span class="branch">test/<mark>auth</mark>.spec.ts</span></div>
+            <div class="sub">web-app</div>
+          </div>
+          <span class="right">⌘P</span>
+        </div>
+
+        <div class="p-section">
+          Commands
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">⊕</span>
+          <div class="body">
+            <div class="label-row">New agent on web-app…</div>
+            <div class="sub">opens the new-agent dialog scoped to this project</div>
+          </div>
+          <span class="kbd-hint">⌘N</span>
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">⏸</span>
+          <div class="body">
+            <div class="label-row">Pause all running agents</div>
+            <div class="sub">SIGSTOP to 5 sessions · resume from this same palette</div>
+          </div>
+          <span class="kbd-hint">⌘⇧P</span>
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">$</span>
+          <div class="body">
+            <div class="label-row">Open cost dashboard</div>
+            <div class="sub">Today $4.18 · this week $26.40</div>
+          </div>
+          <span class="kbd-hint">⌘⇧$</span>
+        </div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">⚙</span>
+          <div class="body">
+            <div class="label-row">Open Settings…</div>
+            <div class="sub">notifications, summarizer, agent backends, setup scripts</div>
+          </div>
+          <span class="kbd-hint">⌘,</span>
+        </div>
+
+        <div class="p-section">Projects</div>
+
+        <div class="p-row" tabindex="0">
+          <span class="glyph">▣</span>
+          <div class="body">
+            <div class="label-row">web-app</div>
+            <div class="sub">~/dev/web-app · main · 2 agents · $0.50</div>
+          </div>
+          <span class="right">⌘2</span>
+        </div>
+
+      </div>
+
+      <div class="p-foot">
+        <span class="group"><span class="kbd">↑</span><span class="kbd">↓</span> navigate</span>
+        <span class="sep">·</span>
+        <span class="group"><span class="kbd">↩</span> select</span>
+        <span class="sep">·</span>
+        <span class="group"><span class="kbd">⌘↩</span> open in new pane</span>
+        <span class="sep">·</span>
+        <span class="group"><span class="kbd">esc</span> close</span>
+        <span class="spacer"></span>
+        <span>indexed 412 files · 7 sessions</span>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

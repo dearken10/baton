@@ -1,0 +1,887 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>code24 · Mockup</title>
+<style>
+  :root {
+    --bg:        #0a0b0d;
+    --bg-1:      #111316;
+    --bg-2:      #181a1f;
+    --bg-3:      #20232a;
+    --border:    #2a2d35;
+    --border-2:  #3a3f4a;
+    --text:      #e6e8eb;
+    --text-dim:  #8b9099;
+    --text-faint:#7a8088;
+    --accent:    #5b8def;
+    --accent-2:  #1f3866;
+    --running:   #5b8def;
+    --needs:     #f0a945;
+    --done:      #2fbf71;
+    --errored:   #ef5454;
+    --paused:    #6b7280;
+    --diff-add:  #163c2a;
+    --diff-del:  #3e1b1b;
+  }
+
+  * { box-sizing: border-box; }
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(91,141,239,0.25);
+    border-radius: 4px;
+  }
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'SF Pro Text', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.45;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+
+  /* ===== Layout ===== */
+  .app {
+    display: grid;
+    grid-template-rows: 36px 1fr;
+    height: 100vh;
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 0 12px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .titlebar .dots { display: flex; gap: 6px; }
+  .titlebar .dot { width: 11px; height: 11px; border-radius: 50%; background: #3a3f4a; }
+  .titlebar .dot.red { background: #ff5f57; }
+  .titlebar .dot.yellow { background: #febc2e; }
+  .titlebar .dot.green { background: #28c840; }
+  .titlebar .title { color: var(--text); font-weight: 500; margin-left: 8px; }
+  .titlebar .spacer { flex: 1; }
+  .titlebar .pill {
+    padding: 2px 8px; border-radius: 999px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .titlebar .pill.alert { color: var(--needs); border-color: var(--needs); }
+  .titlebar .pill.variant { color: var(--accent); border-color: var(--accent); background: var(--accent-2); font-weight: 600; }
+
+  .main {
+    display: grid;
+    grid-template-columns: 320px 1fr 380px;
+    height: calc(100vh - 36px);
+    min-height: 0;
+  }
+  .col {
+    background: var(--bg);
+    border-right: 1px solid var(--border);
+    min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  .col:last-child { border-right: none; }
+  .col-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-1);
+    font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim);
+    flex: 0 0 auto;
+  }
+  .col-head .actions { display: flex; gap: 8px; }
+  .col-body { flex: 1; overflow-y: auto; }
+
+  /* ===== LEFT — projects & sessions ===== */
+  .project {
+    border-bottom: 1px solid var(--border);
+    padding: 10px 10px 14px;
+  }
+  .project-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 4px 8px;
+  }
+  .project-name { font-weight: 600; font-size: 13px; }
+  .project-branch {
+    font-size: 11px; color: var(--text-dim);
+    background: var(--bg-2); padding: 1px 6px; border-radius: 4px;
+  }
+  .project-add {
+    margin-left: auto;
+    width: 20px; height: 20px; display: grid; place-items: center;
+    border-radius: 4px; background: var(--bg-2); color: var(--text-dim);
+    cursor: pointer; font-size: 14px; line-height: 1;
+  }
+  .project-add:hover { background: var(--bg-3); color: var(--text); }
+
+  .session {
+    margin-top: 6px;
+    padding: 9px 10px 10px;
+    border: 1px solid var(--border);
+    background: var(--bg-1);
+    border-radius: 7px;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.12s, border-color 0.12s;
+  }
+  .session:hover { background: var(--bg-2); }
+  .session.selected {
+    background: var(--bg-2);
+    border-color: var(--accent);
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .session-row {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px;
+  }
+  .session-branch {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    flex: 1;
+  }
+  .session-meta {
+    color: var(--text-faint); font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .session-summary {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* Shared-branch grouping — two+ sessions on the same branch */
+  .branch-group {
+    margin-top: 8px;
+    border-left: 2px solid var(--accent);
+    padding: 0 0 0 8px;
+    position: relative;
+  }
+  .branch-group-head {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 2px 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .branch-group-head .chain {
+    color: var(--accent);
+    font-size: 11px;
+  }
+  .branch-group-head .branch {
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    color: var(--text);
+  }
+  .branch-group-head .count {
+    background: var(--accent-2);
+    color: var(--accent);
+    padding: 0 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .branch-group .session { margin-top: 5px; }
+  .branch-group .session-branch::before {
+    content: '↳ ';
+    color: var(--text-faint);
+  }
+
+  .overlap-warning {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10px;
+    color: var(--needs);
+    background: rgba(240,169,69,0.10);
+    border: 1px solid rgba(240,169,69,0.30);
+    padding: 1px 6px;
+    border-radius: 4px;
+    margin-top: 6px;
+    width: fit-content;
+  }
+
+  .status {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 1px 7px 1px 6px;
+    border-radius: 999px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    border: 1px solid transparent;
+  }
+  .status::before {
+    content: ''; width: 6px; height: 6px; border-radius: 50%;
+  }
+  .status.running { color: var(--running); background: rgba(91,141,239,0.10); border-color: rgba(91,141,239,0.25); }
+  .status.running::before { background: var(--running); box-shadow: 0 0 6px var(--running); animation: pulse 1.5s ease-in-out infinite; }
+  .status.needs { color: var(--needs); background: rgba(240,169,69,0.10); border-color: rgba(240,169,69,0.30); }
+  .status.needs::before { background: var(--needs); animation: pulse 0.9s ease-in-out infinite; }
+  .status.done { color: var(--done); background: rgba(47,191,113,0.10); border-color: rgba(47,191,113,0.25); }
+  .status.done::before { background: var(--done); }
+  .status.errored { color: var(--errored); background: rgba(239,84,84,0.10); border-color: rgba(239,84,84,0.30); }
+  .status.errored::before { background: var(--errored); }
+  .status.paused { color: var(--paused); background: rgba(107,114,128,0.10); border-color: rgba(107,114,128,0.25); }
+  .status.paused::before { background: var(--paused); }
+  .status::after { font-size: 9px; margin-left: 2px; opacity: 0.85; }
+  .status.running::after { content: '▶'; }
+  .status.needs::after { content: '⚠'; }
+  .status.done::after { content: '✓'; }
+  .status.errored::after { content: '✕'; }
+  .status.paused::after { content: '⏸'; }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(1.4); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .status::before,
+    .status.running::before,
+    .status.needs::before { animation: none !important; }
+    * { transition: none !important; }
+  }
+
+  /* ===== MIDDLE — conversation ===== */
+  .conv-head {
+    padding: 14px 18px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-1);
+    flex: 0 0 auto;
+  }
+  .conv-head-top { display: flex; align-items: center; gap: 10px; }
+  .conv-title { font-weight: 600; font-size: 14px; }
+  .conv-sub { margin-top: 4px; font-size: 12px; color: var(--text-dim); font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+  .conv-summary {
+    margin-top: 10px; padding: 8px 10px;
+    background: var(--bg-2); border-radius: 6px;
+    border-left: 2px solid var(--accent);
+    font-size: 12px; color: var(--text-dim);
+  }
+  .conv-summary .label { color: var(--text-faint); text-transform: uppercase; font-size: 10px; letter-spacing: 0.06em; margin-right: 6px; }
+
+  .conversation {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 18px 60px;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+
+  .msg { display: flex; gap: 10px; }
+  .msg .avatar {
+    width: 22px; height: 22px; border-radius: 5px;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700;
+    flex: 0 0 auto;
+  }
+  .msg.user .avatar { background: var(--accent-2); color: var(--accent); }
+  .msg.assistant .avatar { background: #2a1f3a; color: #b09cff; }
+  .msg.tool .avatar { background: #1f2a26; color: var(--done); }
+  .msg .body { flex: 1; min-width: 0; }
+  .msg .who { font-size: 11px; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+  .msg .text { font-size: 13px; color: var(--text); }
+  .msg .text code { background: var(--bg-2); padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+
+  .tool-call {
+    margin-top: 4px;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .tool-call-head {
+    padding: 7px 10px;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    color: var(--done);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .tool-call-head .arg { color: var(--text-dim); }
+  .tool-call-head .stat { margin-left: auto; color: var(--text-faint); font-size: 11px; }
+  .tool-call-body {
+    padding: 0 10px 8px;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+  }
+  .diff-line { padding: 0 6px; }
+  .diff-line.add { background: var(--diff-add); color: #b6eccb; }
+  .diff-line.del { background: var(--diff-del); color: #f4b8b8; }
+
+  .needs-input-card {
+    margin-top: 4px;
+    border: 1px solid var(--needs);
+    background: rgba(240,169,69,0.06);
+    border-radius: 6px;
+    padding: 10px 12px;
+  }
+  .needs-input-card .q { font-size: 13px; }
+  .needs-input-card .q code { background: rgba(0,0,0,0.3); padding: 1px 5px; border-radius: 3px; }
+  .needs-input-card .row { margin-top: 8px; display: flex; gap: 6px; }
+  .btn {
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid var(--border-2);
+    background: var(--bg-2);
+    color: var(--text);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: white; }
+  .btn.danger { color: var(--errored); border-color: rgba(239,84,84,0.4); }
+
+  .composer {
+    flex: 0 0 auto;
+    padding: 12px 18px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-1);
+  }
+  .composer textarea {
+    width: 100%; resize: none;
+    min-height: 56px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 8px 10px;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 13px;
+    outline: none;
+  }
+  .composer textarea:focus { border-color: var(--accent); }
+  .composer-row {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-top: 6px;
+    font-size: 11px; color: var(--text-faint);
+  }
+
+  /* ===== RIGHT — files + git ===== */
+  .right-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-1);
+    flex: 0 0 auto;
+  }
+  .right-tab {
+    padding: 10px 14px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .right-tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .right-tab .badge {
+    background: var(--bg-3);
+    padding: 0 5px; border-radius: 4px;
+    font-size: 10px;
+    color: var(--text-dim);
+  }
+
+  .panel { display: none; flex: 1; min-height: 0; overflow-y: auto; }
+  .panel.active { display: block; }
+
+  .files-filter {
+    display: flex; align-items: center; gap: 6px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-1);
+  }
+  .filter-chip {
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-dim);
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 5px;
+    user-select: none;
+  }
+  .filter-chip:hover { color: var(--text); border-color: var(--border-2); }
+  .filter-chip.active {
+    color: var(--accent);
+    background: var(--accent-2);
+    border-color: var(--accent);
+  }
+  .filter-chip .count {
+    background: rgba(255,255,255,0.08);
+    padding: 0 5px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .filter-spacer { flex: 1; }
+  .filter-scope {
+    font-size: 10.5px;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Changed-only mode hides files that aren't modified and dirs with no
+     modified descendants. Markers .modified / .has-modified are applied
+     to nodes that pass the filter. */
+  .tree.changed-only .tree-node.file:not(.modified) { display: none; }
+  .tree.changed-only .tree-node.dir:not(.has-modified) { display: none; }
+  .tree.changed-only .tree-children:not(.has-modified-child) { display: none; }
+
+  .tree { padding: 8px 4px; font-size: 12.5px; }
+  .tree-node {
+    padding: 3px 8px 3px 12px;
+    display: flex; align-items: center; gap: 6px;
+    cursor: pointer;
+    border-radius: 4px;
+    color: var(--text);
+  }
+  .tree-node:hover { background: var(--bg-2); }
+  .tree-node.dir { color: var(--text); }
+  .tree-node.file { color: var(--text-dim); }
+  .tree-node.selected { background: var(--accent-2); color: var(--text); }
+  .tree-node .icon { color: var(--text-faint); width: 12px; display: inline-block; text-align: center; }
+  .tree-node.modified::after { content: '•'; color: var(--needs); margin-left: auto; padding-right: 4px; }
+  .tree-children { margin-left: 12px; border-left: 1px solid var(--border); }
+
+  .git-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px; color: var(--text-dim);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .git-branch-pill {
+    background: var(--bg-2); padding: 2px 8px; border-radius: 4px;
+    color: var(--text); font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 11px;
+  }
+  .git-stats { margin-left: auto; }
+  .git-stats .add { color: var(--done); }
+  .git-stats .del { color: var(--errored); }
+
+  .git-file {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12.5px;
+  }
+  .git-file:hover { background: var(--bg-1); }
+  .git-file.selected { background: var(--bg-2); }
+  .git-file .name { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .git-file .marker {
+    width: 16px; height: 16px; border-radius: 3px;
+    display: grid; place-items: center;
+    font-size: 10px; font-weight: 700;
+  }
+  .git-file .marker.m { background: rgba(240,169,69,0.15); color: var(--needs); }
+  .git-file .marker.a { background: rgba(47,191,113,0.15); color: var(--done); }
+  .git-file .marker.d { background: rgba(239,84,84,0.15); color: var(--errored); }
+  .git-file .stats { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+  .diff-view {
+    padding: 0;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 12px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+  }
+  .diff-hunk-head {
+    padding: 4px 12px;
+    background: var(--bg-1);
+    color: var(--text-faint);
+    font-size: 11px;
+    border-bottom: 1px solid var(--border);
+  }
+  .diff-row { display: flex; padding: 0; }
+  .diff-row .gutter {
+    width: 36px; flex: 0 0 auto;
+    text-align: right; padding: 0 6px;
+    color: var(--text-faint); font-size: 11px;
+    user-select: none;
+  }
+  .diff-row .marker-col { width: 14px; flex: 0 0 auto; text-align: center; color: var(--text-faint); }
+  .diff-row .code { flex: 1; padding-right: 8px; white-space: pre; overflow-x: auto; }
+  .diff-row.add { background: var(--diff-add); }
+  .diff-row.add .marker-col { color: var(--done); }
+  .diff-row.del { background: var(--diff-del); }
+  .diff-row.del .marker-col { color: var(--errored); }
+
+  .git-actions {
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    display: flex; gap: 8px;
+    background: var(--bg-1);
+  }
+
+  /* scrollbar */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- titlebar -->
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <div class="title">code24</div>
+    <div class="spacer"></div>
+    <div class="pill variant">Layout: split</div>
+    <div class="pill">⌘K palette</div>
+    <div class="pill alert">⚠ 2 need input</div>
+    <div class="pill">5 running</div>
+  </div>
+
+  <div class="main">
+
+    <!-- ===== LEFT ===== -->
+    <aside class="col">
+      <div class="col-head">
+        <span>Projects · Sessions</span>
+        <div class="actions">
+          <span class="project-add" title="Add project">+</span>
+        </div>
+      </div>
+      <div class="col-body">
+
+        <!-- Project: llm-docker -->
+        <div class="project">
+          <div class="project-head">
+            <span class="project-name">llm-docker</span>
+            <span class="project-branch mono">main</span>
+            <span class="project-add" title="New agent">+</span>
+          </div>
+
+          <div class="session selected" role="button" tabindex="0" aria-label="Session tts/fix-retries — running" onclick="selectSession(this)">
+            <div class="session-row">
+              <span class="session-branch">tts/fix-retries</span>
+              <span class="status running" role="img" aria-label="status: running">running</span>
+            </div>
+            <div class="session-summary">Editing the TTS response service to add exponential backoff on HTTP 429 from the synthesis API.</div>
+            <div class="session-row" style="margin-top:6px;">
+              <span class="session-meta mono">wt: tts-fix · 02:14 · $0.18</span>
+            </div>
+          </div>
+
+          <div class="session" role="button" tabindex="0" aria-label="Session chore/upgrade-nest — needs input" onclick="selectSession(this)">
+            <div class="session-row">
+              <span class="session-branch">chore/upgrade-nest</span>
+              <span class="status needs" role="img" aria-label="status: needs input">needs input</span>
+            </div>
+            <div class="session-summary">Asking permission to run <span class="mono">pnpm dlx @nestjs/cli migrate</span> — touches 14 files.</div>
+            <div class="session-row" style="margin-top:6px;">
+              <span class="session-meta mono">wt: nest-upg · 00:31 · $0.04</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Project: web-app -->
+        <div class="project">
+          <div class="project-head">
+            <span class="project-name">web-app</span>
+            <span class="project-branch mono">main</span>
+            <span class="project-add" title="New agent">+</span>
+          </div>
+
+          <!-- Two sessions on the SAME branch — grouped -->
+          <div class="branch-group">
+            <div class="branch-group-head">
+              <span class="chain">⛓</span>
+              <span>shared branch</span>
+              <span class="branch">feat/auth-passkeys</span>
+              <span class="count">×2</span>
+            </div>
+
+            <div class="session" role="button" tabindex="0" aria-label="Session feat/auth-passkeys wt-a — running" onclick="selectSession(this)">
+              <div class="session-row">
+                <span class="session-branch">wt-a</span>
+                <span class="status running" role="img" aria-label="status: running">running</span>
+              </div>
+              <div class="session-summary">Implementing the WebAuthn registration handler and wiring it into the existing session flow.</div>
+              <div class="session-row" style="margin-top:6px;">
+                <span class="session-meta mono">~/.code24/wt/web-app/auth-pk-a · 03:18 · $0.41</span>
+              </div>
+              <div class="overlap-warning">⚠ also editing <span class="mono">src/auth/session.ts</span> — sibling wt-b touched it 00:42 ago</div>
+            </div>
+
+            <div class="session" role="button" tabindex="0" aria-label="Session feat/auth-passkeys wt-b — needs input" onclick="selectSession(this)">
+              <div class="session-row">
+                <span class="session-branch">wt-b</span>
+                <span class="status needs" role="img" aria-label="status: needs input">needs input</span>
+              </div>
+              <div class="session-summary">Refactoring <span class="mono">session.ts</span> to use the new cookie API — wants permission to run <span class="mono">rm -rf node_modules</span>.</div>
+              <div class="session-row" style="margin-top:6px;">
+                <span class="session-meta mono">~/.code24/wt/web-app/auth-pk-b · 00:42 · $0.09</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Project: infra -->
+        <div class="project">
+          <div class="project-head">
+            <span class="project-name">infra</span>
+            <span class="project-branch mono">main</span>
+            <span class="project-add" title="New agent">+</span>
+          </div>
+
+          <div class="session" role="button" tabindex="0" aria-label="Session tf/audit-iam — done" onclick="selectSession(this)">
+            <div class="session-row">
+              <span class="session-branch">tf/audit-iam</span>
+              <span class="status done" role="img" aria-label="status: done">done</span>
+            </div>
+            <div class="session-summary">Finished. 3 files changed, ready for review. No drift detected.</div>
+            <div class="session-row" style="margin-top:6px;">
+              <span class="session-meta mono">wt: iam · 08:42 · $0.42</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Project: mobile -->
+        <div class="project">
+          <div class="project-head">
+            <span class="project-name">mobile</span>
+            <span class="project-branch mono">develop</span>
+            <span class="project-add" title="New agent">+</span>
+          </div>
+
+          <div class="session" role="button" tabindex="0" aria-label="Session ios/onboard-redesign — errored" onclick="selectSession(this)">
+            <div class="session-row">
+              <span class="session-branch">ios/onboard-redesign</span>
+              <span class="status errored" role="img" aria-label="status: errored">errored</span>
+            </div>
+            <div class="session-summary"><span class="mono">xcodebuild</span> exited 65. Last successful output 02:11 ago.</div>
+            <div class="session-row" style="margin-top:6px;">
+              <span class="session-meta mono">wt: onboard · 14:02 · $1.04</span>
+            </div>
+          </div>
+
+          <div class="session" role="button" tabindex="0" aria-label="Session android/fix-deeplinks — paused" onclick="selectSession(this)">
+            <div class="session-row">
+              <span class="session-branch">android/fix-deeplinks</span>
+              <span class="status paused" role="img" aria-label="status: paused">paused</span>
+            </div>
+            <div class="session-summary">Paused by user before <span class="mono">./gradlew assembleDebug</span>.</div>
+            <div class="session-row" style="margin-top:6px;">
+              <span class="session-meta mono">wt: dl · 00:00 · $0.21</span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </aside>
+
+    <!-- ===== MIDDLE ===== -->
+    <main class="col">
+      <div class="conv-head">
+        <div class="conv-head-top">
+          <span class="conv-title">llm-docker · tts/fix-retries</span>
+          <span class="status running" role="img" aria-label="status: running">running</span>
+        </div>
+        <div class="conv-sub mono">worktree ~/dev/.code24/wt/llm-docker/tts-fix · 02:14 elapsed · $0.18</div>
+        <div class="conv-summary">
+          <span class="label">summary</span>
+          Editing <span class="mono">text-to-speech-response.service.ts</span> to wrap the synthesis call with retry-on-429 and exponential backoff. Two test files updated; running <span class="mono">pnpm test</span> next.
+        </div>
+      </div>
+
+      <div class="conversation">
+
+        <div class="msg user">
+          <div class="avatar">K</div>
+          <div class="body">
+            <div class="who">You · 02:14 ago</div>
+            <div class="text">The TTS service throws on 429 from the upstream synth API. Add an exponential-backoff retry (3 attempts, base 500ms). Cover the new path with a unit test.</div>
+          </div>
+        </div>
+
+        <div class="msg assistant">
+          <div class="avatar">C</div>
+          <div class="body">
+            <div class="who">Claude · 02:08 ago</div>
+            <div class="text">Looking at <code>text-to-speech-response.service.ts</code> first — I'll wrap the synth call in a small retry helper and add a unit test for the 429 path.</div>
+
+            <div class="tool-call">
+              <div class="tool-call-head">
+                <span>●</span><span>Read</span><span class="arg">src/modules/.../text-to-speech-response.service.ts</span>
+                <span class="stat">128 lines</span>
+              </div>
+            </div>
+
+            <div class="tool-call">
+              <div class="tool-call-head">
+                <span>●</span><span>Edit</span><span class="arg">src/modules/.../text-to-speech-response.service.ts</span>
+                <span class="stat">+12 −3</span>
+              </div>
+              <div class="tool-call-body">
+<div class="diff-line del">- &nbsp;&nbsp;return await this.synth.generate(text);</div>
+<div class="diff-line add">+ &nbsp;&nbsp;return await this.withRetry(() =&gt; this.synth.generate(text));</div>
+<div class="diff-line add">+ }</div>
+<div class="diff-line add">+ private async withRetry&lt;T&gt;(fn: () =&gt; Promise&lt;T&gt;, attempts = 3): Promise&lt;T&gt; {</div>
+<div class="diff-line add">+ &nbsp;&nbsp;for (let i = 0; i &lt; attempts; i++) {</div>
+<div class="diff-line add">+ &nbsp;&nbsp;&nbsp;&nbsp;try { return await fn(); }</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="msg assistant">
+          <div class="avatar">C</div>
+          <div class="body">
+            <div class="who">Claude · 00:46 ago</div>
+            <div class="text">Test added. About to run the suite to confirm nothing else broke.</div>
+
+            <div class="tool-call">
+              <div class="tool-call-head">
+                <span>●</span><span>Bash</span><span class="arg">pnpm test text-to-speech</span>
+                <span class="stat">running…</span>
+              </div>
+              <div class="tool-call-body">
+PASS  src/modules/.../text-to-speech-response.service.spec.ts<br>
+&nbsp;&nbsp;✓ retries on 429 with backoff (124 ms)<br>
+&nbsp;&nbsp;✓ surfaces non-429 errors immediately (8 ms)<br>
+<span style="color:var(--text-faint);">… (8 more tests passing)</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="composer">
+        <textarea placeholder="Reply, or hit ⌘↩ to send the queued review…">looks good — please also handle 503s the same way and commit with the message &quot;tts: retry on 429/503&quot;</textarea>
+        <div class="composer-row">
+          <span>⌘↩ to send · ⌘P to pause · ⌘. to interrupt</span>
+          <span>Haiku summarizer: on · last update 00:08 ago</span>
+        </div>
+      </div>
+    </main>
+
+    <!-- ===== RIGHT ===== -->
+    <aside class="col">
+      <div class="right-tabs">
+        <div class="right-tab active" data-tab="files" onclick="selectTab(this)">📁 Files</div>
+        <div class="right-tab" data-tab="git" onclick="selectTab(this)">⎇ Git <span class="badge">3</span></div>
+      </div>
+
+      <div class="panel active" id="panel-files">
+        <div class="files-filter">
+          <span class="filter-chip active" data-filter="all" onclick="selectFilter(this)">All files</span>
+          <span class="filter-chip" data-filter="changed" onclick="selectFilter(this)">Changed only <span class="count">3</span></span>
+          <span class="filter-spacer"></span>
+          <span class="filter-scope" title="Filter is scoped to the selected session's worktree">wt: tts-fix</span>
+        </div>
+        <div class="tree" id="tree">
+          <div class="tree-node dir has-modified"><span class="icon">▾</span> llm-docker</div>
+          <div class="tree-children has-modified-child">
+            <div class="tree-node dir has-modified"><span class="icon">▾</span> src-nestjs</div>
+            <div class="tree-children has-modified-child">
+              <div class="tree-node dir has-modified"><span class="icon">▾</span> src</div>
+              <div class="tree-children has-modified-child">
+                <div class="tree-node dir"><span class="icon">▸</span> common</div>
+                <div class="tree-node dir has-modified"><span class="icon">▾</span> modules</div>
+                <div class="tree-children has-modified-child">
+                  <div class="tree-node dir has-modified"><span class="icon">▾</span> text-to-speech-response</div>
+                  <div class="tree-children has-modified-child">
+                    <div class="tree-node dir has-modified"><span class="icon">▾</span> services</div>
+                    <div class="tree-children has-modified-child">
+                      <div class="tree-node file selected modified"><span class="icon">📄</span> text-to-speech-response.service.ts</div>
+                      <div class="tree-node file modified"><span class="icon">📄</span> text-to-speech-response.service.spec.ts</div>
+                    </div>
+                    <div class="tree-node file"><span class="icon">📄</span> text-to-speech-response.module.ts</div>
+                  </div>
+                  <div class="tree-node dir"><span class="icon">▸</span> auth</div>
+                  <div class="tree-node dir"><span class="icon">▸</span> billing</div>
+                </div>
+                <div class="tree-node file"><span class="icon">📄</span> main.ts</div>
+                <div class="tree-node file"><span class="icon">📄</span> app.module.ts</div>
+              </div>
+              <div class="tree-node file"><span class="icon">📄</span> package.json</div>
+              <div class="tree-node file modified"><span class="icon">📄</span> CHANGELOG.md</div>
+            </div>
+            <div class="tree-node dir"><span class="icon">▸</span> docs</div>
+            <div class="tree-node file"><span class="icon">📄</span> README.md</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="panel-git">
+        <div class="git-head">
+          <span>on</span>
+          <span class="git-branch-pill">tts/fix-retries</span>
+          <span class="git-stats"><span class="add">+22</span> <span class="del">−5</span></span>
+        </div>
+
+        <div class="git-file">
+          <span class="marker m">M</span>
+          <span class="name">src-nestjs/.../text-to-speech-response.service.ts</span>
+          <span class="stats">+12 −3</span>
+        </div>
+        <div class="git-file selected">
+          <span class="marker m">M</span>
+          <span class="name">src-nestjs/.../text-to-speech-response.service.spec.ts</span>
+          <span class="stats">+8 −0</span>
+        </div>
+        <div class="git-file">
+          <span class="marker m">M</span>
+          <span class="name">CHANGELOG.md</span>
+          <span class="stats">+2 −2</span>
+        </div>
+
+        <div class="diff-view">
+          <div class="diff-hunk-head mono">@@ src/.../text-to-speech-response.service.spec.ts @@</div>
+          <div class="diff-row"><div class="gutter">41</div><div class="marker-col"> </div><div class="code">  it('retries on 429 with backoff', async () =&gt; {</div></div>
+          <div class="diff-row add"><div class="gutter">42</div><div class="marker-col">+</div><div class="code">    synth.generate.mockRejectedValueOnce({ status: 429 });</div></div>
+          <div class="diff-row add"><div class="gutter">43</div><div class="marker-col">+</div><div class="code">    synth.generate.mockResolvedValueOnce(audioBuf);</div></div>
+          <div class="diff-row add"><div class="gutter">44</div><div class="marker-col">+</div><div class="code">    const out = await service.generateAudio('hi');</div></div>
+          <div class="diff-row add"><div class="gutter">45</div><div class="marker-col">+</div><div class="code">    expect(out).toBe(audioBuf);</div></div>
+          <div class="diff-row add"><div class="gutter">46</div><div class="marker-col">+</div><div class="code">    expect(synth.generate).toHaveBeenCalledTimes(2);</div></div>
+          <div class="diff-row"><div class="gutter">47</div><div class="marker-col"> </div><div class="code">  });</div></div>
+          <div class="diff-row"><div class="gutter">48</div><div class="marker-col"> </div><div class="code"></div></div>
+          <div class="diff-row"><div class="gutter">49</div><div class="marker-col"> </div><div class="code">  it('surfaces non-429 errors immediately', async () =&gt; {</div></div>
+          <div class="diff-row add"><div class="gutter">50</div><div class="marker-col">+</div><div class="code">    synth.generate.mockRejectedValueOnce({ status: 500 });</div></div>
+          <div class="diff-row add"><div class="gutter">51</div><div class="marker-col">+</div><div class="code">    await expect(service.generateAudio('hi')).rejects.toMatchObject({ status: 500 });</div></div>
+          <div class="diff-row add"><div class="gutter">52</div><div class="marker-col">+</div><div class="code">    expect(synth.generate).toHaveBeenCalledTimes(1);</div></div>
+          <div class="diff-row"><div class="gutter">53</div><div class="marker-col"> </div><div class="code">  });</div></div>
+        </div>
+
+        <div class="git-actions">
+          <button class="btn primary">Stage all</button>
+          <button class="btn">Commit…</button>
+          <button class="btn">Push</button>
+          <button class="btn danger" style="margin-left:auto;">Discard</button>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+
+<script>
+  function selectSession(el) {
+    document.querySelectorAll('.session').forEach(s => s.classList.remove('selected'));
+    el.classList.add('selected');
+  }
+  function selectTab(el) {
+    document.querySelectorAll('.right-tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    el.classList.add('active');
+    document.getElementById('panel-' + el.dataset.tab).classList.add('active');
+  }
+  function selectFilter(el) {
+    document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+    el.classList.add('active');
+    const tree = document.getElementById('tree');
+    tree.classList.toggle('changed-only', el.dataset.filter === 'changed');
+  }
+</script>
+</body>
+</html>

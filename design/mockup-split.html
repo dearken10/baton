@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>code24 · Split middle pane</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --running:#5b8def; --needs:#f0a945; --done:#2fbf71;
+    --errored:#ef5454; --paused:#6b7280;
+    --tok-kw:#c586c0; --tok-str:#ce9178; --tok-type:#4ec9b0;
+    --tok-fn:#dcdcaa; --tok-cm:#7eb87a; --tok-num:#b5cea8;
+    --tok-dec:#4fc1ff; --tok-this:#9cdcfe;
+  }
+  * { box-sizing: border-box; }
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(91,141,239,0.25);
+    border-radius: 4px;
+  }
+  html, body { margin:0; padding:0; height:100%; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif; font-size:13px; line-height:1.45; overflow:hidden; -webkit-font-smoothing:antialiased; }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+
+  .app { display:grid; grid-template-rows:36px 1fr; height:100vh; }
+  .titlebar { display:flex; align-items:center; gap:12px; padding:0 12px; background:var(--bg-1); border-bottom:1px solid var(--border); font-size:12px; color:var(--text-dim); }
+  .titlebar .dots { display:flex; gap:6px; }
+  .titlebar .dot { width:11px; height:11px; border-radius:50%; background:#3a3f4a; }
+  .titlebar .dot.red { background:#ff5f57; } .titlebar .dot.yellow { background:#febc2e; } .titlebar .dot.green { background:#28c840; }
+  .titlebar .title { color:var(--text); font-weight:500; margin-left:8px; }
+  .titlebar .spacer { flex:1; }
+  .titlebar .pill { padding:2px 8px; border-radius:999px; background:var(--bg-2); border:1px solid var(--border); font-size:11px; }
+  .titlebar .pill.alert { color:var(--needs); border-color:var(--needs); }
+  .titlebar .pill.variant { color:var(--accent); border-color:var(--accent); background:var(--accent-2); font-weight:600; }
+
+  .main { display:grid; grid-template-columns:320px minmax(0, 1fr) 380px; height:calc(100vh - 36px); min-height:0; }
+  .col { background:var(--bg); border-right:1px solid var(--border); min-height:0; min-width:0; display:flex; flex-direction:column; }
+  .col:last-child { border-right:none; }
+  .col-head { display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border-bottom:1px solid var(--border); background:var(--bg-1); font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim); flex:0 0 auto; }
+  .col-body { flex:1; overflow-y:auto; min-height:0; }
+
+  /* LEFT (compact) */
+  .project { border-bottom:1px solid var(--border); padding:10px 10px 14px; }
+  .project-head { display:flex; align-items:center; gap:8px; padding:4px 4px 8px; }
+  .project-name { font-weight:600; font-size:13px; }
+  .project-branch { font-size:11px; color:var(--text-dim); background:var(--bg-2); padding:1px 6px; border-radius:4px; }
+  .project-add { margin-left:auto; width:20px; height:20px; display:grid; place-items:center; border-radius:4px; background:var(--bg-2); color:var(--text-dim); cursor:pointer; font-size:14px; line-height:1; }
+  .session { margin-top:6px; padding:9px 10px; border:1px solid var(--border); background:var(--bg-1); border-radius:7px; cursor:pointer; }
+  .session.selected { background:var(--bg-2); border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent); }
+  .session-row { display:flex; align-items:center; gap:6px; font-size:12px; }
+  .session-branch { font-family:ui-monospace,'SF Mono',Menlo,monospace; color:var(--text); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .session-meta { color:var(--text-faint); font-size:11px; font-variant-numeric:tabular-nums; }
+  .session-summary { margin-top:6px; font-size:12px; color:var(--text-dim); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+
+  .status { display:inline-flex; align-items:center; gap:5px; padding:1px 7px 1px 6px; border-radius:999px; font-size:10.5px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em; border:1px solid transparent; }
+  .status::before { content:''; width:6px; height:6px; border-radius:50%; }
+  .status.running { color:var(--running); background:rgba(91,141,239,0.10); border-color:rgba(91,141,239,0.25); }
+  .status.running::before { background:var(--running); box-shadow:0 0 6px var(--running); animation:pulse 1.5s ease-in-out infinite; }
+  .status.needs { color:var(--needs); background:rgba(240,169,69,0.10); border-color:rgba(240,169,69,0.30); }
+  .status.needs::before { background:var(--needs); animation:pulse 0.9s ease-in-out infinite; }
+  .status.done { color:var(--done); background:rgba(47,191,113,0.10); border-color:rgba(47,191,113,0.25); }
+  .status.done::before { background:var(--done); }
+  .status.errored { color:var(--errored); background:rgba(239,84,84,0.10); border-color:rgba(239,84,84,0.30); }
+  .status.errored::before { background:var(--errored); }
+  .status::after { font-size: 9px; margin-left: 2px; opacity: 0.85; }
+  .status.running::after { content: '▶'; }
+  .status.needs::after { content: '⚠'; }
+  .status.done::after { content: '✓'; }
+  .status.errored::after { content: '✕'; }
+  .status.paused::after { content: '⏸'; }
+  @keyframes pulse { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(1.4); } }
+  @media (prefers-reduced-motion: reduce) {
+    .status::before,
+    .status.running::before,
+    .status.needs::before { animation: none !important; }
+    * { transition: none !important; }
+  }
+
+  /* ===== MIDDLE — SPLIT ===== */
+  .middle-stack {
+    display:flex; flex-direction:column; height:100%; min-height:0;
+  }
+  /* File tabs moved to TOP of the middle pane — always visible above
+     the conversation. Selecting a file tab changes what the editor
+     region (bottom) shows; the conversation always stays put. */
+  .top-tabs {
+    display:flex; align-items:stretch;
+    background:var(--bg-1);
+    border-bottom:1px solid var(--border);
+    flex:0 0 auto;
+    min-width:0;
+  }
+  .top-tabs-scroll {
+    display:flex; align-items:stretch;
+    flex:1; min-width:0;
+    overflow-x:auto;
+    scrollbar-width:thin;
+  }
+  .top-tabs-scroll::-webkit-scrollbar { height:4px; }
+  .top-tabs-meta {
+    flex:0 0 auto;
+    display:flex; align-items:center; gap:6px;
+    padding:0 12px;
+    border-left:1px solid var(--border);
+    background:var(--bg-1);
+    color:var(--text-faint);
+    font-size:11px;
+  }
+  .top-tabs-meta .editor-btn { padding:2px 7px; font-size:10.5px; }
+
+  /* Visual order: file tabs → editor → split handle → conversation.
+     We use CSS `order` so we don't have to physically reorder the HTML. */
+  .top-tabs       { order: 0; }
+  .editor-region  { order: 1; }
+  .split-handle   { order: 2; }
+  .conv-region    { order: 3; }
+
+  .conv-region {
+    flex:1;
+    display:flex; flex-direction:column;
+    min-height:0;
+  }
+  .split-handle {
+    flex:0 0 auto;
+    height:5px;
+    background:var(--bg-1);
+    border-top:1px solid var(--border);
+    border-bottom:1px solid var(--border);
+    cursor:row-resize;
+    position:relative;
+  }
+  .split-handle::after {
+    content:''; position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:36px; height:2px; background:var(--text-faint); border-radius:2px; opacity:0.4;
+  }
+  .split-handle:hover::after { opacity:1; }
+  .editor-region {
+    flex:1.1;
+    display:flex; flex-direction:column;
+    min-height:0;
+  }
+
+  /* conversation (compact) */
+  .conv-head { padding:12px 18px 10px; border-bottom:1px solid var(--border); background:var(--bg-1); flex:0 0 auto; }
+  .conv-head-top { display:flex; align-items:center; gap:10px; }
+  .conv-title { font-weight:600; font-size:14px; }
+  .conv-sub { margin-top:4px; font-size:12px; color:var(--text-dim); font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+  .conv-summary { margin-top:8px; padding:6px 10px; background:var(--bg-2); border-radius:6px; border-left:2px solid var(--accent); font-size:12px; color:var(--text-dim); }
+  .conv-summary .label { color:var(--text-faint); text-transform:uppercase; font-size:10px; letter-spacing:0.06em; margin-right:6px; }
+  .conversation { flex:1; overflow-y:auto; padding:12px 18px; display:flex; flex-direction:column; gap:12px; min-height:0; }
+  .msg { display:flex; gap:10px; }
+  .msg .avatar { width:22px; height:22px; border-radius:5px; display:grid; place-items:center; font-size:11px; font-weight:700; flex:0 0 auto; }
+  .msg.user .avatar { background:var(--accent-2); color:var(--accent); }
+  .msg.assistant .avatar { background:#2a1f3a; color:#b09cff; }
+  .msg .body { flex:1; min-width:0; }
+  .msg .who { font-size:11px; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:3px; }
+  .msg .text { font-size:13px; color:var(--text); }
+  .msg .text code { background:var(--bg-2); padding:1px 5px; border-radius:3px; font-size:12px; }
+  .tool-call { margin-top:4px; background:var(--bg-1); border:1px solid var(--border); border-radius:6px; overflow:hidden; }
+  .tool-call-head { padding:6px 10px; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:12px; color:var(--done); display:flex; align-items:center; gap:8px; }
+  .tool-call-head .arg { color:var(--text-dim); } .tool-call-head .stat { margin-left:auto; color:var(--text-faint); font-size:11px; }
+  .composer { flex:0 0 auto; padding:10px 18px 12px; border-top:1px solid var(--border); background:var(--bg-1); }
+  .composer textarea { width:100%; resize:none; min-height:44px; background:var(--bg-2); border:1px solid var(--border); border-radius:6px; color:var(--text); padding:7px 10px; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:13px; outline:none; }
+  .composer textarea:focus { border-color:var(--accent); }
+  .composer-row { display:flex; align-items:center; justify-content:space-between; margin-top:5px; font-size:11px; color:var(--text-faint); }
+
+  /* editor */
+  .editor-head { display:flex; align-items:center; gap:10px; padding:6px 14px; border-bottom:1px solid var(--border); background:var(--bg-1); flex:0 0 auto; font-size:12px; color:var(--text-dim); }
+  .editor-path { font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:11px; color:var(--text-dim); }
+  .editor-changes { color:var(--needs); }
+  .editor-spacer { flex:1; }
+  .editor-btn { padding:3px 9px; border-radius:4px; border:1px solid var(--border-2); background:var(--bg-2); color:var(--text); font-size:11px; cursor:pointer; }
+  .editor-btn.primary { background:var(--accent); border-color:var(--accent); color:white; }
+
+  .etab {
+    padding:0 14px;
+    height:36px;
+    display:flex; align-items:center; gap:6px;
+    font-size:12px;
+    color:var(--text-dim);
+    cursor:pointer;
+    border-right:1px solid var(--border);
+    flex:0 0 auto;
+    max-width:240px;
+    position:relative;
+  }
+  .etab.active { color:var(--text); background:var(--bg); }
+  .etab.active::after { content:''; position:absolute; left:0; right:0; top:0; height:2px; background:var(--accent); }
+  .etab .icon { color:var(--text-faint); font-size:13px; }
+  .etab .name { font-family:ui-monospace,'SF Mono',Menlo,monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .etab.preview .name { font-style:italic; }
+  .etab .dot { width:6px; height:6px; border-radius:50%; background:var(--needs); }
+  .etab .close { color:var(--text-faint); margin-left:4px; padding:2px 4px; border-radius:3px; font-size:13px; }
+  .etab .close:hover { background:var(--bg-3); color:var(--text); }
+
+  .editor-body { display:flex; flex:1; min-height:0; background:var(--bg); font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:12.5px; line-height:1.55; overflow:auto; }
+  .editor-gutter { padding:6px 0; color:var(--text-faint); text-align:right; font-variant-numeric:tabular-nums; user-select:none; font-size:11px; flex:0 0 auto; min-width:54px; }
+  .editor-gutter .ln { padding:0 8px 0 10px; position:relative; }
+  .editor-gutter .ln.add::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--done); }
+  .editor-gutter .ln.mod::before { content:''; position:absolute; left:0; top:0; bottom:0; width:3px; background:var(--needs); }
+  .editor-code { padding:6px 0; flex:1; min-width:0; white-space:pre; }
+  .editor-code .line { padding:0 14px; }
+  .editor-code .line.add { background:rgba(47,191,113,0.07); }
+  .editor-code .line.mod { background:rgba(240,169,69,0.06); }
+
+  .tk-kw { color:var(--tok-kw); }
+  .tk-str { color:var(--tok-str); }
+  .tk-type { color:var(--tok-type); }
+  .tk-fn { color:var(--tok-fn); }
+  .tk-num { color:var(--tok-num); }
+  .tk-dec { color:var(--tok-dec); }
+  .tk-this { color:var(--tok-this); }
+
+  .editor-statusbar { display:flex; align-items:center; gap:14px; padding:3px 14px; background:var(--bg-1); border-top:1px solid var(--border); font-size:11px; color:var(--text-dim); flex:0 0 auto; }
+  .editor-statusbar .open-external { margin-left:auto; color:var(--accent); cursor:pointer; }
+
+  /* RIGHT */
+  .right-tabs { display:flex; border-bottom:1px solid var(--border); background:var(--bg-1); flex:0 0 auto; }
+  .right-tab { padding:10px 14px; font-size:12px; color:var(--text-dim); cursor:pointer; border-bottom:2px solid transparent; display:flex; align-items:center; gap:6px; }
+  .right-tab.active { color:var(--text); border-bottom-color:var(--accent); }
+  .right-tab .badge { background:var(--bg-3); padding:0 5px; border-radius:4px; font-size:10px; color:var(--text-dim); }
+  .panel { display:none; flex:1; min-height:0; overflow-y:auto; }
+  .panel.active { display:block; }
+  .files-filter { display:flex; align-items:center; gap:6px; padding:8px 10px; border-bottom:1px solid var(--border); background:var(--bg-1); }
+  .filter-chip { padding:3px 9px; border-radius:999px; font-size:11px; color:var(--text-dim); background:var(--bg-2); border:1px solid var(--border); cursor:pointer; display:inline-flex; align-items:center; gap:5px; }
+  .filter-chip.active { color:var(--accent); background:var(--accent-2); border-color:var(--accent); }
+  .filter-chip .count { background:rgba(255,255,255,0.08); padding:0 5px; border-radius:999px; font-size:10px; }
+  .tree { padding:8px 4px; font-size:12.5px; }
+  .tree-node { padding:3px 8px 3px 12px; display:flex; align-items:center; gap:6px; cursor:pointer; border-radius:4px; }
+  .tree-node:hover { background:var(--bg-2); }
+  .tree-node.file { color:var(--text-dim); }
+  .tree-node.selected { background:var(--accent-2); color:var(--text); }
+  .tree-node .icon { color:var(--text-faint); width:12px; }
+  .tree-node.modified::after { content:'•'; color:var(--needs); margin-left:auto; padding-right:4px; }
+
+  ::-webkit-scrollbar { width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb { background:var(--bg-3); border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <div class="title">code24</div>
+    <div class="spacer"></div>
+    <div class="pill variant">Layout: split</div>
+    <div class="pill alert">⚠ 2 need input</div>
+    <div class="pill">5 running</div>
+  </div>
+
+  <div class="main">
+
+    <aside class="col">
+      <div class="col-head"><span>Projects · Sessions</span><span class="project-add">+</span></div>
+      <div class="col-body">
+        <div class="project">
+          <div class="project-head"><span class="project-name">llm-docker</span><span class="project-branch mono">main</span></div>
+          <div class="session selected" role="button" tabindex="0" aria-label="Session tts/fix-retries — running">
+            <div class="session-row"><span class="session-branch">tts/fix-retries</span><span class="status running" role="img" aria-label="status: running">running</span></div>
+            <div class="session-summary">Editing TTS service to add exponential backoff on 429.</div>
+            <div class="session-row" style="margin-top:6px;"><span class="session-meta mono">wt: tts-fix · 02:14 · $0.18</span></div>
+          </div>
+          <div class="session" role="button" tabindex="0" aria-label="Session chore/upgrade-nest — needs input">
+            <div class="session-row"><span class="session-branch">chore/upgrade-nest</span><span class="status needs" role="img" aria-label="status: needs input">needs input</span></div>
+            <div class="session-summary">Asking permission to run nest migrate.</div>
+          </div>
+        </div>
+        <div class="project">
+          <div class="project-head"><span class="project-name">web-app</span><span class="project-branch mono">main</span></div>
+          <div class="session" role="button" tabindex="0" aria-label="Session feat/auth-passkeys — needs input">
+            <div class="session-row"><span class="session-branch">feat/auth-passkeys</span><span class="status needs" role="img" aria-label="status: needs input">needs input</span></div>
+            <div class="session-summary">Wants <span class="mono">rm -rf node_modules</span>.</div>
+          </div>
+        </div>
+        <div class="project">
+          <div class="project-head"><span class="project-name">infra</span><span class="project-branch mono">main</span></div>
+          <div class="session" role="button" tabindex="0" aria-label="Session tf/audit-iam — done">
+            <div class="session-row"><span class="session-branch">tf/audit-iam</span><span class="status done" role="img" aria-label="status: done">done</span></div>
+            <div class="session-summary">Finished. 3 files changed.</div>
+          </div>
+        </div>
+        <div class="project">
+          <div class="project-head"><span class="project-name">mobile</span><span class="project-branch mono">develop</span></div>
+          <div class="session" role="button" tabindex="0" aria-label="Session ios/onboard-redesign — errored">
+            <div class="session-row"><span class="session-branch">ios/onboard-redesign</span><span class="status errored" role="img" aria-label="status: errored">errored</span></div>
+            <div class="session-summary"><span class="mono">xcodebuild</span> exited 65.</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MIDDLE — split -->
+    <main class="col">
+      <div class="middle-stack">
+
+        <!-- TOP-OF-PANE: file tabs — always visible above everything else -->
+        <div class="top-tabs">
+          <div class="top-tabs-scroll">
+            <div class="etab active">
+              <span class="icon">📄</span>
+              <span class="name">text-to-speech-response.service.ts</span>
+              <span class="dot" title="unsaved"></span>
+              <span class="close">×</span>
+            </div>
+            <div class="etab preview">
+              <span class="icon">📄</span>
+              <span class="name">…service.spec.ts</span>
+              <span class="close">×</span>
+            </div>
+            <div class="etab">
+              <span class="icon">📄</span>
+              <span class="name">CHANGELOG.md</span>
+              <span class="dot"></span>
+              <span class="close">×</span>
+            </div>
+            <div class="etab">
+              <span class="icon">📄</span>
+              <span class="name">synth.client.ts</span>
+              <span class="close">×</span>
+            </div>
+            <div class="etab">
+              <span class="icon">📄</span>
+              <span class="name">package.json</span>
+              <span class="close">×</span>
+            </div>
+          </div>
+          <div class="top-tabs-meta">
+            <span>5 open</span>
+            <button class="editor-btn">VS Code ↗</button>
+          </div>
+        </div>
+
+        <!-- CONVERSATION region — always visible -->
+        <div class="conv-region">
+          <div class="conv-head">
+            <div class="conv-head-top">
+              <span class="conv-title">llm-docker · tts/fix-retries</span>
+              <span class="status running" role="img" aria-label="status: running">running</span>
+            </div>
+            <div class="conv-sub mono">worktree ~/dev/.code24/wt/llm-docker/tts-fix · 02:14 · $0.18</div>
+            <div class="conv-summary"><span class="label">summary</span> Editing the TTS service to add retry-on-429 with exponential backoff. Tests passing.</div>
+          </div>
+          <div class="conversation">
+            <div class="msg user">
+              <div class="avatar">K</div>
+              <div class="body">
+                <div class="who">You · 02:14 ago</div>
+                <div class="text">The TTS service throws on 429. Add exponential-backoff retry (3 attempts, 500ms base). Cover with a unit test.</div>
+              </div>
+            </div>
+            <div class="msg assistant">
+              <div class="avatar">C</div>
+              <div class="body">
+                <div class="who">Claude · 02:08 ago</div>
+                <div class="text">Wrapping the synth call in a retry helper and adding the test.</div>
+                <div class="tool-call">
+                  <div class="tool-call-head"><span>●</span><span>Edit</span><span class="arg">…/text-to-speech-response.service.ts</span><span class="stat">+12 −3</span></div>
+                </div>
+              </div>
+            </div>
+            <div class="msg assistant">
+              <div class="avatar">C</div>
+              <div class="body">
+                <div class="who">Claude · 00:46 ago</div>
+                <div class="text">Test added — about to run the suite.</div>
+                <div class="tool-call">
+                  <div class="tool-call-head"><span>●</span><span>Bash</span><span class="arg">pnpm test text-to-speech</span><span class="stat">PASS</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="composer">
+            <textarea>looks good — please also handle 503s the same way and commit with the message "tts: retry on 429/503"</textarea>
+            <div class="composer-row">
+              <span>⌘↩ to send · ⌘P to pause</span>
+              <span>Haiku summarizer: on</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- SPLIT HANDLE -->
+        <div class="split-handle" title="Drag to resize"></div>
+
+        <!-- BOTTOM: editor body for the active file tab -->
+        <div class="editor-region">
+          <div class="editor-head">
+            <span class="editor-path mono">src-nestjs/src/modules/text-to-speech-response/services/</span>
+            <span class="editor-changes">● unsaved</span>
+            <span class="editor-spacer"></span>
+            <button class="editor-btn">Revert</button>
+            <button class="editor-btn primary">Save ⌘S</button>
+            <button class="editor-btn">VS Code ↗</button>
+          </div>
+          <div class="editor-body">
+            <div class="editor-gutter">
+<div class="ln"> 1</div>
+<div class="ln"> 2</div>
+<div class="ln"> 3</div>
+<div class="ln"> 4</div>
+<div class="ln"> 5</div>
+<div class="ln"> 6</div>
+<div class="ln"> 7</div>
+<div class="ln"> 8</div>
+<div class="ln mod"> 9</div>
+<div class="ln">10</div>
+<div class="ln">11</div>
+<div class="ln add">12</div>
+<div class="ln add">13</div>
+<div class="ln add">14</div>
+<div class="ln add">15</div>
+<div class="ln add">16</div>
+<div class="ln add">17</div>
+<div class="ln add">18</div>
+<div class="ln add">19</div>
+<div class="ln add">20</div>
+<div class="ln add">21</div>
+<div class="ln add">22</div>
+<div class="ln add">23</div>
+<div class="ln add">24</div>
+<div class="ln add">25</div>
+<div class="ln add">26</div>
+<div class="ln add">27</div>
+<div class="ln">28</div>
+<div class="ln add">29</div>
+<div class="ln add">30</div>
+<div class="ln add">31</div>
+<div class="ln">32</div>
+            </div>
+            <div class="editor-code">
+<div class="line"><span class="tk-kw">import</span> { <span class="tk-type">Injectable</span> } <span class="tk-kw">from</span> <span class="tk-str">'@nestjs/common'</span>;</div>
+<div class="line"><span class="tk-kw">import</span> { <span class="tk-type">SynthClient</span> } <span class="tk-kw">from</span> <span class="tk-str">'./synth.client'</span>;</div>
+<div class="line"> </div>
+<div class="line"><span class="tk-dec">@Injectable</span>()</div>
+<div class="line"><span class="tk-kw">export class</span> <span class="tk-type">TextToSpeechResponseService</span> {</div>
+<div class="line">  <span class="tk-kw">constructor</span>(<span class="tk-kw">private readonly</span> synth: <span class="tk-type">SynthClient</span>) {}</div>
+<div class="line"> </div>
+<div class="line">  <span class="tk-kw">async</span> <span class="tk-fn">generateAudio</span>(text: <span class="tk-type">string</span>): <span class="tk-type">Promise</span>&lt;<span class="tk-type">Buffer</span>&gt; {</div>
+<div class="line mod">    <span class="tk-kw">return await</span> <span class="tk-this">this</span>.<span class="tk-fn">withRetry</span>(() =&gt; <span class="tk-this">this</span>.synth.<span class="tk-fn">generate</span>(text));</div>
+<div class="line">  }</div>
+<div class="line"> </div>
+<div class="line add">  <span class="tk-kw">private async</span> <span class="tk-fn">withRetry</span>&lt;<span class="tk-type">T</span>&gt;(</div>
+<div class="line add">    fn: () =&gt; <span class="tk-type">Promise</span>&lt;<span class="tk-type">T</span>&gt;,</div>
+<div class="line add">    attempts = <span class="tk-num">3</span>,</div>
+<div class="line add">  ): <span class="tk-type">Promise</span>&lt;<span class="tk-type">T</span>&gt; {</div>
+<div class="line add">    <span class="tk-kw">for</span> (<span class="tk-kw">let</span> i = <span class="tk-num">0</span>; i &lt; attempts; i++) {</div>
+<div class="line add">      <span class="tk-kw">try</span> { <span class="tk-kw">return await</span> <span class="tk-fn">fn</span>(); }</div>
+<div class="line add">      <span class="tk-kw">catch</span> (e: <span class="tk-type">any</span>) {</div>
+<div class="line add">        <span class="tk-kw">if</span> (e.status === <span class="tk-num">429</span> &amp;&amp; i &lt; attempts - <span class="tk-num">1</span>) {</div>
+<div class="line add">          <span class="tk-kw">await</span> <span class="tk-this">this</span>.<span class="tk-fn">sleep</span>(<span class="tk-num">500</span> * <span class="tk-num">2</span> ** i);</div>
+<div class="line add">          <span class="tk-kw">continue</span>;</div>
+<div class="line add">        }</div>
+<div class="line add">        <span class="tk-kw">throw</span> e;</div>
+<div class="line add">      }</div>
+<div class="line add">    }</div>
+<div class="line add">    <span class="tk-kw">throw new</span> <span class="tk-type">Error</span>(<span class="tk-str">'unreachable'</span>);</div>
+<div class="line add">  }</div>
+<div class="line"> </div>
+<div class="line add">  <span class="tk-kw">private</span> <span class="tk-fn">sleep</span>(ms: <span class="tk-type">number</span>): <span class="tk-type">Promise</span>&lt;<span class="tk-type">void</span>&gt; {</div>
+<div class="line add">    <span class="tk-kw">return new</span> <span class="tk-type">Promise</span>(r =&gt; <span class="tk-fn">setTimeout</span>(r, ms));</div>
+<div class="line add">  }</div>
+<div class="line">}</div>
+            </div>
+          </div>
+          <div class="editor-statusbar">
+            <span>TypeScript</span>
+            <span>UTF-8 · LF</span>
+            <span>Ln 9, Col 47</span>
+            <span style="color:var(--needs);">● unsaved</span>
+            <span class="open-external">Open in VS Code ↗</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <aside class="col">
+      <div class="right-tabs">
+        <div class="right-tab active">📁 Files</div>
+        <div class="right-tab">⎇ Git <span class="badge">3</span></div>
+      </div>
+      <div class="panel active">
+        <div class="files-filter">
+          <span class="filter-chip">All files</span>
+          <span class="filter-chip active">Changed only <span class="count">3</span></span>
+        </div>
+        <div class="tree">
+          <div class="tree-node selected"><span class="icon">📄</span> services/text-to-speech-response.service.ts</div>
+          <div class="tree-node"><span class="icon">📄</span> services/text-to-speech-response.service.spec.ts</div>
+          <div class="tree-node"><span class="icon">📄</span> CHANGELOG.md</div>
+        </div>
+      </div>
+    </aside>
+
+  </div>
+</div>
+</body>
+</html>

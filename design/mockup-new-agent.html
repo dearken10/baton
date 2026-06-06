@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>code24 · New agent dialog</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --running:#5b8def; --needs:#f0a945; --done:#2fbf71;
+    --errored:#ef5454; --paused:#6b7280;
+  }
+  * { box-sizing: border-box; }
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    box-shadow: 0 0 0 4px rgba(91,141,239,0.25);
+    border-radius: 4px;
+  }
+  html, body {
+    margin:0; padding:0; height:100%;
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+    font-size:13px; line-height:1.45; overflow:hidden;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+
+  .app { display:grid; grid-template-rows:36px 1fr; height:100vh; }
+  .titlebar {
+    display:flex; align-items:center; gap:12px; padding:0 12px;
+    background:var(--bg-1); border-bottom:1px solid var(--border);
+    font-size:12px; color:var(--text-dim);
+  }
+  .titlebar .dots { display:flex; gap:6px; }
+  .titlebar .dot { width:11px; height:11px; border-radius:50%; background:#3a3f4a; }
+  .titlebar .dot.red { background:#ff5f57; }
+  .titlebar .dot.yellow { background:#febc2e; }
+  .titlebar .dot.green { background:#28c840; }
+  .titlebar .title { color:var(--text); font-weight:500; margin-left:8px; }
+  .titlebar .spacer { flex:1; }
+  .titlebar .pill { padding:2px 8px; border-radius:999px; background:var(--bg-2); border:1px solid var(--border); font-size:11px; }
+  .titlebar .pill.variant { color:var(--accent); border-color:var(--accent); background:var(--accent-2); font-weight:600; }
+
+  /* dimmed workspace behind the modal */
+  .workspace-dim {
+    position:absolute; inset:36px 0 0 0;
+    background:
+      linear-gradient(180deg, rgba(0,0,0,0.55), rgba(0,0,0,0.65)),
+      repeating-linear-gradient(90deg,
+        var(--bg) 0, var(--bg) 320px,
+        var(--bg-1) 320px, var(--bg-1) 321px,
+        var(--bg) 321px, var(--bg) calc(100% - 380px),
+        var(--bg-1) calc(100% - 380px), var(--bg-1) calc(100% - 379px),
+        var(--bg) calc(100% - 379px));
+    pointer-events:none;
+  }
+
+  /* sketch of behind-the-modal columns so the dialog feels in-context */
+  .workspace-sketch {
+    position:absolute; inset:36px 0 0 0;
+    display:grid; grid-template-columns: 320px 1fr 380px;
+    opacity:0.55;
+  }
+  .workspace-sketch .col-head {
+    padding:10px 14px; border-bottom:1px solid var(--border); background:var(--bg-1);
+    font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-faint);
+  }
+  .workspace-sketch .col { border-right:1px solid var(--border); background:var(--bg); }
+  .workspace-sketch .ghost { padding:14px; color:var(--text-faint); font-size:12px; }
+
+  /* modal scrim */
+  .scrim {
+    position:absolute; inset:36px 0 0 0;
+    background:rgba(0,0,0,0.55);
+    backdrop-filter:blur(2px);
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  .dialog {
+    width:560px; max-width:92vw;
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:10px;
+    box-shadow:0 30px 80px rgba(0,0,0,0.55), 0 0 0 1px rgba(91,141,239,0.15);
+    overflow:hidden;
+  }
+  .dialog-head {
+    padding:14px 18px 12px;
+    border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:10px;
+  }
+  .dialog-head .title { font-weight:600; font-size:14px; }
+  .dialog-head .project-pill {
+    background:var(--bg-2); padding:2px 8px; border-radius:4px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:11px; color:var(--text-dim);
+  }
+  .dialog-head .esc { margin-left:auto; color:var(--text-faint); font-size:11px; }
+
+  .dialog-body { padding:14px 18px 16px; }
+
+  .field { margin-top:14px; }
+  .field:first-child { margin-top:0; }
+  .label {
+    font-size:11px; color:var(--text-dim);
+    text-transform:uppercase; letter-spacing:0.06em;
+    margin-bottom:6px;
+    display:flex; align-items:center; gap:6px;
+  }
+  .label .hint { color:var(--text-faint); text-transform:none; letter-spacing:0; font-size:11px; }
+
+  .seg {
+    display:flex; background:var(--bg-2); border:1px solid var(--border);
+    border-radius:6px; padding:2px; gap:2px;
+  }
+  .seg-opt {
+    flex:1; padding:7px 10px; border-radius:5px;
+    text-align:center; font-size:12.5px; cursor:pointer;
+    color:var(--text-dim);
+    display:flex; align-items:center; justify-content:center; gap:6px;
+  }
+  .seg-opt:hover { color:var(--text); }
+  .seg-opt.active {
+    background:var(--bg-3);
+    color:var(--text);
+    box-shadow:inset 0 0 0 1px var(--border-2);
+  }
+  .seg-opt .dot { width:6px; height:6px; border-radius:50%; background:var(--text-faint); }
+  .seg-opt.active .dot { background:var(--accent); }
+
+  input[type=text], textarea, select {
+    width:100%; background:var(--bg-2); border:1px solid var(--border);
+    color:var(--text); border-radius:6px;
+    padding:8px 10px; font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:13px;
+    outline:none;
+  }
+  input[type=text]:focus, textarea:focus, select:focus {
+    border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(91,141,239,0.18);
+  }
+  textarea { min-height:80px; resize:vertical; line-height:1.5; }
+
+  .branch-row { display:flex; gap:8px; }
+  .branch-row select { flex:1; }
+  .branch-row .or { color:var(--text-faint); font-size:11px; align-self:center; }
+  .branch-row input { flex:1; }
+
+  .wt-preview {
+    margin-top:8px;
+    padding:8px 10px;
+    background:var(--bg-2);
+    border-radius:6px;
+    border-left:2px solid var(--accent);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    font-size:11.5px;
+    color:var(--text-dim);
+    display:flex; align-items:center; gap:8px;
+  }
+  .wt-preview .label-inline { color:var(--text-faint); font-family:inherit; text-transform:none; letter-spacing:0; }
+  .wt-preview .name { color:var(--text); }
+  .wt-preview .regen {
+    margin-left:auto; color:var(--accent); cursor:pointer;
+    font-family:-apple-system,system-ui,sans-serif; font-size:11px;
+  }
+
+  .options-row {
+    display:grid; grid-template-columns: 1fr 1fr; gap:10px;
+    margin-top:14px;
+  }
+  .option-card {
+    background:var(--bg-2); border:1px solid var(--border);
+    border-radius:6px; padding:10px;
+    cursor:pointer;
+  }
+  .option-card .opt-head { display:flex; align-items:center; gap:8px; font-size:12px; }
+  .option-card .opt-head .chk {
+    width:14px; height:14px; border-radius:3px;
+    border:1px solid var(--border-2); background:var(--bg);
+    display:grid; place-items:center; font-size:10px; color:transparent;
+  }
+  .option-card.on { border-color:var(--accent); }
+  .option-card.on .chk {
+    background:var(--accent); border-color:var(--accent); color:white;
+  }
+  .option-card .opt-sub {
+    margin-top:4px; font-size:11px; color:var(--text-faint);
+    line-height:1.4;
+  }
+
+  .setup-row {
+    margin-top:10px;
+    padding:8px 10px;
+    background:rgba(47,191,113,0.06);
+    border:1px solid rgba(47,191,113,0.25);
+    border-radius:6px;
+    font-size:11.5px; color:var(--done);
+    display:flex; align-items:center; gap:8px;
+  }
+  .setup-row .lbl { color:var(--text-dim); }
+  .setup-row .cmd { font-family:ui-monospace,'SF Mono',Menlo,monospace; color:var(--text); }
+  .setup-row .gear { margin-left:auto; color:var(--text-faint); font-size:11px; cursor:pointer; }
+
+  .agent-pick {
+    display:flex; gap:8px; margin-top:6px;
+  }
+  .agent-chip {
+    padding:6px 10px; border-radius:6px;
+    background:var(--bg-2); border:1px solid var(--border);
+    font-size:12px; cursor:pointer;
+    display:flex; align-items:center; gap:6px;
+    color:var(--text-dim);
+  }
+  .agent-chip.active {
+    border-color:var(--accent); background:var(--accent-2); color:var(--accent);
+  }
+  .agent-chip .glyph { font-size:13px; }
+
+  .est {
+    margin-top:14px;
+    padding:10px 12px;
+    background:var(--bg-2);
+    border-radius:6px;
+    display:flex; align-items:center; gap:14px;
+    font-size:12px;
+  }
+  .est .num { color:var(--text); font-variant-numeric:tabular-nums; font-weight:600; }
+  .est .lbl { color:var(--text-faint); }
+  .est .sep { color:var(--border-2); }
+  .est .new-tag {
+    margin-left:auto;
+    background:rgba(91,141,239,0.12); color:var(--accent);
+    padding:1px 7px; border-radius:999px;
+    font-size:10px; font-weight:600; text-transform:uppercase; letter-spacing:0.04em;
+  }
+
+  .dialog-foot {
+    padding:12px 18px;
+    border-top:1px solid var(--border);
+    background:var(--bg);
+    display:flex; align-items:center; gap:10px;
+  }
+  .foot-hint { color:var(--text-faint); font-size:11px; }
+  .foot-spacer { flex:1; }
+  .btn {
+    padding:6px 14px; border-radius:6px;
+    background:var(--bg-2); border:1px solid var(--border-2);
+    color:var(--text); font-size:12.5px; cursor:pointer;
+  }
+  .btn:hover { background:var(--bg-3); }
+  .btn.primary {
+    background:var(--accent); border-color:var(--accent); color:white;
+    display:flex; align-items:center; gap:6px;
+  }
+  .btn.primary .kbd { background:rgba(255,255,255,0.18); padding:1px 5px; border-radius:3px; font-size:10.5px; }
+
+  .kbd {
+    background:var(--bg-3); padding:1px 5px; border-radius:3px;
+    font-size:11px; color:var(--text-dim); font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .status::before,
+    .status.running::before,
+    .status.needs::before { animation: none !important; }
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <div class="title">code24</div>
+    <div class="spacer"></div>
+    <div class="pill variant">Layout: modal — new agent</div>
+    <div class="pill">$4.18 today</div>
+    <div class="pill">5 running</div>
+  </div>
+
+  <!-- ghost workspace behind -->
+  <div class="workspace-sketch">
+    <div class="col">
+      <div class="col-head">Projects · Sessions</div>
+      <div class="ghost">llm-docker<br>web-app<br>infra<br>mobile</div>
+    </div>
+    <div class="col">
+      <div class="col-head">Conversation</div>
+      <div class="ghost">llm-docker · tts/fix-retries</div>
+    </div>
+    <div class="col">
+      <div class="col-head">Files</div>
+      <div class="ghost">…</div>
+    </div>
+  </div>
+  <div class="workspace-dim"></div>
+
+  <div class="scrim">
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <div class="dialog-head">
+        <span class="title" id="dlg-title">New agent</span>
+        <span class="project-pill">llm-docker</span>
+        <span class="esc"><span class="kbd">esc</span> to close</span>
+      </div>
+
+      <div class="dialog-body">
+
+        <div class="disclosure" style="margin: 0 0 14px 0; padding: 8px 10px; background: rgba(240,169,69,0.06); border: 1px solid rgba(240,169,69,0.30); border-radius: 6px; font-size: 11.5px; color: var(--needs);">
+          ⓘ This agent runs as you, with access to your home directory — not just the worktree.
+        </div>
+
+        <!-- Agent backend pick [+ NEW: shown when >1 backend configured] -->
+        <div class="field">
+          <div class="label">Agent <span class="hint">backend</span></div>
+          <div class="agent-pick">
+            <span class="agent-chip active"><span class="glyph">◆</span> Claude Code</span>
+            <span class="agent-chip"><span class="glyph">◇</span> Codex</span>
+            <span class="agent-chip" title="Configure in Settings → Agent backends">+ add backend</span>
+          </div>
+        </div>
+
+        <!-- Branch -->
+        <div class="field">
+          <div class="label">Branch</div>
+          <div class="seg" role="tablist">
+            <div class="seg-opt"><span class="dot"></span> Existing branch</div>
+            <div class="seg-opt active"><span class="dot"></span> New branch</div>
+          </div>
+
+          <div style="margin-top:8px;">
+            <input type="text" value="tts/fix-retries-v2" spellcheck="false">
+            <div class="branch-row" style="margin-top:6px;">
+              <span class="or">from</span>
+              <select>
+                <option>main</option>
+                <option>develop</option>
+                <option>release/2026.05</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- Worktree name -->
+        <div class="field">
+          <div class="label">
+            Worktree <span class="hint">LLM-named from your prompt · F2.2</span>
+          </div>
+          <div class="wt-preview">
+            <span class="label-inline">→</span>
+            <span>~/.code24/worktrees/llm-docker/<span class="name">tts-retry-fix</span></span>
+            <span class="regen">↻ regenerate name</span>
+          </div>
+        </div>
+
+        <!-- Initial prompt -->
+        <div class="field">
+          <div class="label">Initial prompt <span class="hint">optional · sent as the first user turn</span></div>
+          <textarea spellcheck="false">Add exponential backoff to the TTS retry path. Cover the new branch with a unit test. Don't touch the synthesis client itself.</textarea>
+        </div>
+
+        <!-- Per-project setup script confirmation -->
+        <div class="setup-row">
+          <span>✓</span>
+          <span class="lbl">Setup script will run:</span>
+          <span class="cmd">pnpm install &amp;&amp; cp ../.env .</span>
+          <span class="gear" title="Edit setup.sh">⚙ edit</span>
+        </div>
+
+        <!-- Options -->
+        <div class="options-row">
+          <div class="option-card on" onclick="this.classList.toggle('on')">
+            <div class="opt-head">
+              <span class="chk">✓</span>
+              <span>Open in editor on spawn</span>
+            </div>
+            <div class="opt-sub">Auto-focus this session in the workspace once the worktree is ready.</div>
+          </div>
+          <div class="option-card" onclick="this.classList.toggle('on')">
+            <div class="opt-head">
+              <span class="chk">✓</span>
+              <span>Cap at <span class="mono" style="color:var(--text);">$2.00</span></span>
+            </div>
+            <div class="opt-sub">Soft-pause at the cap, ask before continuing. <span style="color:var(--accent);">[+ NEW]</span></div>
+          </div>
+        </div>
+
+        <!-- Estimate row -->
+        <div class="est">
+          <span class="num">~12 s</span><span class="lbl">to ready</span>
+          <span class="sep">·</span>
+          <span class="num">1.4 GB</span><span class="lbl">worktree size</span>
+          <span class="sep">·</span>
+          <span class="num">$0.00</span><span class="lbl">est. first turn</span>
+          <span class="new-tag">[+ NEW]</span>
+        </div>
+      </div>
+
+      <div class="dialog-foot">
+        <span class="foot-hint">
+          <span class="kbd">⌘N</span> to spawn ·
+          <span class="kbd">⌘⌥N</span> to spawn without focusing
+        </span>
+        <span class="foot-spacer"></span>
+        <button class="btn">Cancel</button>
+        <button class="btn primary">Start agent <span class="kbd">⌘↩</span></button>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
