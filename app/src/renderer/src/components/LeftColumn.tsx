@@ -25,7 +25,19 @@ export function LeftColumn(): JSX.Element {
     try {
       const { path } = await window.code24.call('project.pickFolder', {});
       if (!path) return;
-      await window.code24.call('project.add', { path });
+      const { project } = await window.code24.call('project.add', { path });
+      // Default: spawn an agent in the new project and focus it in
+      // the middle pane so the user can start working immediately.
+      try {
+        const { session } = await window.code24.call('session.spawn', {
+          projectId: project.id,
+          backendId: 'claude-code',
+        });
+        selectSession(session.id);
+      } catch (spawnErr) {
+        // Project add succeeded — spawn is a best-effort follow-up.
+        console.warn('[code24] auto-spawn after project.add failed:', spawnErr);
+      }
     } catch (err) {
       alert(`Add project failed: ${String(err)}`);
     } finally {
