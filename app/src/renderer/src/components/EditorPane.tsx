@@ -57,10 +57,31 @@ const BROWSER_TAB_PREFIX = 'browser://';
 export function browserTabId(absPath: string): string { return `${BROWSER_TAB_PREFIX}${absPath}`; }
 function isBrowserTab(id: string): boolean { return id.startsWith(BROWSER_TAB_PREFIX); }
 
+/** Navigable URL tabs — used by clicks on links inside the terminal.
+ *  Rendered as a navigable <iframe src=URL>, so relative assets and
+ *  navigation away from the initial URL work like a real browser. */
+const WEBURL_TAB_PREFIX = 'weburl://';
+export function webUrlTabId(url: string): string { return `${WEBURL_TAB_PREFIX}${url}`; }
+function isWebUrlTab(id: string): boolean { return id.startsWith(WEBURL_TAB_PREFIX); }
+
 function pathOf(id: string): string {
   if (isDiffTab(id)) return id.slice(DIFF_TAB_PREFIX.length);
   if (isBrowserTab(id)) return id.slice(BROWSER_TAB_PREFIX.length);
+  if (isWebUrlTab(id)) return id.slice(WEBURL_TAB_PREFIX.length);
   return id;
+}
+
+/** Short label for a URL tab — "localhost:5180" instead of the full
+ *  href — so the tab doesn't blow up the strip. Falls back to the
+ *  raw string if URL parsing fails. */
+function labelForUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const tail = u.pathname === '/' ? '' : u.pathname;
+    return `${u.host}${tail}`;
+  } catch {
+    return url;
+  }
 }
 
 // Use the locally-bundled monaco — no CDN, offline-capable.
@@ -210,6 +231,19 @@ export function EditorPane(): JSX.Element {
       if (!metaMap[p]) updateMeta(p, { ...EMPTY_META });
       void (async () => {
         try {
+          // Web URL tabs render an <iframe src=URL>. Nothing to load
+          // from disk — the iframe fetches the page itself. Just
+          // flip status so the render switch picks the right branch.
+          if (isWebUrlTab(p)) {
+            updateMeta(p, {
+              status: 'browser',
+              baseline: '',
+              error: null,
+              dirty: false,
+            });
+            return;
+          }
+
           // Browser tabs render the file in an iframe; we just need
           // the raw HTML stashed in `baseline`. No Monaco model.
           if (isBrowserTab(p)) {
@@ -548,16 +582,28 @@ export function EditorPane(): JSX.Element {
               </div>
           ) : activeMeta.status === 'browser' ? (
               <div className="html-preview">
-                <iframe
-                  /* srcdoc isolates the HTML in its own origin so it
-                     can't reach into the renderer. Relative asset
-                     refs (./style.css, images) WON'T resolve — that's
-                     a known trade-off for not relaxing CSP. */
-                  key={activeFilePath}
-                  title={pathOf(activeFilePath ?? '')}
-                  srcDoc={activeMeta.baseline}
-                  sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
-                />
+                {activeFilePath && isWebUrlTab(activeFilePath) ? (
+                  /* Navigable iframe: src=URL so relative assets and
+                     in-page navigation work like a real browser tab.
+                     The renderer CSP's frame-src must permit the
+                     target scheme (see installCsp in main/index.ts). */
+                  <iframe
+                    key={activeFilePath}
+                    title={pathOf(activeFilePath)}
+                    src={pathOf(activeFilePath)}
+                    sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+                  />
+                ) : (
+                  /* srcdoc isolates HTML in its own origin so it can't
+                     reach into the renderer. Relative asset refs
+                     (./style.css, images) WON'T resolve. */
+                  <iframe
+                    key={activeFilePath}
+                    title={pathOf(activeFilePath ?? '')}
+                    srcDoc={activeMeta.baseline}
+                    sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+                  />
+                )}
               </div>
           ) : activeMeta.status === 'image' && activeMeta.imageSrc ? (
               <div className="image-viewer">
@@ -665,10 +711,11 @@ function EditorTabs({
         const active = p === activeFilePath;
         const preview = p === previewFilePath;
         const real = pathOf(p);
-        const name = real.split('/').pop() ?? real;
+        const weburl = isWebUrlTab(p);
+        const name = weburl ? labelForUrl(real) : (real.split('/').pop() ?? real);
         const diff = isDiffTab(p);
-        const browser = isBrowserTab(p);
-        const kindNote = diff ? ' (diff)' : browser ? ' (browser)' : '';
+        const browser = isBrowserTab(p) || weburl;
+        const kindNote = diff ? ' (diff)' : weburl ? ' (browser)' : isBrowserTab(p) ? ' (browser)' : '';
         return (
           <div
             key={p}
@@ -728,7 +775,8 @@ function EditorActionRow({
   const real = pathOf(absPath);
   const diff = isDiffTab(absPath);
   const browser = isBrowserTab(absPath);
-  const kindNote = diff ? ' · diff' : browser ? ' · browser' : '';
+  const weburl = isWebUrlTab(absPath);
+  const kindNote = diff ? ' · diff' : (browser || weburl) ? ' · browser' : '';
   return (
     <div className="editor-head">
       <span className="editor-file mono" title={real}>
@@ -748,8 +796,8 @@ function EditorActionRow({
           {markdownToggle.buttonLabel}
         </button>
       ) : null}
-      <OpenInMenu absPath={real} />
-      {diff || browser ? null : (
+      {weburl ? null : <OpenInMenu absPath={real} />}
+      {diff || browser || weburl ? null : (
         <button
           type="button"
           className="btn"

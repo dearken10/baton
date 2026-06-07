@@ -31,17 +31,26 @@ import { startNotifier } from './services/notifier.js';
  * also silences the loud "Electron Security Warning" in the console.
  */
 function installCsp(): void {
+  // `frame-src` is permissive (http/https) because the in-app browser
+  // tab is an iframe whose src is whatever URL the user clicked from
+  // the terminal — typical case is a local dev server at
+  // http://localhost:5180, but any http(s) origin should work. The
+  // iframe itself is sandboxed (see EditorPane), and the renderer is
+  // isolated (contextIsolation + sandbox), so we're not handing the
+  // page any host privilege beyond a normal browser tab.
   const dev =
     "default-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:* ws://localhost:* data:; " +
     "img-src 'self' data: http://localhost:*; " +
-    "font-src 'self' data:;";
+    "font-src 'self' data:; " +
+    "frame-src http: https: data:;";
   const prod =
     "default-src 'self'; " +
     "script-src 'self'; " +
     "style-src 'self' 'unsafe-inline'; " +
     "img-src 'self' data:; " +
     "font-src 'self'; " +
-    "connect-src 'self' https://api.anthropic.com;";
+    "connect-src 'self' https://api.anthropic.com; " +
+    "frame-src http: https: data:;";
   const policy = is.dev ? dev : prod;
   session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
     cb({
@@ -155,7 +164,13 @@ function createWindow(): void {
   );
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url);
+    // Best-effort hand-off to the OS browser. Swallow rejection —
+    // e.g. an unhandled scheme on macOS produces "No application in
+    // the Launch Services database matches the input criteria" and
+    // we don't want that as an unhandled promise rejection.
+    void shell.openExternal(details.url).catch((err) => {
+      console.warn('[code24] openExternal failed:', details.url, err);
+    });
     return { action: 'deny' };
   });
 

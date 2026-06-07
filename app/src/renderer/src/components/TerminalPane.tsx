@@ -3,8 +3,11 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
+import { useAppStore } from '../store.js';
+import { webUrlTabId } from './EditorPane.js';
 
 /** How often to snapshot the visible terminal to disk. */
 const SCROLLBACK_SAVE_MS = 10_000;
@@ -27,6 +30,12 @@ interface Props {
 export function TerminalPane({ sessionId }: Props): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  const openFile = useAppStore((s) => s.openFile);
+  // Keep the latest openFile in a ref so the WebLinksAddon click
+  // handler (bound once at mount) always calls the current store action
+  // without re-creating the addon on every render.
+  const openFileRef = useRef(openFile);
+  openFileRef.current = openFile;
 
   useEffect(() => {
     const host = hostRef.current;
@@ -46,6 +55,16 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       },
       allowProposedApi: true,
       scrollback: 10000,
+      // Handles OSC 8 hyperlinks (the kind Claude Code prints in its
+      // banner). WebLinksAddon below covers regex-detected URLs in
+      // shell output. Both routes end up in the in-app browser tab.
+      linkHandler: {
+        activate: (event, text) => {
+          event.preventDefault();
+          openFileRef.current(webUrlTabId(text), 'sticky');
+        },
+        allowNonHttpProtocols: false,
+      },
     });
     termRef.current = term;
 
@@ -65,6 +84,17 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     // they left off" across restarts (PRD F8.8).
     const serialize = new SerializeAddon();
     term.loadAddon(serialize);
+    // Make URLs in the terminal clickable. Default behaviour is
+    // window.open() which would just hand the URL to the OS browser;
+    // we intercept and route it to an in-app browser tab in the
+    // editor pane instead.
+    const webLinks = new WebLinksAddon(
+      (event, uri) => {
+        event.preventDefault();
+        openFileRef.current(webUrlTabId(uri), 'sticky');
+      },
+    );
+    term.loadAddon(webLinks);
 
     term.open(host);
     // Defer the first fit() so the host element has measured layout.
@@ -163,6 +193,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       offData();
       dataSub.dispose();
       resizeSub.dispose();
+      try { webLinks.dispose(); } catch { /* ignore */ }
       term.dispose();
       termRef.current = null;
       void webglOk; // silence the lint; useful for future telemetry
