@@ -217,6 +217,12 @@ export class SessionManager {
         );
       }
 
+      // Read git metadata BEFORE the pty is spawned. If we did this
+      // after spawn, there'd be a window where Claude is alive (and
+      // could fire SessionStart) but `this.live` doesn't yet contain
+      // the session — the hook would silently no-op.
+      const branch = (await readCurrentBranch(opts.cwd)) ?? 'no git';
+
       const spawnOpts: {
         sessionId: string;
         cwd: string;
@@ -234,7 +240,6 @@ export class SessionManager {
       }
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
-      const branch = (await readCurrentBranch(opts.cwd)) ?? 'no git';
       const session: Session = {
         id: sessionId,
         projectId: opts.projectId,
@@ -249,6 +254,10 @@ export class SessionManager {
         lastSummary: null,
         claudeSessionId: opts.resumeClaudeSessionId ?? null,
       };
+
+      // Make the session visible to the hook handler IMMEDIATELY,
+      // before any IO that could race against SessionStart firing.
+      this.live.set(sessionId, { meta: session, handle });
 
       // Insert OR revive (resume): on conflict, restore the row.
       getDatabase()
@@ -289,8 +298,6 @@ export class SessionManager {
       handle.onExit((exitCode) => {
         this.markExited(sessionId, exitCode);
       });
-
-      this.live.set(sessionId, { meta: session, handle });
 
       emit({ type: 'session.spawned', session });
       return session;
