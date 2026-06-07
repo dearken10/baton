@@ -2,21 +2,24 @@
  * WorktreeManager — creates and tears down git worktrees for
  * worktree-per-agent sessions (PRD F2.2 / F7.2).
  *
- * Worktrees live at `~/.code24/worktrees/<projectId>/<branchSlug>/`,
- * deliberately *outside* the user's project root so:
- *   - they don't pollute the project tree,
- *   - they don't fight with the user's `.gitignore` rules,
- *   - they're trivial to clean up when a session ends.
+ * Worktrees live at `<projectRoot>/.code24/worktrees/<branchSlug>/`,
+ * inside the user's project — same pattern as Crystal. The `.code24/`
+ * directory is gitignored on first create so the project never sees
+ * any of our state as untracked files, and the same dir is reserved
+ * for future per-project app state (caches, session metadata, etc.).
  *
  * Mirrors Crystal's `worktreeManager.ts` pattern: withLock-serialised
- * creates, tolerant remove, init-on-empty-repo fallback. (Crystal's
- * code is the precedent we cited in `docs/prior-art.md`.)
+ * creates, tolerant remove. (Crystal's code is the precedent we
+ * cited in `docs/prior-art.md`.)
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { homedir } from 'node:os';
 import simpleGit from 'simple-git';
+
+const CODE24_DIR_NAME = '.code24';
+const WORKTREES_SUBDIR = 'worktrees';
+const GITIGNORE_MARKER = '# code24: per-project app state (worktrees, caches, …)';
 
 /** Slugify a branch name into a filesystem-safe directory name. */
 function slugify(s: string): string {
@@ -46,8 +49,6 @@ export interface WorktreeInfo {
   branch: string;
 }
 
-const WORKTREES_ROOT = path.join(homedir(), '.code24', 'worktrees');
-
 const inFlight = new Map<string, Promise<unknown>>();
 function withLock<T>(key: string, op: () => Promise<T>): Promise<T> {
   const prev = inFlight.get(key) ?? Promise.resolve();
@@ -66,8 +67,14 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
   const branch = args.branchName.trim();
   if (!branch) throw new Error('Branch name is required.');
 
-  const wtDir = path.join(WORKTREES_ROOT, args.projectId, slugify(branch));
-  const lockKey = `wt:${args.projectId}:${slugify(branch)}`;
+  const branchSlug = slugify(branch);
+  const wtDir = path.join(
+    args.projectRoot,
+    CODE24_DIR_NAME,
+    WORKTREES_SUBDIR,
+    branchSlug
+  );
+  const lockKey = `wt:${args.projectRoot}:${branchSlug}`;
 
   return withLock(lockKey, async () => {
     if (fs.existsSync(wtDir)) {
@@ -76,6 +83,20 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
     if (!fs.existsSync(path.join(args.projectRoot, '.git'))) {
       throw new Error(
         `Cannot create a worktree: ${args.projectRoot} is not a git repo.`
+      );
+    }
+
+    // Make sure .code24-worktrees/ is gitignored BEFORE we create the
+    // worktree inside it — otherwise `git status` in the project root
+    // shows the worktree as untracked, which users will accidentally
+    // commit. Best-effort; failure is logged but not fatal.
+    try {
+      ensureGitignored(args.projectRoot);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[code24] could not update .gitignore in ${args.projectRoot}:`,
+        err
       );
     }
 
@@ -97,6 +118,33 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
 
     return { path: wtDir, branch };
   });
+}
+
+/**
+ * Append `.code24/` to the project's `.gitignore` if it isn't already
+ * excluded. Idempotent — re-running on a project that already has the
+ * entry is a no-op. Creates a `.gitignore` if one doesn't exist.
+ *
+ * We exclude the WHOLE `.code24/` dir (not just `.code24/worktrees/`)
+ * because the same dir is reserved for other per-project app state.
+ */
+function ensureGitignored(projectRoot: string): void {
+  const gitignorePath = path.join(projectRoot, '.gitignore');
+  let content = '';
+  if (fs.existsSync(gitignorePath)) {
+    content = fs.readFileSync(gitignorePath, 'utf-8');
+    const lines = content.split(/\r?\n/).map((l) => l.trim());
+    const isExcluded = lines.some((line) =>
+      line === `${CODE24_DIR_NAME}/` ||
+      line === CODE24_DIR_NAME ||
+      line === `/${CODE24_DIR_NAME}/` ||
+      line === `/${CODE24_DIR_NAME}`
+    );
+    if (isExcluded) return; // already excluded
+  }
+  const sep = content.length === 0 || content.endsWith('\n') ? '' : '\n';
+  const block = `${sep}\n${GITIGNORE_MARKER}\n${CODE24_DIR_NAME}/\n`;
+  fs.writeFileSync(gitignorePath, content + block);
 }
 
 /** Tolerant remove — never throws. */
