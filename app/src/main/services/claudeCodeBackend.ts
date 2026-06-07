@@ -60,6 +60,11 @@ export class ClaudeCodeBackend implements AgentBackend {
       `node ${shellEscape(forwarder)} ${event}`;
     const settings = {
       hooks: {
+        SessionStart: [
+          {
+            hooks: [{ type: 'command', command: hookCmd('SessionStart') }],
+          },
+        ],
         PreToolUse: [
           {
             matcher: '*',

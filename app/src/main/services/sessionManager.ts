@@ -285,6 +285,12 @@ export class SessionManager {
       if (!live) return {};
 
       switch (event.event) {
+        case 'SessionStart':
+          // Claude finished loading and is at the prompt waiting for
+          // the user's first message — that's idle, not running.
+          this.setStatus(event.sessionId, 'idle');
+          break;
+
         case 'PreToolUse':
           // Claude is actively working — only flip status if we're
           // currently idle (i.e. between turns) so we don't churn
