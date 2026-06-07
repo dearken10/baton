@@ -85,6 +85,10 @@ const SessionListResponse = z.object({ sessions: z.array(Session) });
 const SessionSpawnRequest = z.object({
   projectId: ProjectId,
   backendId: AgentBackendId.default('claude-code'),
+  /** When set, create a fresh git worktree at this branch first and
+   *  spawn the agent inside it. When omitted, spawn in the project
+   *  root (sessions share a working tree, F2.2 default off). */
+  newWorktreeBranch: z.string().optional(),
 });
 const SessionSpawnResponse = z.object({ session: Session });
 const SessionKillRequest = z.object({ sessionId: SessionId });

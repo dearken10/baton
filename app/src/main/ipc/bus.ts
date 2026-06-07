@@ -57,6 +57,9 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       projectId: project.id,
       backendId: req.backendId,
       cwd: project.path,
+      ...(req.newWorktreeBranch
+        ? { newWorktreeBranch: req.newWorktreeBranch }
+        : {}),
     });
     return { session };
   },

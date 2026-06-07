@@ -32,6 +32,7 @@ import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
 import { readCurrentBranch } from './gitReader.js';
+import { createWorktree } from './worktreeManager.js';
 
 interface LiveSession {
   meta: Session;
@@ -196,12 +197,18 @@ export class SessionManager {
   async spawn(opts: {
     projectId: string;
     backendId: AgentBackendId;
+    /** Either the project root (shared workspace) OR a worktree
+     *  path. Set via `newWorktreeBranch` below for the worktree path. */
     cwd: string;
     /** When set, reuse this code24 session row (the user clicked
      *  "Resume" on an ended row) instead of inserting a fresh one. */
     reuseSessionId?: string;
     /** When set, spawn Claude with `--resume <id>`. */
     resumeClaudeSessionId?: string;
+    /** When set, create a new git worktree at this branch FIRST,
+     *  then spawn the agent inside it. The session's `cwd` will be
+     *  the new worktree path, not the project root. */
+    newWorktreeBranch?: string;
   }): Promise<Session> {
     await this.startHookServer();
 
@@ -217,11 +224,24 @@ export class SessionManager {
         );
       }
 
+      // If the caller asked for a fresh worktree, create it before
+      // anything else and redirect cwd into it. Branch + cwd for the
+      // session will reflect the worktree, not the project root.
+      let cwd = opts.cwd;
+      if (opts.newWorktreeBranch) {
+        const wt = await createWorktree({
+          projectId: opts.projectId,
+          projectRoot: opts.cwd,
+          branchName: opts.newWorktreeBranch,
+        });
+        cwd = wt.path;
+      }
+
       // Read git metadata BEFORE the pty is spawned. If we did this
       // after spawn, there'd be a window where Claude is alive (and
       // could fire SessionStart) but `this.live` doesn't yet contain
       // the session — the hook would silently no-op.
-      const branch = (await readCurrentBranch(opts.cwd)) ?? 'no git';
+      const branch = (await readCurrentBranch(cwd)) ?? 'no git';
 
       const spawnOpts: {
         sessionId: string;
@@ -231,7 +251,7 @@ export class SessionManager {
         resumeClaudeSessionId?: string;
       } = {
         sessionId,
-        cwd: opts.cwd,
+        cwd,
         cols: 100,
         rows: 32,
       };
@@ -245,7 +265,7 @@ export class SessionManager {
         projectId: opts.projectId,
         backendId: opts.backendId,
         branch,
-        worktreePath: opts.cwd,
+        worktreePath: cwd,
         status: 'running',
         startedAt: Date.now(),
         endedAt: null,

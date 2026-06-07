@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { Project, Session } from '@shared/ipc.js';
 
@@ -60,6 +60,28 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  async function spawnInWorktree(projectId: string): Promise<void> {
+    const raw = window.prompt(
+      'New worktree branch name (e.g. tts/fix-retries):'
+    );
+    if (raw == null) return;
+    const branch = raw.trim();
+    if (!branch) return;
+    setBusy(true);
+    try {
+      const { session } = await window.code24.call('session.spawn', {
+        projectId,
+        backendId: 'claude-code',
+        newWorktreeBranch: branch,
+      });
+      selectSession(session.id);
+    } catch (err) {
+      alert(`Worktree spawn failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function resumeSession(sessionId: string): Promise<void> {
     setBusy(true);
     try {
@@ -103,6 +125,7 @@ export function LeftColumn(): JSX.Element {
               selectedId={selectedId}
               onSelect={selectSession}
               onSpawn={() => spawnAgent(p.id)}
+              onSpawnInWorktree={() => spawnInWorktree(p.id)}
               onResume={resumeSession}
               busy={busy}
             />
@@ -119,22 +142,20 @@ function ProjectBlock(props: {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onSpawn: () => void;
+  onSpawnInWorktree: () => void;
   onResume: (id: string) => void;
   busy: boolean;
 }): JSX.Element {
-  const { project, sessions, selectedId, onSelect, onSpawn, onResume, busy } = props;
+  const { project, sessions, selectedId, onSelect, onSpawn, onSpawnInWorktree, onResume, busy } = props;
   return (
     <div className="project-block">
       <div className="project-head">
         <span className="project-name">{project.name}</span>
-        <button
-          className="spawn-btn"
-          onClick={onSpawn}
-          disabled={busy}
-          title="Spawn a Claude Code agent in this project"
-        >
-          + Agent
-        </button>
+        <SpawnMenu
+          onSpawn={onSpawn}
+          onSpawnInWorktree={onSpawnInWorktree}
+          busy={busy}
+        />
       </div>
       <div className="project-path mono" title={project.path}>
         {project.path}
@@ -160,6 +181,71 @@ function ProjectBlock(props: {
               </button>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SpawnMenu(props: {
+  onSpawn: () => void;
+  onSpawnInWorktree: () => void;
+  busy: boolean;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Close on outside click / Escape.
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="spawn-menu" ref={ref}>
+      <button
+        className="spawn-btn"
+        onClick={() => setOpen((v) => !v)}
+        disabled={props.busy}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        title="Spawn a new session"
+      >
+        + Agent ▾
+      </button>
+      {open && (
+        <div className="spawn-menu-pop" role="menu">
+          <button
+            className="spawn-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onSpawn(); }}
+          >
+            <span className="spawn-menu-title">New session</span>
+            <span className="spawn-menu-sub">
+              Run in the project root. Shares files with other sessions.
+            </span>
+          </button>
+          <button
+            className="spawn-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onSpawnInWorktree(); }}
+          >
+            <span className="spawn-menu-title">New worktree</span>
+            <span className="spawn-menu-sub">
+              Fresh git worktree on a new branch. Isolated edits.
+            </span>
+          </button>
         </div>
       )}
     </div>
