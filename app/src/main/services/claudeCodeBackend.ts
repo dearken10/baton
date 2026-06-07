@@ -24,6 +24,7 @@ import type {
   AgentSpawnOpts,
 } from './agentBackend.js';
 import { getHookServer } from './hookServer.js';
+import { trustDirectoryForClaude } from './claudeTrust.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +52,13 @@ export class ClaudeCodeBackend implements AgentBackend {
   }
 
   async spawn(opts: ClaudeCodeSpawnOpts): Promise<AgentHandle> {
+    // Pre-trust the cwd in Claude's user config so the CLI doesn't
+    // sit on the "Do you trust this directory?" prompt — that prompt
+    // blocks SessionStart from firing, which means the session's
+    // claude_session_id never lands in our DB, which means restart
+    // can't auto-resume. Idempotent + silent on failure.
+    trustDirectoryForClaude(opts.cwd);
+
     const hooks = getHookServer();
     const forwarder = hooks.forwarderPath();
 
