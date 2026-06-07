@@ -48,6 +48,18 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  async function resumeSession(sessionId: string): Promise<void> {
+    setBusy(true);
+    try {
+      const { session } = await window.code24.call('session.resume', { sessionId });
+      selectSession(session.id);
+    } catch (err) {
+      alert(`Resume failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <aside className="col col-left">
       <div className="col-head">
@@ -79,6 +91,7 @@ export function LeftColumn(): JSX.Element {
               selectedId={selectedId}
               onSelect={selectSession}
               onSpawn={() => spawnAgent(p.id)}
+              onResume={resumeSession}
               busy={busy}
             />
           ))
@@ -94,9 +107,10 @@ function ProjectBlock(props: {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onSpawn: () => void;
+  onResume: (id: string) => void;
   busy: boolean;
 }): JSX.Element {
-  const { project, sessions, selectedId, onSelect, onSpawn, busy } = props;
+  const { project, sessions, selectedId, onSelect, onSpawn, onResume, busy } = props;
   return (
     <div className="project-block">
       <div className="project-head">
@@ -118,7 +132,7 @@ function ProjectBlock(props: {
           {sessions.map((s) => {
             const isEnded = s.status === 'done' || s.status === 'errored';
             return (
-              <button
+              <div
                 key={s.id}
                 className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}`}
                 onClick={() => onSelect(s.id)}
@@ -128,7 +142,17 @@ function ProjectBlock(props: {
                   {s.branch} · <span className="dim">{s.id.slice(0, 6)}</span>
                 </span>
                 <span className={`status status-${s.status}`}>{s.status}</span>
-              </button>
+                {isEnded && s.claudeSessionId ? (
+                  <button
+                    className="resume-btn"
+                    onClick={(e) => { e.stopPropagation(); onResume(s.id); }}
+                    disabled={props.busy}
+                    title="Resume this Claude session"
+                  >
+                    ↻ Resume
+                  </button>
+                ) : null}
+              </div>
             );
           })}
         </div>

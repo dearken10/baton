@@ -30,6 +30,9 @@ const execFileAsync = promisify(execFile);
 export interface ClaudeCodeSpawnOpts extends AgentSpawnOpts {
   /** Used to scope hook events to this session. */
   sessionId: string;
+  /** When set, spawn with `claude --resume <id>` to reload the
+   *  previous conversation. */
+  resumeClaudeSessionId?: string;
 }
 
 export class ClaudeCodeBackend implements AgentBackend {
@@ -99,17 +102,18 @@ export class ClaudeCodeBackend implements AgentBackend {
       ...(opts.env ?? {}),
     } as Record<string, string>;
 
-    const ptyProcess = pty.spawn(
-      'claude',
-      ['--settings', settingsPath],
-      {
-        name: 'xterm-256color',
-        cols: opts.cols,
-        rows: opts.rows,
-        cwd: opts.cwd,
-        env,
-      }
-    );
+    const args: string[] = ['--settings', settingsPath];
+    if (opts.resumeClaudeSessionId) {
+      args.push('--resume', opts.resumeClaudeSessionId);
+    }
+
+    const ptyProcess = pty.spawn('claude', args, {
+      name: 'xterm-256color',
+      cols: opts.cols,
+      rows: opts.rows,
+      cwd: opts.cwd,
+      env,
+    });
 
     return wrap(ptyProcess, () => {
       try { fs.unlinkSync(settingsPath); } catch { /* best-effort cleanup */ }

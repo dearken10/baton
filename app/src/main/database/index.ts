@@ -31,18 +31,22 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
-  id            TEXT PRIMARY KEY,
-  project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  backend_id    TEXT NOT NULL,
-  branch        TEXT NOT NULL,
-  worktree_path TEXT NOT NULL,
-  status        TEXT NOT NULL,
-  intent_label  TEXT,
-  started_at    INTEGER NOT NULL,
-  ended_at      INTEGER,
-  tokens_in     INTEGER NOT NULL DEFAULT 0,
-  tokens_out    INTEGER NOT NULL DEFAULT 0,
-  last_summary  TEXT
+  id                  TEXT PRIMARY KEY,
+  project_id          TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  backend_id          TEXT NOT NULL,
+  branch              TEXT NOT NULL,
+  worktree_path       TEXT NOT NULL,
+  status              TEXT NOT NULL,
+  intent_label        TEXT,
+  started_at          INTEGER NOT NULL,
+  ended_at            INTEGER,
+  tokens_in           INTEGER NOT NULL DEFAULT 0,
+  tokens_out          INTEGER NOT NULL DEFAULT 0,
+  last_summary        TEXT,
+  -- Claude internal session id, captured from the SessionStart hook.
+  -- We pass it to "claude --resume <id>" so the user can pick a closed
+  -- session back up with its conversation history intact (PRD F2.4).
+  claude_session_id   TEXT
 );
 CREATE INDEX IF NOT EXISTS sessions_project_idx ON sessions(project_id);
 CREATE INDEX IF NOT EXISTS sessions_status_idx ON sessions(status);
@@ -69,7 +73,21 @@ export function initDatabase(): Database.Database {
   mkdirSync(dir, { recursive: true });
   db = new Database(join(dir, 'code24.db'));
   db.exec(SCHEMA);
+  runMigrations(db);
   return db;
+}
+
+/** Forward-only migrations applied at boot. Each tries to add new
+ *  columns or indices; ignores "already exists" errors so existing
+ *  DBs catch up silently. */
+function runMigrations(d: Database.Database): void {
+  // Add claude_session_id to sessions if missing (for installs that
+  // pre-date the column).
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN claude_session_id TEXT');
+  } catch {
+    // duplicate column name — already migrated, no-op
+  }
 }
 
 export function getDatabase(): Database.Database {

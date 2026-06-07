@@ -64,6 +64,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     await getSessionManager().kill(req.sessionId);
     return { ok: true as const };
   },
+  'session.resume': async (req) => {
+    const session = await getSessionManager().resume(req.sessionId);
+    return { session };
+  },
 
   'pty.write': (req) => {
     const bytes = Buffer.from(req.data, 'base64').toString('utf-8');

@@ -37,6 +37,7 @@ describe('control verb registry', () => {
         "pty.write",
         "session.kill",
         "session.list",
+        "session.resume",
         "session.spawn",
       ]
     `);
@@ -90,6 +91,7 @@ describe('session.list', () => {
           backendId: 'mock',
           branch: 'main',
           worktreePath: '/tmp/wt',
+          claudeSessionId: null,
           status: 'running',
           startedAt: Date.now(),
           endedAt: null,
@@ -111,6 +113,7 @@ describe('session.list', () => {
             backendId: 'mock',
             branch: 'main',
             worktreePath: '/tmp/wt',
+          claudeSessionId: null,
             status: 'about-to-happen',
             startedAt: 0,
             endedAt: null,

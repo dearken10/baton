@@ -87,7 +87,8 @@ export class SessionManager {
     const rows = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
-                started_at, ended_at, tokens_in, tokens_out, last_summary
+                started_at, ended_at, tokens_in, tokens_out, last_summary,
+                claude_session_id
            FROM sessions
           ORDER BY started_at DESC`
       )
@@ -96,6 +97,7 @@ export class SessionManager {
         branch: string; worktree_path: string; status: string;
         started_at: number; ended_at: number | null;
         tokens_in: number; tokens_out: number; last_summary: string | null;
+        claude_session_id: string | null;
       }[];
 
     return rows.map((r) => {
@@ -113,6 +115,7 @@ export class SessionManager {
         tokensIn: r.tokens_in,
         tokensOut: r.tokens_out,
         lastSummary: r.last_summary,
+        claudeSessionId: r.claude_session_id,
       };
     });
   }
@@ -121,13 +124,18 @@ export class SessionManager {
     projectId: string;
     backendId: AgentBackendId;
     cwd: string;
+    /** When set, reuse this code24 session row (the user clicked
+     *  "Resume" on an ended row) instead of inserting a fresh one. */
+    reuseSessionId?: string;
+    /** When set, spawn Claude with `--resume <id>`. */
+    resumeClaudeSessionId?: string;
   }): Promise<Session> {
     await this.startHookServer();
 
     const backend = this.backends[opts.backendId];
     if (!backend) throw new Error(`Unknown backend: ${opts.backendId}`);
 
-    const sessionId = randomUUID();
+    const sessionId = opts.reuseSessionId ?? randomUUID();
     return this.queue.run(sessionId, async () => {
       const installed = await backend.isInstalled();
       if (!installed) {
@@ -136,12 +144,22 @@ export class SessionManager {
         );
       }
 
-      const handle = await backend.spawn({
+      const spawnOpts: {
+        sessionId: string;
+        cwd: string;
+        cols: number;
+        rows: number;
+        resumeClaudeSessionId?: string;
+      } = {
         sessionId,
         cwd: opts.cwd,
         cols: 100,
         rows: 32,
-      });
+      };
+      if (opts.resumeClaudeSessionId) {
+        spawnOpts.resumeClaudeSessionId = opts.resumeClaudeSessionId;
+      }
+      const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
       const session: Session = {
         id: sessionId,
@@ -155,12 +173,18 @@ export class SessionManager {
         tokensIn: 0,
         tokensOut: 0,
         lastSummary: null,
+        claudeSessionId: opts.resumeClaudeSessionId ?? null,
       };
 
+      // Insert OR revive (resume): on conflict, restore the row.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             status     = excluded.status,
+             ended_at   = NULL,
+             worktree_path = excluded.worktree_path`
         )
         .run(
           session.id,
@@ -173,7 +197,8 @@ export class SessionManager {
           null,
           0,
           0,
-          null
+          null,
+          session.claudeSessionId
         );
 
       // Wire pty → renderer via the dedicated pty.data channel.
@@ -210,6 +235,44 @@ export class SessionManager {
     live.handle.resize(cols, rows);
   }
 
+  /**
+   * Resume an ended session: re-uses the original code24 session id
+   * and passes the captured Claude session id to `claude --resume`.
+   * The user's prior conversation history is restored by Claude itself.
+   */
+  async resume(sessionId: string): Promise<Session> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, branch, worktree_path,
+                claude_session_id
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string;
+          project_id: string;
+          backend_id: string;
+          branch: string;
+          worktree_path: string;
+          claude_session_id: string | null;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+    if (this.live.has(sessionId)) throw new Error(`Already live: ${sessionId}`);
+    if (!row.claude_session_id) {
+      throw new Error(
+        'Cannot resume — no Claude session id was captured for this session.'
+      );
+    }
+    return this.spawn({
+      projectId: row.project_id,
+      backendId: row.backend_id as AgentBackendId,
+      cwd: row.worktree_path,
+      reuseSessionId: row.id,
+      resumeClaudeSessionId: row.claude_session_id,
+    });
+  }
+
   async kill(sessionId: string): Promise<void> {
     return this.queue.run(sessionId, async () => {
       const live = this.live.get(sessionId);
@@ -220,6 +283,19 @@ export class SessionManager {
 
   list(): Session[] {
     return [...this.live.values()].map((l) => l.meta);
+  }
+
+  /** Capture Claude's internal session id (from SessionStart payload). */
+  private recordClaudeSessionId(sessionId: string, claudeSid: string): void {
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, claudeSessionId: claudeSid };
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET claude_session_id = ? WHERE id = ?')
+        .run(claudeSid, sessionId);
+    } catch {
+      // best-effort
+    }
   }
 
   /** Apply a status transition, persist, and emit if it changed. */
@@ -285,11 +361,19 @@ export class SessionManager {
       if (!live) return {};
 
       switch (event.event) {
-        case 'SessionStart':
+        case 'SessionStart': {
+          // Capture Claude's internal session id from the hook payload
+          // so we can `claude --resume <id>` later (PRD F2.4). Verified
+          // schema: { session_id, transcript_path, cwd, hook_event_name,
+          // source, model, ... }.
+          const body = event.body as { session_id?: string } | undefined;
+          const claudeSid = body?.session_id;
+          if (claudeSid) this.recordClaudeSessionId(event.sessionId, claudeSid);
           // Claude finished loading and is at the prompt waiting for
           // the user's first message — that's idle, not running.
           this.setStatus(event.sessionId, 'idle');
           break;
+        }
 
         case 'PreToolUse':
           // Claude is actively working — only flip status if we're

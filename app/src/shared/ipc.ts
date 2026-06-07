@@ -57,6 +57,8 @@ export const Session = z.object({
   tokensIn: z.number(),
   tokensOut: z.number(),
   lastSummary: z.string().nullable(),
+  /** Claude's internal session id (captured from SessionStart hook). */
+  claudeSessionId: z.string().nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -88,6 +90,9 @@ const SessionSpawnResponse = z.object({ session: Session });
 const SessionKillRequest = z.object({ sessionId: SessionId });
 const SessionKillResponse = z.object({ ok: z.literal(true) });
 
+const SessionResumeRequest = z.object({ sessionId: SessionId });
+const SessionResumeResponse = z.object({ session: Session });
+
 const PtyWriteRequest = z.object({
   sessionId: SessionId,
   // base64-encoded bytes — see PtyDataFrame for the symmetric inbound type.
@@ -107,9 +112,10 @@ export const ControlVerbs = {
   'project.add':        { request: ProjectAddRequest, response: ProjectAddResponse },
   'project.list':       { request: Empty, response: ProjectListResponse },
 
-  'session.list':  { request: Empty, response: SessionListResponse },
-  'session.spawn': { request: SessionSpawnRequest, response: SessionSpawnResponse },
-  'session.kill':  { request: SessionKillRequest, response: SessionKillResponse },
+  'session.list':   { request: Empty, response: SessionListResponse },
+  'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
+  'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
+  'session.resume': { request: SessionResumeRequest, response: SessionResumeResponse },
 
   'pty.write':  { request: PtyWriteRequest, response: Empty },
   'pty.resize': { request: PtyResizeRequest, response: Empty },
