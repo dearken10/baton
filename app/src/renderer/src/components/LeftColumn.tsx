@@ -155,9 +155,7 @@ function ProjectBlock(props: {
                 disabled={props.busy && canResume}
                 title={canResume ? 'Click to resume this Claude session' : `session ${s.id}`}
               >
-                <span className="branch">
-                  {s.branch} · <span className="dim">{s.id.slice(0, 6)}</span>
-                </span>
+                <span className="branch">{s.branch}</span>
                 <span className={`status status-${s.status}`}>{s.status}</span>
               </button>
             );
