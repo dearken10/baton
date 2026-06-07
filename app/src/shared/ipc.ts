@@ -59,6 +59,10 @@ export const Session = z.object({
   lastSummary: z.string().nullable(),
   /** Claude's internal session id (captured from SessionStart hook). */
   claudeSessionId: z.string().nullable(),
+  /** True when this session was spawned with --dangerously-skip-
+   *  permissions, i.e. Claude auto-approves every tool use. Persisted
+   *  per row so toggling survives respawn/resume. */
+  skipPermissions: z.boolean(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -82,6 +86,32 @@ const ProjectListResponse = z.object({ projects: z.array(Project) });
 const ProjectPickResponse = z.object({ path: z.string().nullable() });
 
 const SessionListResponse = z.object({ sessions: z.array(Session) });
+
+/** Rolling token usage windows for the plan-usage indicator (F11.3).
+ *  Returns absolute totals for the last 5h and 7d; the renderer
+ *  divides by the user-selected plan limits to compute the percent. */
+const UsageGetStatsRequest = z.object({});
+const UsageGetStatsResponse = z.object({
+  fiveH: z.object({
+    tokensIn: z.number().int().nonnegative(),
+    tokensOut: z.number().int().nonnegative(),
+  }),
+  sevenD: z.object({
+    tokensIn: z.number().int().nonnegative(),
+    tokensOut: z.number().int().nonnegative(),
+  }),
+  /** Wall-clock ms at the query — handy for the renderer to time its
+   *  next refresh. */
+  serverTs: z.number(),
+});
+
+/** Renderer tells main which session is currently focused in the UI
+ *  so the notifier can suppress redundant pop-ups (and so we know
+ *  what to mark "read" when the user is already looking). */
+const AppSelectedSessionRequest = z.object({
+  sessionId: SessionId.nullable(),
+});
+const AppSelectedSessionResponse = z.object({});
 const SessionSpawnRequest = z.object({
   projectId: ProjectId,
   backendId: AgentBackendId.default('claude-code'),
@@ -89,6 +119,10 @@ const SessionSpawnRequest = z.object({
    *  spawn the agent inside it. When omitted, spawn in the project
    *  root (sessions share a working tree, F2.2 default off). */
   newWorktreeBranch: z.string().optional(),
+  /** When true, launch Claude with --dangerously-skip-permissions.
+   *  Defaults to false; the user can flip it later from the middle
+   *  column. */
+  skipPermissions: z.boolean().optional(),
 });
 const SessionSpawnResponse = z.object({ session: Session });
 const SessionKillRequest = z.object({ sessionId: SessionId });
@@ -96,6 +130,18 @@ const SessionKillResponse = z.object({ ok: z.literal(true) });
 
 const SessionResumeRequest = z.object({ sessionId: SessionId });
 const SessionResumeResponse = z.object({ session: Session });
+
+/** Flip the session's skipPermissions flag and restart with the new
+ *  value (using `--resume` so conversation history survives). */
+const SessionToggleYoloRequest = z.object({ sessionId: SessionId });
+const SessionToggleYoloResponse = z.object({ session: Session });
+
+/** Start a fresh Claude session inside an existing (ended) session's
+ *  cwd, reusing the same code24 session id. No `--resume` — the prior
+ *  conversation history isn't reloaded. Used when the user wants to
+ *  pick a worktree back up without an existing transcript. */
+const SessionRespawnRequest = z.object({ sessionId: SessionId });
+const SessionRespawnResponse = z.object({ session: Session });
 
 const SessionDeleteRequest = z.object({
   sessionId: SessionId,
@@ -114,6 +160,229 @@ const SessionRenameRequest = z.object({
 });
 const SessionRenameResponse = z.object({ session: Session });
 
+// ── Worktree readers (right column) ─────────────────────────────
+// Recursive node type defined first, then z.lazy with that as the
+// generic argument so TypeScript can resolve the recursion.
+export interface FileTreeNodeT {
+  name: string;
+  path: string;
+  type: 'file' | 'dir';
+  // Explicit `| undefined` so Zod's inferred output type (which always
+  // includes undefined for .optional()) matches under
+  // exactOptionalPropertyTypes.
+  children?: FileTreeNodeT[] | undefined;
+  truncated?: boolean | undefined;
+}
+const FileTreeNode: z.ZodType<FileTreeNodeT> = z.lazy(() =>
+  z.object({
+    name: z.string(),
+    path: z.string(),
+    type: z.union([z.literal('file'), z.literal('dir')]),
+    children: z.array(FileTreeNode).optional(),
+    truncated: z.boolean().optional(),
+  })
+);
+
+const WorktreeFileTreeRequest = z.object({ sessionId: SessionId });
+const WorktreeFileTreeResponse = z.object({ root: FileTreeNode });
+
+const GitStatusFile = z.object({
+  path: z.string(),
+  state: z.union([
+    z.literal('modified'),
+    z.literal('staged'),
+    z.literal('untracked'),
+    z.literal('deleted'),
+    z.literal('conflicted'),
+  ]),
+});
+const WorktreeGitStatusRequest = z.object({ sessionId: SessionId });
+const WorktreeGitStatusResponse = z.object({
+  branch: z.string().nullable(),
+  ahead: z.number().int().nonnegative(),
+  behind: z.number().int().nonnegative(),
+  files: z.array(GitStatusFile),
+  dirty: z.boolean(),
+});
+
+/** Open a file or dir in the system default application. */
+const ShellOpenPathRequest = z.object({ absPath: z.string().min(1) });
+const ShellOpenPathResponse = z.object({ ok: z.boolean() });
+
+/** Hand off the active file to a specific external editor. URL-scheme
+ *  approach for the GUI editors that register one (VS Code, Cursor);
+ *  CLI spawn for Zed. PRD F6.6. */
+const ExternalEditor = z.union([
+  z.literal('vscode'),
+  z.literal('cursor'),
+  z.literal('zed'),
+]);
+const EditorOpenInRequest = z.object({
+  editor: ExternalEditor,
+  absPath: z.string().min(1),
+});
+const EditorOpenInResponse = z.object({
+  ok: z.boolean(),
+  /** Human-readable detail when ok=false. */
+  error: z.string().nullable(),
+});
+
+/** Read a text file into the editor zone. Refuses files larger than
+ *  maxBytes (default 5 MB) and obvious binaries (NUL byte in first
+ *  4 KB). Path must be absolute. */
+const FileReadRequest = z.object({
+  absPath: z.string().min(1),
+  maxBytes: z.number().int().positive().optional(),
+});
+const FileReadResponse = z.object({
+  content: z.string(),
+  /** mtime in ms — used by the renderer to detect external edits. */
+  mtimeMs: z.number(),
+  /** True if a binary file would have been refused (we send back an
+   *  empty content + the flag so the renderer can show a viewer
+   *  fallback instead of an error). */
+  binary: z.boolean(),
+  /** True if the file was bigger than maxBytes and got rejected. */
+  tooLarge: z.boolean(),
+  /** File size in bytes (real, not the slice we returned). */
+  size: z.number().int().nonnegative(),
+});
+
+/** Persist editor changes back to disk. The renderer is expected to
+ *  send the latest mtimeMs we returned from file.read so we can
+ *  detect a stale write (someone edited the file externally). */
+const FileWriteRequest = z.object({
+  absPath: z.string().min(1),
+  content: z.string(),
+  /** mtimeMs at the time the renderer's buffer was loaded. If the
+   *  file on disk is newer, the write is refused with `stale: true`
+   *  unless `force: true`. */
+  knownMtimeMs: z.number().optional(),
+  force: z.boolean().optional(),
+});
+const FileWriteResponse = z.object({
+  ok: z.boolean(),
+  /** The new mtimeMs after the write — used by the renderer to refresh
+   *  its baseline so subsequent saves don't fail the stale check. */
+  mtimeMs: z.number(),
+  stale: z.boolean(),
+});
+
+/** Read both the HEAD version (`head`) and the working-copy version
+ *  (`working`) of a file for the Monaco DiffEditor. PRD F7.3. */
+const FileReadGitDiffRequest = z.object({ absPath: z.string().min(1) });
+const FileReadGitDiffResponse = z.object({
+  /** HEAD contents, or empty if the file is new/untracked. */
+  head: z.string(),
+  /** Working-copy contents, or empty if the file has been deleted. */
+  working: z.string(),
+  /** Coarse state, mirrored from worktree.gitStatus for badges. */
+  state: z.union([
+    z.literal('modified'),
+    z.literal('staged'),
+    z.literal('untracked'),
+    z.literal('deleted'),
+    z.literal('conflicted'),
+    z.literal('clean'),
+  ]),
+  /** mtime of the working file (0 when deleted). */
+  mtimeMs: z.number(),
+});
+
+/** Read a file as base64 — used for images and other binary previews
+ *  the editor wants to render directly (PRD F6.2). Caps at 8 MB raw
+ *  (~11 MB once encoded) to keep IPC frames reasonable. */
+const FileReadBinaryRequest = z.object({
+  absPath: z.string().min(1),
+  maxBytes: z.number().int().positive().optional(),
+});
+const FileReadBinaryResponse = z.object({
+  /** Base64-encoded bytes. Empty when `tooLarge`. */
+  data: z.string(),
+  /** Best-effort MIME type derived from extension. */
+  mimeType: z.string(),
+  size: z.number().int().nonnegative(),
+  mtimeMs: z.number(),
+  tooLarge: z.boolean(),
+});
+
+/** Orphan = a git worktree on disk that doesn't match any session row.
+ *  Surfaced read-only here; deletion happens via worktree.removeOrphan. */
+const OrphanWorktree = z.object({
+  projectId: ProjectId,
+  /** Absolute path to the worktree directory. */
+  path: z.string(),
+  /** Branch name from `git worktree list`, or null for detached HEAD. */
+  branch: z.string().nullable(),
+});
+const WorktreeListOrphansRequest = z.object({});
+const WorktreeListOrphansResponse = z.object({
+  orphans: z.array(OrphanWorktree),
+});
+
+const WorktreeRemoveOrphanRequest = z.object({
+  projectId: ProjectId,
+  path: z.string().min(1),
+});
+const WorktreeRemoveOrphanResponse = z.object({ ok: z.literal(true) });
+
+/** Stage / unstage / commit ops against the worktree of a session.
+ *  PRD F7.4. All scoped via sessionId so the renderer doesn't need
+ *  to know about repo roots. */
+const GitStageRequest = z.object({
+  sessionId: SessionId,
+  /** Paths relative to the worktree root. */
+  paths: z.array(z.string()).min(1),
+});
+const GitStageResponse = z.object({ ok: z.literal(true) });
+
+const GitUnstageRequest = z.object({
+  sessionId: SessionId,
+  paths: z.array(z.string()).min(1),
+});
+const GitUnstageResponse = z.object({ ok: z.literal(true) });
+
+const GitCommitRequest = z.object({
+  sessionId: SessionId,
+  message: z.string().min(1),
+});
+const GitCommitResponse = z.object({
+  ok: z.literal(true),
+  /** Short OID of the new commit, for confirmation toast. */
+  oid: z.string(),
+});
+
+const GitPushRequest = z.object({ sessionId: SessionId });
+const GitPushResponse = z.object({
+  ok: z.boolean(),
+  /** Combined stdout/stderr for the user — handy for "authentication
+   *  failed" or "no upstream" diagnostics. */
+  output: z.string(),
+});
+
+const GitPullRequest = z.object({ sessionId: SessionId });
+const GitPullResponse = z.object({
+  ok: z.boolean(),
+  output: z.string(),
+});
+
+/** Per-session terminal scrollback snapshot (PRD F8.8). The renderer
+ *  hands us a SerializeAddon string; main writes it to disk capped
+ *  at 5 MB. */
+const ScrollbackSaveRequest = z.object({
+  sessionId: SessionId,
+  /** The full xterm-serialised buffer. May be empty if the session
+   *  hasn't produced anything yet. */
+  data: z.string(),
+});
+const ScrollbackSaveResponse = z.object({ ok: z.boolean() });
+
+const ScrollbackLoadRequest = z.object({ sessionId: SessionId });
+const ScrollbackLoadResponse = z.object({
+  /** Null when no saved snapshot exists (fresh session). */
+  data: z.string().nullable(),
+});
+
 const PtyWriteRequest = z.object({
   sessionId: SessionId,
   // base64-encoded bytes — see PtyDataFrame for the symmetric inbound type.
@@ -128,20 +397,46 @@ const PtyResizeRequest = z.object({
 export const ControlVerbs = {
   'app.ping': { request: Empty, response: PingResponse },
   'app.meta': { request: Empty, response: AppMetaResponse },
+  'app.setSelectedSession': {
+    request: AppSelectedSessionRequest,
+    response: AppSelectedSessionResponse,
+  },
 
   'project.pickFolder': { request: Empty, response: ProjectPickResponse },
   'project.add':        { request: ProjectAddRequest, response: ProjectAddResponse },
   'project.list':       { request: Empty, response: ProjectListResponse },
 
   'session.list':   { request: Empty, response: SessionListResponse },
+  'usage.getStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
-  'session.resume': { request: SessionResumeRequest, response: SessionResumeResponse },
-  'session.delete': { request: SessionDeleteRequest, response: SessionDeleteResponse },
+  'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },
+  'session.respawn':    { request: SessionRespawnRequest,    response: SessionRespawnResponse },
+  'session.toggleYolo': { request: SessionToggleYoloRequest, response: SessionToggleYoloResponse },
+  'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
+
+  'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
+  'worktree.gitStatus':    { request: WorktreeGitStatusRequest,   response: WorktreeGitStatusResponse },
+  'worktree.listOrphans':  { request: WorktreeListOrphansRequest, response: WorktreeListOrphansResponse },
+  'worktree.removeOrphan': { request: WorktreeRemoveOrphanRequest, response: WorktreeRemoveOrphanResponse },
+  'git.stage':             { request: GitStageRequest,             response: GitStageResponse },
+  'git.unstage':           { request: GitUnstageRequest,           response: GitUnstageResponse },
+  'git.commit':            { request: GitCommitRequest,            response: GitCommitResponse },
+  'git.push':              { request: GitPushRequest,              response: GitPushResponse },
+  'git.pull':              { request: GitPullRequest,              response: GitPullResponse },
+  'shell.openPath':        { request: ShellOpenPathRequest,       response: ShellOpenPathResponse },
+  'editor.openIn':         { request: EditorOpenInRequest,        response: EditorOpenInResponse },
+  'file.read':             { request: FileReadRequest,            response: FileReadResponse },
+  'file.readBinary':       { request: FileReadBinaryRequest,      response: FileReadBinaryResponse },
+  'file.readGitDiff':      { request: FileReadGitDiffRequest,     response: FileReadGitDiffResponse },
+  'file.write':            { request: FileWriteRequest,           response: FileWriteResponse },
 
   'pty.write':  { request: PtyWriteRequest, response: Empty },
   'pty.resize': { request: PtyResizeRequest, response: Empty },
+
+  'scrollback.save': { request: ScrollbackSaveRequest, response: ScrollbackSaveResponse },
+  'scrollback.load': { request: ScrollbackLoadRequest, response: ScrollbackLoadResponse },
 } as const;
 
 export type ControlVerb = keyof typeof ControlVerbs;
@@ -204,6 +499,13 @@ const SessionRenamedEvent = EventEnvelope.extend({
   newWorktreePath: z.string(),
 });
 
+const SessionTokensUpdatedEvent = EventEnvelope.extend({
+  type: z.literal('session.tokens_updated'),
+  sessionId: SessionId,
+  tokensIn: z.number().int().nonnegative(),
+  tokensOut: z.number().int().nonnegative(),
+});
+
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   SessionSpawnedEvent,
@@ -212,6 +514,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionExitedEvent,
   SessionDeletedEvent,
   SessionRenamedEvent,
+  SessionTokensUpdatedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 
@@ -234,4 +537,7 @@ export const Channels = {
   control: 'code24:control',
   ptyData: 'code24:pty.data',
   events:  'code24:events',
+  /** Main → renderer: "user clicked a desktop notification for this
+   *  session, please select it in the UI." Carries `{ sessionId }`. */
+  selectSession: 'code24:select-session',
 } as const;

@@ -228,6 +228,52 @@ export async function renameWorktree(
   });
 }
 
+/** A `git worktree list` row we recognise. */
+export interface WorktreeListEntry {
+  path: string;
+  branch: string | null;
+  /** Commit OID (best-effort). */
+  head: string | null;
+}
+
+/**
+ * Parse `git worktree list --porcelain` output. The format is a series
+ * of blocks separated by blank lines, where each block has lines like
+ *   worktree /abs/path
+ *   HEAD <oid>
+ *   branch refs/heads/<name>
+ * For detached heads, the `branch` line is absent and a `detached` line
+ * appears instead.
+ */
+export async function listWorktrees(projectRoot: string): Promise<WorktreeListEntry[]> {
+  if (!fs.existsSync(path.join(projectRoot, '.git'))) return [];
+  let raw: string;
+  try {
+    raw = await simpleGit(projectRoot).raw(['worktree', 'list', '--porcelain']);
+  } catch {
+    return [];
+  }
+  const out: WorktreeListEntry[] = [];
+  let cur: Partial<WorktreeListEntry> | null = null;
+  for (const line of raw.split('\n')) {
+    if (line.startsWith('worktree ')) {
+      if (cur) out.push({ path: cur.path ?? '', branch: cur.branch ?? null, head: cur.head ?? null });
+      cur = { path: line.slice('worktree '.length).trim() };
+    } else if (cur && line.startsWith('HEAD ')) {
+      cur.head = line.slice('HEAD '.length).trim();
+    } else if (cur && line.startsWith('branch ')) {
+      cur.branch = line.slice('branch '.length).trim().replace(/^refs\/heads\//, '');
+    } else if (line.trim() === '' && cur) {
+      out.push({ path: cur.path ?? '', branch: cur.branch ?? null, head: cur.head ?? null });
+      cur = null;
+    }
+  }
+  if (cur) out.push({ path: cur.path ?? '', branch: cur.branch ?? null, head: cur.head ?? null });
+  // Drop the main worktree (the project root itself); we only care
+  // about children rooted in `.code24/worktrees/`.
+  return out.filter((w) => w.path !== projectRoot);
+}
+
 /** Tolerant remove — never throws. */
 export async function removeWorktree(
   projectRoot: string,

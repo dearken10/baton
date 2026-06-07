@@ -1,27 +1,19 @@
+import { UsageBars } from './UsageBars.js';
+
 interface Props {
   version: string;
-  electronVersion: string;
-  projectCount: number;
-  sessionCount: number;
 }
 
-export function Titlebar({
-  version,
-  electronVersion,
-  projectCount,
-  sessionCount,
-}: Props): JSX.Element {
+export function Titlebar({ version }: Props): JSX.Element {
+  // The lifetime-total tokens chip used to live here too, but with
+  // the rolling 5h/7d bars it became redundant. Per-session totals
+  // still appear on the session chip in the left column (PRD F11.1).
   return (
     <header className="titlebar">
       <div className="brand">code24</div>
-      <div className="meta">
-        v{version}
-        {electronVersion ? ` · Electron ${electronVersion}` : ''}
-      </div>
+      <div className="meta">v{version}</div>
       <div className="spacer" />
-      <div className="pill variant">Layout: split</div>
-      <div className="pill">{projectCount} projects</div>
-      <div className="pill">{sessionCount} sessions</div>
+      <UsageBars />
     </header>
   );
 }

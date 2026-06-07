@@ -307,13 +307,18 @@ project on different branches.
 - **F6.3** **Split layout only** (v1 ships one layout). Top-to-bottom
   vertical stack:
   1. **File tab strip** (always visible at the very top).
-  2. **Editor** for the active file tab (~52% of vertical space).
-  3. **Draggable horizontal handle** to resize.
-  4. **Conversation** — header, transcript, composer — at the bottom
-     (~48%). Composer naturally lands at the bottom edge of the pane.
-  Both editor and conversation are visible at all times; switching
+  2. **Editor** for the active file tab (default ~50% of vertical
+     space, user-adjustable).
+  3. **Draggable horizontal handle** to resize. Position persisted
+     across restarts.
+  4. **Live terminal / conversation** at the bottom (default ~50%,
+     user-adjustable). This is the xterm rendering of the Claude
+     Code CLI — agent output and the prompt composer share the
+     same surface (see §8: F8.1 is hosted here, not in the right
+     pane).
+  Both editor and terminal are visible at all times; switching
   file tabs at the top changes the editor without affecting the
-  conversation below.
+  terminal below.
 - **F6.4** **Conversation is always visible** by construction (it's
   the bottom region of the split, not a tab). No pinned-tab logic
   needed.
@@ -348,7 +353,13 @@ project on different branches.
   agent context; combined multi-file diff; snapshot-before-destructive-
   approval.
 
-### Terminal pane (right pane)
+### Live terminal (middle-bottom of the center pane)
+
+> Layout change vs. the original draft: the terminal lives in the
+> bottom half of the center pane (under F6.3), not in a separate
+> right pane. The right pane is now the **Files + Git sidebar**
+> (file tree, git status, orphaned-worktree cleanup). The xterm
+> specs below are unchanged — only the location is.
 
 - **F8.1** Embedded terminal (xterm.js) showing the live Claude Code
   session.

@@ -33,6 +33,9 @@ export interface ClaudeCodeSpawnOpts extends AgentSpawnOpts {
   /** When set, spawn with `claude --resume <id>` to reload the
    *  previous conversation. */
   resumeClaudeSessionId?: string;
+  /** When true, also pass `--dangerously-skip-permissions` so Claude
+   *  auto-approves every tool use (YOLO mode). */
+  skipPermissions?: boolean;
 }
 
 export class ClaudeCodeBackend implements AgentBackend {
@@ -114,6 +117,9 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (opts.resumeClaudeSessionId) {
       args.push('--resume', opts.resumeClaudeSessionId);
     }
+    if (opts.skipPermissions) {
+      args.push('--dangerously-skip-permissions');
+    }
 
     const ptyProcess = pty.spawn('claude', args, {
       name: 'xterm-256color',
@@ -150,6 +156,18 @@ function wrap(ptyProcess: pty.IPty, onCleanup: () => void): AgentHandle {
         // pty might already be gone
       }
       onCleanup();
+    },
+    pause() {
+      // SIGSTOP suspends the process without killing it. We do NOT
+      // flip `alive` here — the handle is still valid for resize, data
+      // subscription, and resume(). The pty just stops scheduling
+      // until resume() (SIGCONT) is called.
+      if (!alive) return;
+      try { ptyProcess.kill('SIGSTOP'); } catch { /* already gone */ }
+    },
+    resume() {
+      if (!alive) return;
+      try { ptyProcess.kill('SIGCONT'); } catch { /* already gone */ }
     },
     onData(handler) {
       const sub = ptyProcess.onData((s) => handler(Buffer.from(s, 'utf-8')));

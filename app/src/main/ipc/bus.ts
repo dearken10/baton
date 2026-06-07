@@ -11,8 +11,16 @@
  * own channel (PRD F10.2). See SessionManager.
  */
 
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
+import * as fsp from 'node:fs/promises';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import simpleGit from 'simple-git';
 import { z } from 'zod';
+
+const execFileP = promisify(execFile);
 
 import {
   Channels,
@@ -23,6 +31,11 @@ import {
 } from '../../shared/ipc.js';
 import { addProject, listProjects, getProject } from '../services/projectStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
+import { setSelectedSession } from '../services/notifier.js';
+import { readFileTree, readGitStatus } from '../services/worktreeReader.js';
+import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
+import { scanTranscripts } from '../services/globalUsageScanner.js';
+import { getDatabase } from '../database/index.js';
 
 type Handler<V extends ControlVerb> = (
   req: RequestOf<V>
@@ -36,6 +49,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     node: process.versions.node,
     platform: process.platform,
   }),
+  'app.setSelectedSession': (req) => {
+    setSelectedSession(req.sessionId);
+    return {};
+  },
 
   'project.pickFolder': async () => {
     const focused = BrowserWindow.getFocusedWindow();
@@ -50,6 +67,33 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'project.list': () => ({ projects: listProjects() }),
 
   'session.list': () => ({ sessions: getSessionManager().listAll() }),
+  'usage.getStats': async () => {
+    // Make sure external transcripts are folded in before we sum.
+    // scanTranscripts is re-entrant and cheap when up to date.
+    await scanTranscripts();
+    const now = Date.now();
+    const FIVE_H = 5 * 60 * 60 * 1000;
+    const SEVEN_D = 7 * 24 * 60 * 60 * 1000;
+    const rowFiveH = getDatabase()
+      .prepare(
+        `SELECT COALESCE(SUM(tokens_in), 0)  AS ti,
+                COALESCE(SUM(tokens_out), 0) AS to_
+           FROM token_usage_events WHERE ts > ?`
+      )
+      .get(now - FIVE_H) as { ti: number; to_: number };
+    const rowSevenD = getDatabase()
+      .prepare(
+        `SELECT COALESCE(SUM(tokens_in), 0)  AS ti,
+                COALESCE(SUM(tokens_out), 0) AS to_
+           FROM token_usage_events WHERE ts > ?`
+      )
+      .get(now - SEVEN_D) as { ti: number; to_: number };
+    return {
+      fiveH:  { tokensIn: rowFiveH.ti,  tokensOut: rowFiveH.to_  },
+      sevenD: { tokensIn: rowSevenD.ti, tokensOut: rowSevenD.to_ },
+      serverTs: now,
+    };
+  },
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
@@ -60,6 +104,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       ...(req.newWorktreeBranch
         ? { newWorktreeBranch: req.newWorktreeBranch }
         : {}),
+      ...(req.skipPermissions ? { skipPermissions: true } : {}),
     });
     return { session };
   },
@@ -69,6 +114,14 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'session.resume': async (req) => {
     const session = await getSessionManager().resume(req.sessionId);
+    return { session };
+  },
+  'session.respawn': async (req) => {
+    const session = await getSessionManager().respawn(req.sessionId);
+    return { session };
+  },
+  'session.toggleYolo': async (req) => {
+    const session = await getSessionManager().toggleYolo(req.sessionId);
     return { session };
   },
   'session.delete': async (req) => {
@@ -90,6 +143,279 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return { session };
   },
 
+  'worktree.fileTree': async (req) => {
+    const worktreePath = resolveWorktreePath(req.sessionId);
+    const root = await readFileTree(worktreePath);
+    return { root };
+  },
+  'worktree.gitStatus': async (req) => {
+    const worktreePath = resolveWorktreePath(req.sessionId);
+    const report = await readGitStatus(worktreePath);
+    return report;
+  },
+  'worktree.listOrphans': async () => {
+    const projects = listProjects();
+    const known = new Set<string>(
+      (getDatabase()
+        .prepare('SELECT worktree_path FROM sessions')
+        .all() as { worktree_path: string }[]).map((r) => r.worktree_path)
+    );
+    const orphans: { projectId: string; path: string; branch: string | null }[] = [];
+    for (const p of projects) {
+      const entries = await listWorktrees(p.path);
+      for (const e of entries) {
+        // The "main" worktree is already filtered out by listWorktrees.
+        // Anything not tracked by a session row is an orphan.
+        if (!known.has(e.path)) {
+          orphans.push({ projectId: p.id, path: e.path, branch: e.branch });
+        }
+      }
+    }
+    return { orphans };
+  },
+  'git.stage': async (req) => {
+    const worktreePath = resolveWorktreePath(req.sessionId);
+    await simpleGit(worktreePath).add(req.paths);
+    return { ok: true as const };
+  },
+  'git.unstage': async (req) => {
+    const worktreePath = resolveWorktreePath(req.sessionId);
+    // `git reset HEAD <paths>` unstages without touching the working
+    // tree. simple-git's raw is the most predictable way to do this.
+    await simpleGit(worktreePath).raw(['reset', 'HEAD', '--', ...req.paths]);
+    return { ok: true as const };
+  },
+  'git.commit': async (req) => {
+    const worktreePath = resolveWorktreePath(req.sessionId);
+    const res = await simpleGit(worktreePath).commit(req.message);
+    return {
+      ok: true as const,
+      oid: (res.commit ?? '').slice(0, 7),
+    };
+  },
+  'git.push': async (req) => {
+    const worktreePath = resolveWorktreePath(req.sessionId);
+    try {
+      // `git push` with no args — uses the branch's configured
+      // upstream. simple-git surfaces git's own stdout/stderr on error.
+      const out = await simpleGit(worktreePath).raw(['push']);
+      return { ok: true, output: out || 'Push complete.' };
+    } catch (err) {
+      return {
+        ok: false,
+        output: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+  'git.pull': async (req) => {
+    const worktreePath = resolveWorktreePath(req.sessionId);
+    try {
+      const out = await simpleGit(worktreePath).raw(['pull', '--ff-only']);
+      return { ok: true, output: out || 'Pull complete.' };
+    } catch (err) {
+      return {
+        ok: false,
+        output: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
+  'worktree.removeOrphan': async (req) => {
+    const project = getProject(req.projectId);
+    if (!project) throw new Error(`Unknown project: ${req.projectId}`);
+    await removeWorktree(project.path, req.path);
+    return { ok: true as const };
+  },
+  'shell.openPath': async (req) => {
+    // openPath returns a string — empty on success, error message on
+    // failure. We surface it as a boolean for the renderer.
+    const err = await shell.openPath(req.absPath);
+    return { ok: err === '' };
+  },
+  'editor.openIn': async (req) => {
+    // VS Code + Cursor register URL schemes that handle file:// paths.
+    // Zed doesn't reliably ship a URL scheme on every install, so we
+    // shell out to its CLI. All three: if the external app isn't
+    // installed, the OS just won't open anything — we surface that as
+    // ok:false so the renderer can prompt the user to install.
+    try {
+      switch (req.editor) {
+        case 'vscode': {
+          await shell.openExternal(`vscode://file${req.absPath}`);
+          return { ok: true, error: null };
+        }
+        case 'cursor': {
+          await shell.openExternal(`cursor://file${req.absPath}`);
+          return { ok: true, error: null };
+        }
+        case 'zed': {
+          await execFileP('zed', [req.absPath]);
+          return { ok: true, error: null };
+        }
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    return { ok: false, error: 'unknown editor' };
+  },
+  'file.read': async (req) => {
+    const max = req.maxBytes ?? 5 * 1024 * 1024;
+    const stat = await fsp.stat(req.absPath);
+    if (stat.size > max) {
+      return {
+        content: '',
+        mtimeMs: stat.mtimeMs,
+        binary: false,
+        tooLarge: true,
+        size: stat.size,
+      };
+    }
+    const buf = await fsp.readFile(req.absPath);
+    // Cheap binary sniff: NUL byte in the first 4 KB is a strong hit.
+    const sliceEnd = Math.min(buf.length, 4096);
+    let binary = false;
+    for (let i = 0; i < sliceEnd; i++) {
+      if (buf[i] === 0) { binary = true; break; }
+    }
+    if (binary) {
+      return {
+        content: '',
+        mtimeMs: stat.mtimeMs,
+        binary: true,
+        tooLarge: false,
+        size: stat.size,
+      };
+    }
+    return {
+      content: buf.toString('utf-8'),
+      mtimeMs: stat.mtimeMs,
+      binary: false,
+      tooLarge: false,
+      size: stat.size,
+    };
+  },
+  'file.readGitDiff': async (req) => {
+    const repoRoot = findRepoRoot(req.absPath);
+    let stat: { mtimeMs: number } | null = null;
+    try { stat = await fsp.stat(req.absPath); } catch { stat = null; }
+
+    let working = '';
+    if (stat) {
+      try { working = await fsp.readFile(req.absPath, 'utf-8'); }
+      catch { /* binary or unreadable — leave empty */ }
+    }
+
+    if (!repoRoot) {
+      // Not in a repo. Treat the working file as the only side; nothing
+      // to diff against, so we return head === working so the diff
+      // editor renders a clean view.
+      return {
+        head: working,
+        working,
+        state: 'clean' as const,
+        mtimeMs: stat?.mtimeMs ?? 0,
+      };
+    }
+
+    const relPath = path.relative(repoRoot, req.absPath).split(path.sep).join('/');
+    const git = simpleGit(repoRoot);
+
+    // `git show HEAD:<relPath>` returns the HEAD blob. Throws if the
+    // file didn't exist in HEAD (untracked or newly added), in which
+    // case the "previous" side is empty.
+    let head = '';
+    try {
+      head = await git.show([`HEAD:${relPath}`]);
+    } catch {
+      head = '';
+    }
+
+    // Coarse state — same buckets as worktree.gitStatus. We re-derive
+    // here instead of calling readGitStatus to keep this fast for a
+    // single file.
+    let state: ResponseOf<'file.readGitDiff'>['state'] = 'clean';
+    if (!stat && head) state = 'deleted';
+    else if (!head && stat) state = 'untracked';
+    else if (head !== working) state = 'modified';
+
+    return {
+      head,
+      working,
+      state,
+      mtimeMs: stat?.mtimeMs ?? 0,
+    };
+  },
+  'file.readBinary': async (req) => {
+    const max = req.maxBytes ?? 8 * 1024 * 1024;
+    const stat = await fsp.stat(req.absPath);
+    if (stat.size > max) {
+      return {
+        data: '',
+        mimeType: mimeFromPath(req.absPath),
+        size: stat.size,
+        mtimeMs: stat.mtimeMs,
+        tooLarge: true,
+      };
+    }
+    const buf = await fsp.readFile(req.absPath);
+    return {
+      data: buf.toString('base64'),
+      mimeType: mimeFromPath(req.absPath),
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      tooLarge: false,
+    };
+  },
+  'file.write': async (req) => {
+    // Stale-write guard: if the file on disk is newer than what the
+    // renderer loaded, refuse unless `force: true`. The renderer then
+    // surfaces a "file changed on disk" prompt.
+    if (req.knownMtimeMs != null && !req.force) {
+      try {
+        const stat = await fsp.stat(req.absPath);
+        if (stat.mtimeMs > req.knownMtimeMs + 1) {
+          return { ok: false, mtimeMs: stat.mtimeMs, stale: true };
+        }
+      } catch {
+        // File doesn't exist on disk anymore — proceed (we'll create it).
+      }
+    }
+    await fsp.writeFile(req.absPath, req.content, 'utf-8');
+    const stat = await fsp.stat(req.absPath);
+    return { ok: true, mtimeMs: stat.mtimeMs, stale: false };
+  },
+
+  'scrollback.save': async (req) => {
+    try {
+      const file = scrollbackPath(req.sessionId);
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      let data = req.data;
+      // Cap at 5 MB by keeping the TAIL of the buffer. Serialised
+      // xterm state with a long preamble of escape sequences may
+      // misrender if truncated mid-sequence, but in practice the
+      // tail of a 5 MB snapshot is plenty for replay use.
+      const SCROLLBACK_MAX_BYTES = 5 * 1024 * 1024;
+      if (data.length > SCROLLBACK_MAX_BYTES) {
+        data = data.slice(data.length - SCROLLBACK_MAX_BYTES);
+      }
+      await fsp.writeFile(file, data, 'utf-8');
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  },
+  'scrollback.load': async (req) => {
+    try {
+      const file = scrollbackPath(req.sessionId);
+      const data = await fsp.readFile(file, 'utf-8');
+      return { data };
+    } catch {
+      return { data: null };
+    }
+  },
+
   'pty.write': (req) => {
     const bytes = Buffer.from(req.data, 'base64').toString('utf-8');
     getSessionManager().write(req.sessionId, bytes);
@@ -100,6 +426,56 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return {};
   },
 };
+
+/** Look up the worktree (cwd) path for a session id from SQLite.
+ *  Worktree reads don't go through SessionManager so the row may not
+ *  be live in memory. */
+function resolveWorktreePath(sessionId: string): string {
+  const row = getDatabase()
+    .prepare('SELECT worktree_path FROM sessions WHERE id = ?')
+    .get(sessionId) as { worktree_path: string } | undefined;
+  if (!row) throw new Error(`Unknown session: ${sessionId}`);
+  return row.worktree_path;
+}
+
+/** Per-session scrollback file path. Lives under ~/.code24/scrollback/
+ *  alongside the other per-project app state. */
+function scrollbackPath(sessionId: string): string {
+  return path.join(app.getPath('home'), '.code24', 'scrollback', `${sessionId}.bin`);
+}
+
+/** Walk up from `absPath` to find a directory containing `.git`.
+ *  Returns null if none — caller treats the file as non-repo. */
+function findRepoRoot(absPath: string): string | null {
+  let dir = path.dirname(path.resolve(absPath));
+  // Bound the walk so we never loop on weird filesystems.
+  for (let i = 0; i < 64; i++) {
+    if (fs.existsSync(path.join(dir, '.git'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+  return null;
+}
+
+/** Cheap extension-based MIME lookup. Only handles the types we
+ *  actually preview (PRD F6.2: image viewers). Anything unknown
+ *  falls back to application/octet-stream. */
+function mimeFromPath(p: string): string {
+  const ext = p.toLowerCase().slice(p.lastIndexOf('.') + 1);
+  switch (ext) {
+    case 'png':  return 'image/png';
+    case 'jpg':
+    case 'jpeg': return 'image/jpeg';
+    case 'gif':  return 'image/gif';
+    case 'webp': return 'image/webp';
+    case 'svg':  return 'image/svg+xml';
+    case 'bmp':  return 'image/bmp';
+    case 'ico':  return 'image/x-icon';
+    case 'avif': return 'image/avif';
+    default:     return 'application/octet-stream';
+  }
+}
 
 export function registerControlBus(): void {
   ipcMain.handle(

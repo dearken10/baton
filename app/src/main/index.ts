@@ -22,6 +22,8 @@ import { registerControlBus } from './ipc/bus.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { getSessionManager } from './services/sessionManager.js';
 import { addProject } from './services/projectStore.js';
+import { startNotifier } from './services/notifier.js';
+import { scanTranscripts } from './services/globalUsageScanner.js';
 
 /**
  * Per PRD NF6: tight CSP in production. In dev we relax it just
@@ -206,6 +208,16 @@ app.whenReady().then(() => {
   // Wire the control-channel IPC bus before the window opens so the
   // renderer can call ping/meta/session.list immediately on mount.
   registerControlBus();
+
+  // Notifier subscribes to AppEvents and turns needs-input/errored
+  // transitions into native macOS notifications + dock badge. (PRD F9)
+  startNotifier();
+
+  // Global usage scanner runs in the background so the plan-usage
+  // bars (F11.3) reflect Claude work done outside the app too. First
+  // pass on boot, then every 90s.
+  void scanTranscripts();
+  setInterval(() => { void scanTranscripts(); }, 90_000);
 
   createWindow();
 

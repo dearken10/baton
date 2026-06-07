@@ -2,7 +2,11 @@ import { useEffect, useRef } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
+import { SerializeAddon } from '@xterm/addon-serialize';
 import '@xterm/xterm/css/xterm.css';
+
+/** How often to snapshot the visible terminal to disk. */
+const SCROLLBACK_SAVE_MS = 10_000;
 
 interface Props {
   sessionId: string;
@@ -54,6 +58,12 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     } catch {
       // Fall back to canvas — webgl can fail on some sandboxed contexts.
     }
+    // SerializeAddon captures the visible buffer + scrollback as a
+    // single ANSI-replay-able string. We periodically write this to
+    // disk and reload it on next mount so terminals "pick up where
+    // they left off" across restarts (PRD F8.8).
+    const serialize = new SerializeAddon();
+    term.loadAddon(serialize);
 
     term.open(host);
     // Defer the first fit() so the host element has measured layout.
@@ -63,10 +73,35 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       try { fit.fit(); } catch { /* host may be unmounting */ }
     });
 
+    // Replay previous scrollback BEFORE we attach the live pty data
+    // subscription. Any live frames that arrive while we're loading
+    // get queued by main; once we subscribe they flush in order.
+    let liveReady = false;
+    const queuedFrames: Uint8Array[] = [];
+    void window.code24
+      .call('scrollback.load', { sessionId })
+      .then(({ data }) => {
+        if (data) term.write(data);
+        // Now flush any frames we queued during the load and let
+        // future ones go straight to write.
+        for (const bytes of queuedFrames) term.write(bytes);
+        queuedFrames.length = 0;
+        liveReady = true;
+      })
+      .catch(() => { liveReady = true; });
+
     // Refit when the host element resizes (split-handle drags, window
-    // resize, font-load shifts).
+    // resize, font-load shifts). Defer to the next frame so fit()'s
+    // own layout change doesn't fire a synchronous follow-up resize
+    // observation — that's what browsers report as "ResizeObserver
+    // loop completed with undelivered notifications".
+    let pendingFit: number | null = null;
     const ro = new ResizeObserver(() => {
-      try { fit.fit(); } catch { /* ignore */ }
+      if (pendingFit != null) return;
+      pendingFit = requestAnimationFrame(() => {
+        pendingFit = null;
+        try { fit.fit(); } catch { /* ignore */ }
+      });
     });
     ro.observe(host);
 
@@ -90,8 +125,23 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       const binary = atob(frame.data);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      // If the saved scrollback is still loading, queue the frame so
+      // it lands AFTER the replay — prevents interleaving the old
+      // history with new bytes.
+      if (!liveReady) { queuedFrames.push(bytes); return; }
       term.write(bytes);
     });
+
+    // Periodically snapshot the terminal state. We also save on
+    // unmount, but the periodic save covers app crashes / SIGKILLs
+    // where the unmount handler doesn't get to run.
+    const saveSnapshot = (): void => {
+      try {
+        const data = serialize.serialize();
+        void window.code24.call('scrollback.save', { sessionId, data });
+      } catch { /* best-effort */ }
+    };
+    const saveInterval = window.setInterval(saveSnapshot, SCROLLBACK_SAVE_MS);
 
     // Fit on window resize.
     const onWinResize = (): void => {
@@ -100,6 +150,10 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     window.addEventListener('resize', onWinResize);
 
     return () => {
+      window.clearInterval(saveInterval);
+      // Final snapshot on unmount so the very latest state is
+      // captured. Synchronous serialise + fire-and-forget IPC.
+      saveSnapshot();
       window.removeEventListener('resize', onWinResize);
       ro.disconnect();
       offData();

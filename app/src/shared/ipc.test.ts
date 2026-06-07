@@ -30,17 +30,38 @@ describe('control verb registry', () => {
       [
         "app.meta",
         "app.ping",
+        "app.setSelectedSession",
+        "editor.openIn",
+        "file.read",
+        "file.readBinary",
+        "file.readGitDiff",
+        "file.write",
+        "git.commit",
+        "git.pull",
+        "git.push",
+        "git.stage",
+        "git.unstage",
         "project.add",
         "project.list",
         "project.pickFolder",
         "pty.resize",
         "pty.write",
+        "scrollback.load",
+        "scrollback.save",
         "session.delete",
         "session.kill",
         "session.list",
         "session.rename",
+        "session.respawn",
         "session.resume",
         "session.spawn",
+        "session.toggleYolo",
+        "shell.openPath",
+        "usage.getStats",
+        "worktree.fileTree",
+        "worktree.gitStatus",
+        "worktree.listOrphans",
+        "worktree.removeOrphan",
       ]
     `);
     for (const v of names) {
@@ -94,6 +115,7 @@ describe('session.list', () => {
           branch: 'main',
           worktreePath: '/tmp/wt',
           claudeSessionId: null,
+          skipPermissions: false,
           status: 'running',
           startedAt: Date.now(),
           endedAt: null,
@@ -116,6 +138,7 @@ describe('session.list', () => {
             branch: 'main',
             worktreePath: '/tmp/wt',
           claudeSessionId: null,
+            skipPermissions: false,
             status: 'about-to-happen',
             startedAt: 0,
             endedAt: null,
@@ -157,6 +180,19 @@ describe('AppEvent', () => {
       to: 'running',
     });
     expect(e.type).toBe('session.status_changed');
+  });
+  it('parses session.tokens_updated', () => {
+    const e = AppEvent.parse({
+      seq: 1,
+      bootId: '11111111-1111-1111-1111-111111111111',
+      ts: Date.now(),
+      type: 'session.tokens_updated',
+      sessionId: '22222222-2222-2222-2222-222222222222',
+      tokensIn: 12345,
+      tokensOut: 678,
+    });
+    if (e.type !== 'session.tokens_updated') throw new Error('discriminator');
+    expect(e.tokensIn).toBe(12345);
   });
   it('parses session.summarized', () => {
     const e = AppEvent.parse({

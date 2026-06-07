@@ -19,6 +19,9 @@
 
 import { BrowserWindow } from 'electron';
 import { randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import {
   Channels,
   type AgentBackendId,
@@ -38,10 +41,69 @@ import {
   renameWorktree,
 } from './worktreeManager.js';
 import { getProject } from './projectStore.js';
+import { readTranscriptUsage } from './transcriptReader.js';
+import { runSetupScript } from './setupScript.js';
+import { summarizeSession } from './intentSummarizer.js';
 
 interface LiveSession {
   meta: Session;
   handle: AgentHandle;
+  /** Wall-clock ms of the most recent transition INTO 'idle' (or null
+   *  if the session has never been idle). Used by the idle-pause
+   *  sweeper (PRD F11.4). Cleared when status moves off 'idle'. */
+  lastIdleAt: number | null;
+}
+
+/** Default idle threshold for auto-pause. Per-project override (F11.4)
+ *  comes later; for now a single global value. Override at runtime
+ *  with CODE24_IDLE_PAUSE_AFTER_SEC for testing (e.g. 30 = 30 sec). */
+const IDLE_PAUSE_AFTER_MS = (() => {
+  const raw = process.env['CODE24_IDLE_PAUSE_AFTER_SEC'];
+  if (raw) {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return n * 1000;
+  }
+  return 30 * 60 * 1000;
+})();
+/** How often the sweeper scans live sessions. */
+const IDLE_SWEEP_INTERVAL_MS = (() => {
+  // For dev-overridden thresholds shorter than the default 60s scan,
+  // tick more often so the pause feels prompt.
+  const min = Math.min(60_000, Math.max(2_000, Math.floor(IDLE_PAUSE_AFTER_MS / 4)));
+  return min;
+})();
+
+/**
+ * Claude organises its transcript files under
+ * `~/.claude/projects/<sanitised-cwd>/<session_id>.jsonl`. Verified
+ * empirically against real dirs: both `/` and `.` collapse to `-`,
+ * so `/Users/x/proj/.code24/worktrees/wip-a` becomes
+ * `-Users-x-proj--code24-worktrees-wip-a` (note the double dash from
+ * `/.`).
+ *
+ * Why we check: Claude only writes the transcript on the first user
+ * prompt. If a session got SessionStart (we captured an id) but the
+ * user never typed anything before the app was closed, no .jsonl
+ * exists, and `claude --resume <id>` will exit non-zero. That used
+ * to leave the chip stuck on "errored" after restart.
+ */
+function claudeTranscriptPath(cwd: string, claudeSessionId: string): string {
+  const sanitized = cwd.replace(/[/.]/g, '-');
+  return path.join(
+    os.homedir(),
+    '.claude',
+    'projects',
+    sanitized,
+    `${claudeSessionId}.jsonl`
+  );
+}
+
+function claudeTranscriptExists(cwd: string, claudeSessionId: string): boolean {
+  try {
+    return fs.existsSync(claudeTranscriptPath(cwd, claudeSessionId));
+  } catch {
+    return false;
+  }
 }
 
 export class SessionManager {
@@ -49,6 +111,12 @@ export class SessionManager {
   private queue = new LifecycleQueue();
   private backends: Record<AgentBackendId, AgentBackend>;
   private hooksReady = false;
+  /** Session ids the manager itself just killed as part of a planned
+   *  respawn (YOLO toggle, future restart-on-config-change, …). When
+   *  the pty exit fires, markExited consults this set and swallows
+   *  the status_changed/exit events so the renderer doesn't see a
+   *  brief "errored" flash before the new spawn lands. */
+  private intentionalKills = new Set<string>();
 
   constructor() {
     this.backends = {
@@ -60,6 +128,9 @@ export class SessionManager {
     if (this.hooksReady) return;
     await getHookServer().start((e) => this.handleHookEvent(e));
     this.hooksReady = true;
+    // Idle-pause sweeper runs alongside the hook server (PRD F11.4).
+    // Cheap: it's a single map iteration once per minute.
+    this.startIdleSweeper();
   }
 
   /**
@@ -72,6 +143,9 @@ export class SessionManager {
    */
   reconcileStaleSessions(): string[] {
     try {
+      // 1. Sessions left in a live state (running/idle/etc.) from
+      //    before the app was closed — their ptys are gone, mark
+      //    them done.
       const stale = getDatabase()
         .prepare(
           `SELECT id FROM sessions
@@ -91,6 +165,38 @@ export class SessionManager {
           )
           .run(now, ...ids);
       }
+
+      // 2. Errored rows whose claude_session_id points to a
+      //    transcript that doesn't exist — left over from a previous
+      //    failed auto-resume (typically a worktree session that was
+      //    never used before being closed, so Claude never wrote a
+      //    .jsonl). Clear the dead id and flip back to done so the
+      //    chip stops shouting "error" and we don't try resuming
+      //    again on the next boot.
+      const orphans = getDatabase()
+        .prepare(
+          `SELECT id, claude_session_id, worktree_path
+             FROM sessions
+            WHERE status = 'errored'
+              AND claude_session_id IS NOT NULL`
+        )
+        .all() as {
+          id: string; claude_session_id: string; worktree_path: string;
+        }[];
+      const orphanIds = orphans
+        .filter((o) => !claudeTranscriptExists(o.worktree_path, o.claude_session_id))
+        .map((o) => o.id);
+      if (orphanIds.length > 0) {
+        const ph = orphanIds.map(() => '?').join(',');
+        getDatabase()
+          .prepare(
+            `UPDATE sessions
+                SET claude_session_id = NULL, status = 'done'
+              WHERE id IN (${ph})`
+          )
+          .run(...orphanIds);
+      }
+
       return ids;
     } catch {
       // best-effort — never block boot
@@ -112,13 +218,18 @@ export class SessionManager {
     const maxAge = opts.maxAgeMs ?? 24 * 60 * 60 * 1000;
     const limit = opts.limit ?? 10;
     const now = Date.now();
-    let rows: { id: string; claude_session_id: string | null }[];
+    let rows: {
+      id: string;
+      claude_session_id: string | null;
+      worktree_path: string;
+      status: string;
+    }[];
     try {
       if (opts.candidateIds && opts.candidateIds.length > 0) {
         const placeholders = opts.candidateIds.map(() => '?').join(',');
         rows = getDatabase()
           .prepare(
-            `SELECT id, claude_session_id
+            `SELECT id, claude_session_id, worktree_path, status
                FROM sessions
               WHERE id IN (${placeholders})
                 AND claude_session_id IS NOT NULL
@@ -130,7 +241,7 @@ export class SessionManager {
       } else {
         rows = getDatabase()
           .prepare(
-            `SELECT id, claude_session_id
+            `SELECT id, claude_session_id, worktree_path, status
                FROM sessions
               WHERE status IN ('done', 'errored')
                 AND claude_session_id IS NOT NULL
@@ -145,6 +256,33 @@ export class SessionManager {
     }
 
     for (const r of rows) {
+      // Pre-flight: Claude only writes the transcript file after the
+      // user submits a prompt. If we captured an id on SessionStart
+      // but the user never typed before the app closed, no transcript
+      // exists and `claude --resume <id>` exits non-zero — historically
+      // that left the row stuck on "errored". Skip the resume attempt,
+      // clear the dead id, and (if needed) flip the chip back to done.
+      if (!r.claude_session_id ||
+          !claudeTranscriptExists(r.worktree_path, r.claude_session_id)) {
+        try {
+          getDatabase()
+            .prepare(
+              `UPDATE sessions SET claude_session_id = NULL, status = 'done' WHERE id = ?`
+            )
+            .run(r.id);
+        } catch { /* best-effort */ }
+        const prev = r.status as SessionStatus;
+        if (prev !== 'done') {
+          emit({
+            type: 'session.status_changed',
+            sessionId: r.id,
+            from: prev,
+            to: 'done',
+          });
+        }
+        continue;
+      }
+
       try {
         await this.resume(r.id);
       } catch (err) {
@@ -167,7 +305,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, ended_at, tokens_in, tokens_out, last_summary,
-                claude_session_id
+                claude_session_id, skip_permissions
            FROM sessions
           ORDER BY started_at DESC`
       )
@@ -177,6 +315,7 @@ export class SessionManager {
         started_at: number; ended_at: number | null;
         tokens_in: number; tokens_out: number; last_summary: string | null;
         claude_session_id: string | null;
+        skip_permissions: number;
       }[];
 
     return rows.map((r) => {
@@ -195,6 +334,7 @@ export class SessionManager {
         tokensOut: r.tokens_out,
         lastSummary: r.last_summary,
         claudeSessionId: r.claude_session_id,
+        skipPermissions: r.skip_permissions === 1,
       };
     });
   }
@@ -214,6 +354,9 @@ export class SessionManager {
      *  then spawn the agent inside it. The session's `cwd` will be
      *  the new worktree path, not the project root. */
     newWorktreeBranch?: string;
+    /** When true, launch Claude with --dangerously-skip-permissions.
+     *  Defaults to false. */
+    skipPermissions?: boolean;
   }): Promise<Session> {
     await this.startHookServer();
 
@@ -240,6 +383,23 @@ export class SessionManager {
           branchName: opts.newWorktreeBranch,
         });
         cwd = wt.path;
+
+        // Per PRD F1.4: run the project's optional setup hook so the
+        // new worktree has its deps / env prepared before the agent
+        // touches anything. We block spawn until the script finishes
+        // so the user sees a clear error if it fails, rather than
+        // Claude landing in a half-initialised tree.
+        const setup = await runSetupScript({
+          projectRoot: opts.cwd,
+          worktreePath: cwd,
+          branch: opts.newWorktreeBranch,
+        });
+        if (setup.ran && setup.exitCode !== 0) {
+          throw new Error(
+            `Setup script failed (${setup.scriptPath}, exit ${setup.exitCode}):\n` +
+            (setup.stderr || setup.stdout || '<no output>')
+          );
+        }
       }
 
       // Read git metadata BEFORE the pty is spawned. If we did this
@@ -248,12 +408,14 @@ export class SessionManager {
       // the session — the hook would silently no-op.
       const branch = (await readCurrentBranch(cwd)) ?? 'no git';
 
+      const skipPermissions = opts.skipPermissions ?? false;
       const spawnOpts: {
         sessionId: string;
         cwd: string;
         cols: number;
         rows: number;
         resumeClaudeSessionId?: string;
+        skipPermissions?: boolean;
       } = {
         sessionId,
         cwd,
@@ -263,6 +425,7 @@ export class SessionManager {
       if (opts.resumeClaudeSessionId) {
         spawnOpts.resumeClaudeSessionId = opts.resumeClaudeSessionId;
       }
+      if (skipPermissions) spawnOpts.skipPermissions = true;
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
       const session: Session = {
@@ -278,21 +441,25 @@ export class SessionManager {
         tokensOut: 0,
         lastSummary: null,
         claudeSessionId: opts.resumeClaudeSessionId ?? null,
+        skipPermissions,
       };
 
       // Make the session visible to the hook handler IMMEDIATELY,
       // before any IO that could race against SessionStart firing.
-      this.live.set(sessionId, { meta: session, handle });
+      this.live.set(sessionId, { meta: session, handle, lastIdleAt: null });
 
       // Insert OR revive (resume): on conflict, restore the row.
+      // We also update skip_permissions on conflict because the user
+      // may have flipped YOLO mode between runs.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, skip_permissions)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
-             status     = excluded.status,
-             ended_at   = NULL,
-             worktree_path = excluded.worktree_path`
+             status           = excluded.status,
+             ended_at         = NULL,
+             worktree_path    = excluded.worktree_path,
+             skip_permissions = excluded.skip_permissions`
         )
         .run(
           session.id,
@@ -306,7 +473,8 @@ export class SessionManager {
           0,
           0,
           null,
-          session.claudeSessionId
+          session.claudeSessionId,
+          session.skipPermissions ? 1 : 0
         );
 
       // Wire pty → renderer via the dedicated pty.data channel.
@@ -332,6 +500,13 @@ export class SessionManager {
   write(sessionId: string, data: string): void {
     const live = this.live.get(sessionId);
     if (!live) throw new Error(`session not live: ${sessionId}`);
+    // Auto-resume from idle-pause: any user input means the user is
+    // back. SIGCONT + flip status BEFORE we write so Claude actually
+    // sees the bytes when it wakes up (PRD F11.4).
+    if (live.meta.status === 'paused') {
+      try { live.handle.resume(); } catch { /* best-effort */ }
+      this.setStatus(sessionId, 'idle');
+    }
     live.handle.write(data);
   }
 
@@ -350,7 +525,7 @@ export class SessionManager {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path,
-                claude_session_id
+                claude_session_id, skip_permissions
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
@@ -361,6 +536,7 @@ export class SessionManager {
           branch: string;
           worktree_path: string;
           claude_session_id: string | null;
+          skip_permissions: number;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -370,12 +546,120 @@ export class SessionManager {
         'Cannot resume — no Claude session id was captured for this session.'
       );
     }
+    if (!claudeTranscriptExists(row.worktree_path, row.claude_session_id)) {
+      // Claude only writes the transcript after the first user
+      // prompt. If the session ended before that, there's nothing
+      // to resume from — surface a clean message instead of letting
+      // claude fail and the chip go red.
+      throw new Error(
+        'Cannot resume — Claude has no transcript for this session ' +
+        '(it likely ended before any user message was sent). ' +
+        'Start a new session instead.'
+      );
+    }
     return this.spawn({
       projectId: row.project_id,
       backendId: row.backend_id as AgentBackendId,
       cwd: row.worktree_path,
       reuseSessionId: row.id,
       resumeClaudeSessionId: row.claude_session_id,
+      skipPermissions: row.skip_permissions === 1,
+    });
+  }
+
+  /**
+   * Start a fresh Claude session inside an existing ended session's
+   * cwd, reusing the code24 session id (so its place in the left
+   * column stays put). No `--resume` — prior conversation history is
+   * not reloaded. Used when there's nothing to resume (no transcript)
+   * but the user still wants to pick up work in the same worktree.
+   */
+  async respawn(sessionId: string): Promise<Session> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, worktree_path, skip_permissions
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string; project_id: string; backend_id: string;
+          worktree_path: string; skip_permissions: number;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+    if (this.live.has(sessionId)) throw new Error(`Already live: ${sessionId}`);
+    return this.spawn({
+      projectId: row.project_id,
+      backendId: row.backend_id as AgentBackendId,
+      cwd: row.worktree_path,
+      skipPermissions: row.skip_permissions === 1,
+      reuseSessionId: row.id,
+    });
+  }
+
+  /**
+   * Flip the session's skipPermissions flag and restart Claude with
+   * the new value (using `--resume` so the conversation history
+   * survives). If the session is currently live we kill it first.
+   *
+   * Falls back gracefully if there's no captured claude_session_id —
+   * just respawns without --resume (i.e. starts a fresh conversation
+   * in the same worktree).
+   */
+  async toggleYolo(sessionId: string): Promise<Session> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, worktree_path,
+                claude_session_id, skip_permissions
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string; project_id: string; backend_id: string;
+          worktree_path: string; claude_session_id: string | null;
+          skip_permissions: number;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+
+    const next = row.skip_permissions === 1 ? false : true;
+    // Persist BEFORE the kill so a crash mid-toggle still leaves the
+    // intended state in the DB.
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET skip_permissions = ? WHERE id = ?')
+        .run(next ? 1 : 0, sessionId);
+    } catch { /* best-effort */ }
+
+    // Kill any live pty so we can re-spawn with the new flag. We mark
+    // it as an intentional kill so markExited doesn't briefly emit
+    // 'errored' between the kill and the new spawn — the chip stays
+    // on its current status until the new pty's SessionStart hook
+    // flips it to 'idle'.
+    const wasLive = this.live.has(sessionId);
+    if (wasLive) {
+      this.intentionalKills.add(sessionId);
+      try { this.live.get(sessionId)?.handle.kill('SIGTERM'); }
+      catch { /* already gone */ }
+      await new Promise<void>((resolve) => setTimeout(resolve, 600));
+      // If the exit handler hasn't fired yet, force-clear so spawn
+      // doesn't refuse with "Already live".
+      this.live.delete(sessionId);
+    }
+
+    const useResume =
+      !!row.claude_session_id &&
+      claudeTranscriptExists(row.worktree_path, row.claude_session_id);
+
+    return this.spawn({
+      projectId: row.project_id,
+      backendId: row.backend_id as AgentBackendId,
+      cwd: row.worktree_path,
+      reuseSessionId: row.id,
+      skipPermissions: next,
+      ...(useResume && row.claude_session_id
+        ? { resumeClaudeSessionId: row.claude_session_id }
+        : {}),
     });
   }
 
@@ -406,7 +690,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, ended_at, tokens_in, tokens_out, last_summary,
-                  claude_session_id
+                  claude_session_id, skip_permissions
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -416,6 +700,7 @@ export class SessionManager {
             started_at: number; ended_at: number | null;
             tokens_in: number; tokens_out: number;
             last_summary: string | null; claude_session_id: string | null;
+            skip_permissions: number;
           }
         | undefined;
       if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -456,6 +741,7 @@ export class SessionManager {
         tokensOut: row.tokens_out,
         lastSummary: row.last_summary,
         claudeSessionId: row.claude_session_id,
+        skipPermissions: row.skip_permissions === 1,
       };
       emit({
         type: 'session.renamed',
@@ -523,6 +809,10 @@ export class SessionManager {
 
       // Drop the row and tell the renderer to forget it.
       getDatabase().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+      // Best-effort: clean up the per-session scrollback file (F8.8).
+      try {
+        fs.unlinkSync(path.join(os.homedir(), '.code24', 'scrollback', `${sessionId}.bin`));
+      } catch { /* already gone */ }
       emit({ type: 'session.deleted', sessionId });
 
       return { worktreeRemoved };
@@ -531,6 +821,101 @@ export class SessionManager {
 
   list(): Session[] {
     return [...this.live.values()].map((l) => l.meta);
+  }
+
+  /**
+   * Recompute running token totals for a session from Claude's
+   * transcript .jsonl. Idempotent — safe to call any time. Emits
+   * `session.tokens_updated` only when the totals actually change.
+   * (F11.1: per-session token spend.)
+   */
+  private updateTokenUsage(sessionId: string): void {
+    const live = this.live.get(sessionId);
+    const claudeSid = live?.meta.claudeSessionId
+      ?? (getDatabase()
+            .prepare('SELECT claude_session_id FROM sessions WHERE id = ?')
+            .get(sessionId) as { claude_session_id: string | null } | undefined)
+              ?.claude_session_id;
+    if (!claudeSid) return;
+    const cwd = live?.meta.worktreePath
+      ?? (getDatabase()
+            .prepare('SELECT worktree_path FROM sessions WHERE id = ?')
+            .get(sessionId) as { worktree_path: string } | undefined)
+              ?.worktree_path;
+    if (!cwd) return;
+
+    const transcriptPath = claudeTranscriptPath(cwd, claudeSid);
+    const { tokensIn, tokensOut } = readTranscriptUsage(transcriptPath);
+    if (tokensIn === 0 && tokensOut === 0) return;
+
+    // Read prior totals once so we don't emit a noisy event when
+    // nothing changed (Stop fires more often than usage shifts).
+    const prior = getDatabase()
+      .prepare('SELECT tokens_in, tokens_out FROM sessions WHERE id = ?')
+      .get(sessionId) as { tokens_in: number; tokens_out: number } | undefined;
+    if (prior && prior.tokens_in === tokensIn && prior.tokens_out === tokensOut) return;
+
+    // Persist a timestamped delta row so the plan-usage panel can
+    // compute rolling 5h / 7d windows without re-parsing transcripts
+    // each tick (PRD F11.3). Deltas can briefly be negative if Claude
+    // compacts the transcript — clamp at 0 to avoid funny sums.
+    const inDelta = Math.max(0, tokensIn - (prior?.tokens_in ?? 0));
+    const outDelta = Math.max(0, tokensOut - (prior?.tokens_out ?? 0));
+    if (inDelta > 0 || outDelta > 0) {
+      try {
+        getDatabase()
+          .prepare(
+            'INSERT INTO token_usage_events (session_id, ts, tokens_in, tokens_out) VALUES (?, ?, ?, ?)'
+          )
+          .run(sessionId, Date.now(), inDelta, outDelta);
+      } catch { /* best-effort — usage tracking never blocks the agent */ }
+    }
+
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET tokens_in = ?, tokens_out = ? WHERE id = ?')
+        .run(tokensIn, tokensOut, sessionId);
+    } catch { /* best-effort */ }
+    if (live) live.meta = { ...live.meta, tokensIn, tokensOut };
+    emit({
+      type: 'session.tokens_updated',
+      sessionId,
+      tokensIn,
+      tokensOut,
+    });
+  }
+
+  /**
+   * Ask Haiku for a short intent summary of the most recent turn and
+   * persist it on the session row + emit. Throttled inside
+   * intentSummarizer.ts to once per 90s per session. (PRD F4)
+   */
+  private async updateIntentSummary(sessionId: string): Promise<void> {
+    const live = this.live.get(sessionId);
+    const claudeSid = live?.meta.claudeSessionId
+      ?? (getDatabase()
+            .prepare('SELECT claude_session_id FROM sessions WHERE id = ?')
+            .get(sessionId) as { claude_session_id: string | null } | undefined)
+              ?.claude_session_id;
+    if (!claudeSid) return;
+    const cwd = live?.meta.worktreePath
+      ?? (getDatabase()
+            .prepare('SELECT worktree_path FROM sessions WHERE id = ?')
+            .get(sessionId) as { worktree_path: string } | undefined)
+              ?.worktree_path;
+    if (!cwd) return;
+
+    const transcriptPath = claudeTranscriptPath(cwd, claudeSid);
+    const summary = await summarizeSession({ sessionId, transcriptPath });
+    if (!summary) return; // throttled or failed
+
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET last_summary = ? WHERE id = ?')
+        .run(summary, sessionId);
+    } catch { /* best-effort */ }
+    if (live) live.meta = { ...live.meta, lastSummary: summary };
+    emit({ type: 'session.summarized', sessionId, summary });
   }
 
   /** Capture Claude's internal session id (from SessionStart payload). */
@@ -553,6 +938,11 @@ export class SessionManager {
     const prev = live.meta.status;
     if (prev === next) return;
     live.meta = { ...live.meta, status: next };
+    // Track when we entered 'idle' so the sweeper can decide who's
+    // been quiet too long. Clear on any other transition so a session
+    // that briefly went idle and then started working again gets a
+    // fresh clock.
+    live.lastIdleAt = next === 'idle' ? Date.now() : null;
     try {
       getDatabase()
         .prepare('UPDATE sessions SET status = ? WHERE id = ?')
@@ -568,9 +958,40 @@ export class SessionManager {
     });
   }
 
+  /** Scan live sessions and SIGSTOP any that have been idle longer
+   *  than the threshold. Pairs with resume-on-write so the user
+   *  doesn't notice the pause unless they look at the chip. */
+  private sweepIdleSessions(): void {
+    const now = Date.now();
+    for (const [sid, live] of this.live) {
+      if (live.meta.status !== 'idle') continue;
+      if (live.lastIdleAt == null) continue;
+      if (now - live.lastIdleAt < IDLE_PAUSE_AFTER_MS) continue;
+      try { live.handle.pause(); } catch { /* best-effort */ }
+      this.setStatus(sid, 'paused');
+    }
+  }
+
+  private idleSweeperHandle: NodeJS.Timeout | null = null;
+  private startIdleSweeper(): void {
+    if (this.idleSweeperHandle) return;
+    this.idleSweeperHandle = setInterval(
+      () => this.sweepIdleSessions(),
+      IDLE_SWEEP_INTERVAL_MS
+    );
+  }
+
   private markExited(sessionId: string, exitCode: number | null): void {
     const live = this.live.get(sessionId);
     if (!live) return;
+
+    // Planned kills (YOLO toggle, etc.) skip every event + DB write —
+    // the caller is about to immediately respawn the same row, so the
+    // renderer should never see this transient exit.
+    if (this.intentionalKills.delete(sessionId)) {
+      this.live.delete(sessionId);
+      return;
+    }
 
     const next: SessionStatus = exitCode === 0 ? 'done' : 'errored';
     const prev = live.meta.status;
@@ -645,11 +1066,28 @@ export class SessionManager {
 
         case 'Stop':
           this.setStatus(event.sessionId, 'idle');
+          // Claude just finished a turn — the transcript line for the
+          // assistant message includes a `usage` object. Recompute the
+          // running totals so the chip shows the new spend (F11.1).
+          // There can be a tiny lag between Stop firing and Claude
+          // flushing the line; a 250ms delay catches the common case
+          // without making the UI feel slow.
+          setTimeout(() => {
+            this.updateTokenUsage(event.sessionId);
+            // PRD F4: at the same time, fire off a Haiku summariser
+            // so the left-column chip can read "Refactoring auth"
+            // instead of an opaque branch id. Fire-and-forget — the
+            // hook never waits on it.
+            void this.updateIntentSummary(event.sessionId);
+          }, 250);
           break;
 
         case 'SessionEnd':
           // pty exit will follow; treat as done preemptively.
           this.setStatus(event.sessionId, 'done');
+          // One last token sweep so the final total is right even if
+          // the session ends without a trailing Stop.
+          this.updateTokenUsage(event.sessionId);
           break;
       }
     } catch {
@@ -659,6 +1097,10 @@ export class SessionManager {
   }
 
   killAll(): void {
+    if (this.idleSweeperHandle) {
+      clearInterval(this.idleSweeperHandle);
+      this.idleSweeperHandle = null;
+    }
     for (const { handle } of this.live.values()) {
       try {
         handle.kill('SIGTERM');

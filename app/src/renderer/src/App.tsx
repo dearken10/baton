@@ -1,22 +1,66 @@
-import { useEffect, useState } from 'react';
-import {
-  useAppStore,
-  selectProjectCount,
-  selectSessionCount,
-} from './store.js';
+import { useCallback, useEffect, useState } from 'react';
+import { useAppStore } from './store.js';
 import { Titlebar } from './components/Titlebar.js';
 import { LeftColumn } from './components/LeftColumn.js';
 import { MiddleColumn } from './components/MiddleColumn.js';
 import { RightColumn } from './components/RightColumn.js';
+import { SplitHandle } from './components/SplitHandle.js';
+
+// Column-width clamps. Middle column gets whatever's left over.
+const LEFT_MIN = 200;
+const LEFT_MAX = 600;
+const RIGHT_MIN = 200;
+const RIGHT_MAX = 600;
+const LEFT_DEFAULT = 320;
+const RIGHT_DEFAULT = 380;
+const LEFT_LS_KEY = 'code24:layout:leftWidth';
+const RIGHT_LS_KEY = 'code24:layout:rightWidth';
+
+function loadWidth(key: string, fallback: number, min: number, max: number): number {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(min, Math.min(max, Math.round(n)));
+  } catch {
+    return fallback;
+  }
+}
 
 export function App(): JSX.Element {
-  const projectCount = useAppStore(selectProjectCount);
-  const sessionCount = useAppStore(selectSessionCount);
   const ingestEvent = useAppStore((s) => s.ingestEvent);
   const loadProjects = useAppStore((s) => s.loadProjects);
   const loadSessions = useAppStore((s) => s.loadSessions);
-  const [meta, setMeta] = useState<{ version: string; electron: string } | null>(null);
+  const selectSession = useAppStore((s) => s.selectSession);
+  const selectedSessionId = useAppStore((s) => s.selectedSessionId);
+  const [meta, setMeta] = useState<{ version: string } | null>(null);
   const [preloadError, setPreloadError] = useState<string | null>(null);
+
+  // Persisted column widths. Saved to localStorage on every change.
+  const [leftWidth, setLeftWidth] = useState(() =>
+    loadWidth(LEFT_LS_KEY, LEFT_DEFAULT, LEFT_MIN, LEFT_MAX)
+  );
+  const [rightWidth, setRightWidth] = useState(() =>
+    loadWidth(RIGHT_LS_KEY, RIGHT_DEFAULT, RIGHT_MIN, RIGHT_MAX)
+  );
+
+  const onLeftResize = useCallback((delta: number) => {
+    setLeftWidth((w) => {
+      const next = Math.max(LEFT_MIN, Math.min(LEFT_MAX, w + delta));
+      try { localStorage.setItem(LEFT_LS_KEY, String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  const onRightResize = useCallback((delta: number) => {
+    // Dragging the right handle to the right shrinks the right column.
+    setRightWidth((w) => {
+      const next = Math.max(RIGHT_MIN, Math.min(RIGHT_MAX, w - delta));
+      try { localStorage.setItem(RIGHT_LS_KEY, String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (!window.code24) {
@@ -33,16 +77,33 @@ export function App(): JSX.Element {
     ]).then((results) => {
       const [m, p, s] = results;
       if (m.status === 'fulfilled') {
-        setMeta({ version: m.value.version, electron: m.value.electron });
+        setMeta({ version: m.value.version });
       }
       if (p.status === 'fulfilled') loadProjects(p.value.projects);
       if (s.status === 'fulfilled') loadSessions(s.value.sessions);
     });
 
     // Single subscription to the event stream (PRD F10.4).
-    const off = window.code24.onEvent(ingestEvent);
-    return off;
-  }, [ingestEvent, loadProjects, loadSessions]);
+    const offEvents = window.code24.onEvent(ingestEvent);
+    // Main asks us to focus a specific session when the user clicks a
+    // desktop notification (PRD F9).
+    const offSelect = window.code24.onSelectSession(({ sessionId }) =>
+      selectSession(sessionId)
+    );
+    return () => {
+      offEvents();
+      offSelect();
+    };
+  }, [ingestEvent, loadProjects, loadSessions, selectSession]);
+
+  // Tell main which session is in focus so the notifier can suppress
+  // pop-ups for the session the user is already looking at.
+  useEffect(() => {
+    if (!window.code24) return;
+    void window.code24
+      .call('app.setSelectedSession', { sessionId: selectedSessionId })
+      .catch(() => { /* notifier failure must never break the UI */ });
+  }, [selectedSessionId]);
 
   if (preloadError) {
     return (
@@ -57,15 +118,18 @@ export function App(): JSX.Element {
 
   return (
     <div className="app">
-      <Titlebar
-        version={meta?.version ?? 'dev'}
-        electronVersion={meta?.electron ?? ''}
-        projectCount={projectCount}
-        sessionCount={sessionCount}
-      />
-      <main className="main">
+      <Titlebar version={meta?.version ?? 'dev'} />
+      <main
+        className="main"
+        style={{
+          ['--left-w' as never]: `${leftWidth}px`,
+          ['--right-w' as never]: `${rightWidth}px`,
+        }}
+      >
         <LeftColumn />
+        <SplitHandle onResize={onLeftResize} ariaLabel="Resize projects column" />
         <MiddleColumn />
+        <SplitHandle onResize={onRightResize} ariaLabel="Resize files column" />
         <RightColumn />
       </main>
     </div>

@@ -33,6 +33,11 @@ export interface AgentHandle {
   resize(cols: number, rows: number): void;
   /** SIGTERM the pty group and clean up. Idempotent. */
   kill(signal?: NodeJS.Signals): void;
+  /** SIGSTOP the pty. The process stays alive but stops scheduling.
+   *  Used by the idle-timeout auto-pause (PRD F11.4). */
+  pause(): void;
+  /** SIGCONT the pty so it resumes work. Pair with pause(). */
+  resume(): void;
   /** Subscribe to pty stdout/stderr. Returns an unsubscribe. */
   onData(handler: (chunk: Buffer) => void): () => void;
   /** Subscribe to exit. Returns an unsubscribe. */

@@ -39,6 +39,16 @@ const api = {
       ipcRenderer.removeListener(Channels.events, listener);
     };
   },
+
+  /** Main asks the renderer to select a session (e.g. user clicked a
+   *  desktop notification). Carries `{ sessionId }`. */
+  onSelectSession(handler: (payload: { sessionId: string }) => void): () => void {
+    const listener = (_event: unknown, p: { sessionId: string }): void => handler(p);
+    ipcRenderer.on(Channels.selectSession, listener);
+    return (): void => {
+      ipcRenderer.removeListener(Channels.selectSession, listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld('code24', api);

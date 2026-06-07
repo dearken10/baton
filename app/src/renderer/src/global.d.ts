@@ -1,3 +1,5 @@
+/// <reference types="vite/client" />
+
 import type { Code24Api } from '../../preload/index.js';
 
 declare global {

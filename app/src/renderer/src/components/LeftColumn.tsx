@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
+import { OrphansBadge } from './OrphansBadge.js';
+import { formatTokens } from '../lib/format.js';
 
 function randomHex(n: number): string {
   const arr = new Uint8Array(Math.ceil(n / 2));
@@ -196,15 +198,18 @@ export function LeftColumn(): JSX.Element {
     <aside className="col col-left">
       <div className="col-head">
         <span>Projects</span>
-        <button
-          className="add"
-          onClick={addProject}
-          disabled={busy}
-          aria-label="Add project"
-          title="Add project"
-        >
-          +
-        </button>
+        <div className="col-head-actions">
+          <OrphansBadge />
+          <button
+            className="add"
+            onClick={addProject}
+            disabled={busy}
+            aria-label="Add project"
+            title="Add project"
+          >
+            +
+          </button>
+        </div>
       </div>
       <div className="col-body">
         {projects.length === 0 ? (
@@ -259,15 +264,15 @@ function ProjectBlock(props: {
   return (
     <div className="project-block">
       <div className="project-head">
-        <span className="project-name">{project.name}</span>
+        <span className="project-name" title={project.path}>{project.name}</span>
         <SpawnMenu
           onSpawn={onSpawn}
           onSpawnInWorktree={onSpawnInWorktree}
+          onGetInfo={() => {
+            window.alert(`${project.name}\n\n${project.path}`);
+          }}
           busy={busy}
         />
-      </div>
-      <div className="project-path mono" title={project.path}>
-        {project.path}
       </div>
       {sessions.length === 0 ? null : (
         <div className="sessions-list">
@@ -290,7 +295,22 @@ function ProjectBlock(props: {
                 onClick={onClick}
                 title={canResume ? 'Click to resume this Claude session' : `session ${s.id}`}
               >
-                <span className="branch">{s.branch}</span>
+                <div className="session-row-main">
+                  <span className="branch">{s.branch}</span>
+                  {s.lastSummary ? (
+                    <span className="session-intent" title={s.lastSummary}>
+                      {s.lastSummary}
+                    </span>
+                  ) : null}
+                </div>
+                {s.tokensIn + s.tokensOut > 0 ? (
+                  <span
+                    className="tokens"
+                    title={`${s.tokensIn.toLocaleString()} in · ${s.tokensOut.toLocaleString()} out`}
+                  >
+                    {formatTokens(s.tokensIn + s.tokensOut)}
+                  </span>
+                ) : null}
                 <span className={`status status-${s.status}`}>{s.status}</span>
                 <SessionRowMenu
                   canRename={canRename}
@@ -376,6 +396,7 @@ function SessionRowMenu(props: {
 function SpawnMenu(props: {
   onSpawn: () => void;
   onSpawnInWorktree: () => void;
+  onGetInfo: () => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -406,10 +427,10 @@ function SpawnMenu(props: {
         disabled={props.busy}
         aria-expanded={open}
         aria-haspopup="menu"
-        aria-label="Spawn a new session"
-        title="Spawn a new session"
+        aria-label="Project actions"
+        title="Project actions"
       >
-        +
+        ⋮
       </button>
       {open && (
         <div className="spawn-menu-pop" role="menu">
@@ -431,6 +452,16 @@ function SpawnMenu(props: {
             <span className="spawn-menu-title">New worktree</span>
             <span className="spawn-menu-sub">
               Fresh git worktree on a new branch. Isolated edits.
+            </span>
+          </button>
+          <button
+            className="spawn-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onGetInfo(); }}
+          >
+            <span className="spawn-menu-title">Get Info</span>
+            <span className="spawn-menu-sub">
+              Show the project's folder path.
             </span>
           </button>
         </div>

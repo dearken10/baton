@@ -13,6 +13,19 @@ import { getDatabase } from '../database/index.js';
 let seq = 0;
 const bootId = randomUUID();
 
+/**
+ * In-process subscribers (e.g. the notifier service) get a copy of
+ * every event after it's been persisted and pushed to the renderer.
+ * Listeners must not throw — emit() wraps each call in a try/catch.
+ */
+type Listener = (event: AppEvent) => void;
+const listeners = new Set<Listener>();
+
+export function subscribe(listener: Listener): () => void {
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 // Distributive Omit so the discriminated union survives the strip.
 type DistributedOmit<T, K extends PropertyKey> = T extends unknown
   ? Omit<T, K>
@@ -45,6 +58,12 @@ export function emit(initial: EventInit): void {
 
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(Channels.events, event);
+  }
+
+  // Fan out to in-process subscribers last. Wrap each so a buggy
+  // listener can never break event delivery for the others.
+  for (const listener of listeners) {
+    try { listener(event); } catch { /* ignore */ }
   }
 }
 

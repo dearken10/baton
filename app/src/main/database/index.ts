@@ -65,6 +65,28 @@ CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Time-bucketed token deltas. Each row is the increase since the
+-- prior totals for a given session. Used by the plan-usage panel
+-- to compute rolling 5-hour / 7-day windows (PRD F11.3) without
+-- re-parsing transcripts on every tick.
+CREATE TABLE IF NOT EXISTS token_usage_events (
+  seq          INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id   TEXT NOT NULL,
+  ts           INTEGER NOT NULL,
+  tokens_in    INTEGER NOT NULL,
+  tokens_out   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage_events(ts);
+
+-- One row per scanned transcript file under ~/.claude/projects/.
+-- Records how many lines we've already turned into token_usage_events
+-- so re-scans only process new ones. Cheap dedup without UUIDs.
+CREATE TABLE IF NOT EXISTS transcript_scan_state (
+  file_path        TEXT PRIMARY KEY,
+  lines_processed  INTEGER NOT NULL DEFAULT 0,
+  last_scan_at     INTEGER NOT NULL DEFAULT 0
+);
 `;
 
 export function initDatabase(): Database.Database {
@@ -87,6 +109,37 @@ function runMigrations(d: Database.Database): void {
     d.exec('ALTER TABLE sessions ADD COLUMN claude_session_id TEXT');
   } catch {
     // duplicate column name — already migrated, no-op
+  }
+  // skip_permissions = 1 means we launch `claude --dangerously-skip-permissions`
+  // for this session (auto-approve every tool use). Default 0.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN skip_permissions INTEGER NOT NULL DEFAULT 0');
+  } catch {
+    // already migrated
+  }
+
+  // One-time recount: until v2, tokens_in summed input + cache_creation
+  // + cache_read. Cache reads are effectively free and shouldn't count
+  // 1:1 toward plan limits, so we wipe + rescan with the new formula.
+  // Idempotent — re-running on a v2 DB is a no-op.
+  const TOKEN_FORMULA_VERSION = '2';
+  const existing = d
+    .prepare(`SELECT value FROM settings WHERE key = 'token_formula_version'`)
+    .get() as { value: string } | undefined;
+  if (existing?.value !== TOKEN_FORMULA_VERSION) {
+    try { d.exec('DELETE FROM token_usage_events'); } catch { /* ignore */ }
+    try { d.exec('DELETE FROM transcript_scan_state'); } catch { /* ignore */ }
+    try {
+      d.prepare(
+        `INSERT INTO settings (key, value) VALUES ('token_formula_version', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      ).run(TOKEN_FORMULA_VERSION);
+    } catch { /* ignore */ }
+    // Also zero the per-session tokens cache so the chips redraw from
+    // the next Stop hook with the new formula.
+    try {
+      d.exec('UPDATE sessions SET tokens_in = 0, tokens_out = 0');
+    } catch { /* ignore */ }
   }
 }
 
