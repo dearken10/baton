@@ -31,6 +31,7 @@ import { ClaudeCodeBackend } from './claudeCodeBackend.js';
 import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
+import { readCurrentBranch } from './gitReader.js';
 
 interface LiveSession {
   meta: Session;
@@ -233,11 +234,12 @@ export class SessionManager {
       }
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
+      const branch = (await readCurrentBranch(opts.cwd)) ?? 'no git';
       const session: Session = {
         id: sessionId,
         projectId: opts.projectId,
         backendId: opts.backendId,
-        branch: 'main', // TODO: read from git in W2.5
+        branch,
         worktreePath: opts.cwd,
         status: 'running',
         startedAt: Date.now(),
