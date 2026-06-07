@@ -266,37 +266,43 @@ export class SessionManager {
     }
 
     for (const r of rows) {
-      // Pre-flight: Claude only writes the transcript file after the
-      // user submits a prompt. If we captured an id on SessionStart
-      // but the user never typed before the app closed, no transcript
-      // exists and `claude --resume <id>` exits non-zero — historically
-      // that left the row stuck on "errored". Skip the resume attempt,
-      // clear the dead id, and (if needed) flip the chip back to done.
+      // No transcript == the user never submitted a prompt last run.
+      // `claude --resume <id>` would reject the id, so we can't restore
+      // the conversation — but the user's expectation is "my session
+      // is still here". Respawn fresh in the same worktree so the
+      // chip stays alive instead of dead-ending with "Session ended".
+      // The new SessionStart will overwrite claude_session_id with
+      // the new conversation's id; the user just sees a fresh prompt.
       if (!r.claude_session_id ||
           !claudeTranscriptExists(r.worktree_path, r.claude_session_id)) {
         try {
-          getDatabase()
-            .prepare(
-              `UPDATE sessions SET claude_session_id = NULL, status = 'done' WHERE id = ?`
-            )
-            .run(r.id);
-        } catch { /* best-effort */ }
-        const prev = r.status as SessionStatus;
-        if (prev !== 'done') {
-          emit({
-            type: 'session.status_changed',
-            sessionId: r.id,
-            from: prev,
-            to: 'done',
-          });
+          await this.respawn(r.id);
+        } catch (err) {
+          // Respawn can still legitimately fail (e.g. worktree was
+          // deleted out from under us). Fall back to the old behaviour:
+          // clear the dead id and mark the row done so the renderer
+          // shows a recoverable "Session ended" placeholder.
+          // eslint-disable-next-line no-console
+          console.warn(`[code24] auto-respawn of ${r.id} failed:`, err);
+          try {
+            getDatabase()
+              .prepare(
+                `UPDATE sessions SET claude_session_id = NULL, status = 'done' WHERE id = ?`
+              )
+              .run(r.id);
+          } catch { /* best-effort */ }
+          const prev = r.status as SessionStatus;
+          if (prev !== 'done') {
+            emit({
+              type: 'session.status_changed',
+              sessionId: r.id,
+              from: prev,
+              to: 'done',
+            });
+          }
+          const fresh = this.listAll().find((s) => s.id === r.id);
+          if (fresh) emit({ type: 'session.refreshed', session: fresh });
         }
-        // Push the updated row to the renderer so the resume button
-        // disappears without waiting for the next session.list call —
-        // otherwise the user can click "Resume" before the renderer
-        // notices the id has been cleared, hitting the dead-end error
-        // in resume().
-        const fresh = this.listAll().find((s) => s.id === r.id);
-        if (fresh) emit({ type: 'session.refreshed', session: fresh });
         continue;
       }
 
