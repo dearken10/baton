@@ -181,7 +181,7 @@ export function LeftColumn(): JSX.Element {
   return (
     <aside className="col col-left">
       <div className="col-head">
-        <span>Projects · Sessions</span>
+        <span>Projects</span>
         <button
           className="add"
           onClick={addProject}
