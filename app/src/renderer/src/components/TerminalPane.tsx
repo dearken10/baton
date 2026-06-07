@@ -82,9 +82,14 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     });
 
     // Subscribe to pty data for this session only.
+    // IMPORTANT: pass a Uint8Array (raw bytes), not a string. xterm.write
+    // treats a string as UTF-16 — multi-byte UTF-8 box-drawing chars
+    // would render as garbage. A Uint8Array is correctly decoded as UTF-8.
     const offData = window.code24.onPtyData((frame) => {
       if (frame.sessionId !== sessionId) return;
-      const bytes = atob(frame.data);
+      const binary = atob(frame.data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
       term.write(bytes);
     });
 
