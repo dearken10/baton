@@ -506,6 +506,15 @@ const SessionTokensUpdatedEvent = EventEnvelope.extend({
   tokensOut: z.number().int().nonnegative(),
 });
 
+/** Generic "main re-fetched the row, here's the current state" push.
+ *  Used when fields that don't have their own dedicated event change
+ *  out-of-band (e.g. autoResume clears claude_session_id when the
+ *  transcript is gone). Renderer replaces the row wholesale. */
+const SessionRefreshedEvent = EventEnvelope.extend({
+  type: z.literal('session.refreshed'),
+  session: Session,
+});
+
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   SessionSpawnedEvent,
@@ -515,6 +524,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionDeletedEvent,
   SessionRenamedEvent,
   SessionTokensUpdatedEvent,
+  SessionRefreshedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 

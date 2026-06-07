@@ -482,6 +482,12 @@ export function EditorPane(): JSX.Element {
           ) : activeMeta.status === 'diff' ? (
               <div className="editor-monaco">
                 <DiffEditor
+                  /* Stable per-tab key so switching diff tabs (or
+                     switching sessions) remounts the editor cleanly
+                     instead of swapping props in place — that swap is
+                     what triggers Monaco's "TextModel got disposed
+                     before DiffEditorWidget model got reset" crash. */
+                  key={activeFilePath}
                   height="100%"
                   language={languageFor(pathOf(activeFilePath))}
                   original={activeMeta.diffHead ?? ''}

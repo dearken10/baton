@@ -144,12 +144,21 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
 
   'worktree.fileTree': async (req) => {
-    const worktreePath = resolveWorktreePath(req.sessionId);
+    // Tolerant lookup: if the session was just deleted, the renderer
+    // can still have an in-flight call from a stale effect — return
+    // an empty tree instead of throwing, so main's log stays quiet.
+    const worktreePath = tryResolveWorktreePath(req.sessionId);
+    if (!worktreePath) {
+      return { root: { name: '', path: '', type: 'dir' as const, children: [] } };
+    }
     const root = await readFileTree(worktreePath);
     return { root };
   },
   'worktree.gitStatus': async (req) => {
-    const worktreePath = resolveWorktreePath(req.sessionId);
+    const worktreePath = tryResolveWorktreePath(req.sessionId);
+    if (!worktreePath) {
+      return { branch: null, ahead: 0, behind: 0, files: [], dirty: false };
+    }
     const report = await readGitStatus(worktreePath);
     return report;
   },
@@ -436,6 +445,17 @@ function resolveWorktreePath(sessionId: string): string {
     .get(sessionId) as { worktree_path: string } | undefined;
   if (!row) throw new Error(`Unknown session: ${sessionId}`);
   return row.worktree_path;
+}
+
+/** Non-throwing variant for read-only worktree calls. Used by the
+ *  Files / Git panels so a renderer effect that fires for a session
+ *  that just got deleted produces an empty payload instead of an
+ *  unhandled IPC error in main's log. */
+function tryResolveWorktreePath(sessionId: string): string | null {
+  const row = getDatabase()
+    .prepare('SELECT worktree_path FROM sessions WHERE id = ?')
+    .get(sessionId) as { worktree_path: string } | undefined;
+  return row?.worktree_path ?? null;
 }
 
 /** Per-session scrollback file path. Lives under ~/.code24/scrollback/

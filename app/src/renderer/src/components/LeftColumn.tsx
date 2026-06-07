@@ -111,7 +111,31 @@ export function LeftColumn(): JSX.Element {
       const { session } = await window.code24.call('session.resume', { sessionId });
       selectSession(session.id);
     } catch (err) {
-      alert(`Resume failed: ${String(err)}`);
+      const msg = String(err);
+      // Common race / data path: the session row no longer has a
+      // claude_session_id (cleared during boot reconcile because the
+      // transcript is missing). Resume can't restore the conversation,
+      // but a fresh respawn in the same worktree is usually what the
+      // user wanted — offer it instead of a dead-end alert.
+      const noHistory =
+        msg.includes('no Claude session id') ||
+        msg.includes('no transcript');
+      if (noHistory) {
+        const ok = window.confirm(
+          "This session's prior conversation can't be restored "
+          + '(it likely ended before any user message was sent).\n\n'
+          + 'Start a fresh Claude session in the same worktree instead?'
+        );
+        if (!ok) return;
+        try {
+          const { session } = await window.code24.call('session.respawn', { sessionId });
+          selectSession(session.id);
+        } catch (respErr) {
+          alert(`Spawn failed: ${String(respErr)}`);
+        }
+        return;
+      }
+      alert(`Resume failed: ${msg}`);
     } finally {
       setBusy(false);
     }

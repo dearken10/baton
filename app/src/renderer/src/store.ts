@@ -153,6 +153,10 @@ export const useAppStore = create<AppState>()(
             }
             break;
           }
+          case 'session.refreshed': {
+            s.sessions[event.session.id] = event.session;
+            break;
+          }
           case 'session.renamed': {
             const sess = s.sessions[event.sessionId];
             if (sess) {

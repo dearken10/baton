@@ -88,7 +88,17 @@ const IDLE_SWEEP_INTERVAL_MS = (() => {
  * to leave the chip stuck on "errored" after restart.
  */
 function claudeTranscriptPath(cwd: string, claudeSessionId: string): string {
-  const sanitized = cwd.replace(/[/.]/g, '-');
+  // Claude:
+  //   1. Resolves symlinks on the cwd (so /var/folders → /private/var/folders).
+  //   2. Replaces `/`, `.`, AND `_` with `-` (verified empirically by
+  //      looking at the dir name Claude creates for a /var/folders path
+  //      with underscores in it).
+  // Anything we miss here means autoResume looks at the wrong path,
+  // doesn't find the transcript, clears the captured id, and the
+  // session shows "ended" after restart.
+  let real = cwd;
+  try { real = fs.realpathSync(cwd); } catch { /* fall back to cwd */ }
+  const sanitized = real.replace(/[/._]/g, '-');
   return path.join(
     os.homedir(),
     '.claude',
@@ -280,6 +290,13 @@ export class SessionManager {
             to: 'done',
           });
         }
+        // Push the updated row to the renderer so the resume button
+        // disappears without waiting for the next session.list call —
+        // otherwise the user can click "Resume" before the renderer
+        // notices the id has been cleared, hitting the dead-end error
+        // in resume().
+        const fresh = this.listAll().find((s) => s.id === r.id);
+        if (fresh) emit({ type: 'session.refreshed', session: fresh });
         continue;
       }
 
@@ -1027,22 +1044,25 @@ export class SessionManager {
   private handleHookEvent(event: HookEvent): object {
     try {
       const live = this.live.get(event.sessionId);
+
+      // SessionStart is special: Claude can fire it during the tiny
+      // window between `pty.spawn` returning and `this.live.set(...)`,
+      // i.e. before the live entry exists. We MUST still persist the
+      // claude_session_id to the DB or the session can't be resumed
+      // after a restart. recordClaudeSessionId writes to DB
+      // unconditionally; only the live.meta update + setStatus depend
+      // on the in-memory entry.
+      if (event.event === 'SessionStart') {
+        const body = event.body as { session_id?: string } | undefined;
+        const claudeSid = body?.session_id;
+        if (claudeSid) this.recordClaudeSessionId(event.sessionId, claudeSid);
+        if (live) this.setStatus(event.sessionId, 'idle');
+        return {};
+      }
+
       if (!live) return {};
 
       switch (event.event) {
-        case 'SessionStart': {
-          // Capture Claude's internal session id from the hook payload
-          // so we can `claude --resume <id>` later (PRD F2.4). Verified
-          // schema: { session_id, transcript_path, cwd, hook_event_name,
-          // source, model, ... }.
-          const body = event.body as { session_id?: string } | undefined;
-          const claudeSid = body?.session_id;
-          if (claudeSid) this.recordClaudeSessionId(event.sessionId, claudeSid);
-          // Claude finished loading and is at the prompt waiting for
-          // the user's first message — that's idle, not running.
-          this.setStatus(event.sessionId, 'idle');
-          break;
-        }
 
         case 'UserPromptSubmit':
           // User hit enter on a prompt — Claude is about to (or already

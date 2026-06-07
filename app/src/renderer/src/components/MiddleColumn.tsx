@@ -3,6 +3,7 @@ import { useAppStore, selectOpenFiles } from '../store.js';
 import { TerminalPane } from './TerminalPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
 import { EditorPane } from './EditorPane.js';
+import { EditorErrorBoundary } from './EditorErrorBoundary.js';
 import type { Session } from '@shared/ipc.js';
 
 const TOP_PCT_MIN = 18;
@@ -171,14 +172,14 @@ export function MiddleColumn(): JSX.Element {
         style={{ ['--top-h' as never]: `${topPct}%` }}
       >
         {hasOpenFile ? (
-          <>
-            <div className="middle-top">
+          <div className="middle-top" key="top">
+            <EditorErrorBoundary>
               <EditorPane />
-            </div>
-            <HSplitHandle onResize={onSplitResize} />
-          </>
+            </EditorErrorBoundary>
+          </div>
         ) : null}
-        <div className="middle-bottom">
+        {hasOpenFile ? <HSplitHandle key="handle" onResize={onSplitResize} /> : null}
+        <div className="middle-bottom" key="bottom">
           {/* All live terminals stay mounted — we just hide the
               ones that aren't selected. Each keeps its own scrollback. */}
           {liveSessions.map((s) => (
