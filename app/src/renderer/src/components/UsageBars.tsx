@@ -94,7 +94,10 @@ export function UsageBars(): JSX.Element {
 }
 
 function clampPct(util: number): number {
-  return Math.max(0, Math.min(100, util * 100));
+  // The /api/oauth/usage endpoint reports utilization on a 0..100
+  // scale (e.g. 5.0 = 5%, 33.0 = 33%) — NOT a 0..1 fraction. Just
+  // clamp; don't multiply.
+  return Math.max(0, Math.min(100, util));
 }
 
 function CircleProgress(

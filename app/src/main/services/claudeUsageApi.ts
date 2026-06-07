@@ -19,7 +19,8 @@
  *   { five_hour: { utilization, resets_at },
  *     seven_day: { utilization, resets_at },
  *     seven_day_opus?: { utilization, resets_at } }
- *   `utilization` is a fraction (0..1+), `resets_at` is ISO-8601.
+ *   `utilization` is a PERCENT on a 0..100 scale (5.0 = 5 %, not 500 %),
+ *   `resets_at` is ISO-8601.
  *
  * Caching: 5-minute in-process cache so a tight renderer poll loop
  * doesn't hammer Anthropic. Honoured by `getUsage({ force })`.
