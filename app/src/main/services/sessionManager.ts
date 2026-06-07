@@ -60,21 +60,93 @@ export class SessionManager {
    * `running` / `needs-input` / `idle` from before the app was last
    * closed. Their pty processes are gone — mark them ended so the
    * UI doesn't lie. (PRD F2.4 says restore must never leave stale
-   * state.)
+   * state.) Returns the ids that were swept so callers can auto-
+   * resume them.
    */
-  reconcileStaleSessions(): void {
+  reconcileStaleSessions(): string[] {
     try {
-      const now = Date.now();
-      getDatabase()
+      const stale = getDatabase()
         .prepare(
-          `UPDATE sessions
-             SET status = 'done',
-                 ended_at = COALESCE(ended_at, ?)
-           WHERE status IN ('running', 'needs-input', 'idle', 'paused', 'disconnected')`
+          `SELECT id FROM sessions
+            WHERE status IN ('running', 'needs-input', 'idle', 'paused', 'disconnected')`
         )
-        .run(now);
+        .all() as { id: string }[];
+      const ids = stale.map((s) => s.id);
+      if (ids.length > 0) {
+        const now = Date.now();
+        const placeholders = ids.map(() => '?').join(',');
+        getDatabase()
+          .prepare(
+            `UPDATE sessions
+               SET status = 'done',
+                   ended_at = COALESCE(ended_at, ?)
+             WHERE id IN (${placeholders})`
+          )
+          .run(now, ...ids);
+      }
+      return ids;
     } catch {
       // best-effort — never block boot
+      return [];
+    }
+  }
+
+  /**
+   * Auto-resume sessions that the app didn't gracefully close. Called
+   * once after the window finishes loading so the renderer is
+   * subscribed to events. Limits and recency thresholds avoid
+   * spawning a horde of Claude processes from old runs.
+   */
+  async autoResumeRecent(opts: {
+    candidateIds?: string[];
+    maxAgeMs?: number;
+    limit?: number;
+  } = {}): Promise<void> {
+    const maxAge = opts.maxAgeMs ?? 24 * 60 * 60 * 1000;
+    const limit = opts.limit ?? 10;
+    const now = Date.now();
+    let rows: { id: string; claude_session_id: string | null }[];
+    try {
+      if (opts.candidateIds && opts.candidateIds.length > 0) {
+        const placeholders = opts.candidateIds.map(() => '?').join(',');
+        rows = getDatabase()
+          .prepare(
+            `SELECT id, claude_session_id
+               FROM sessions
+              WHERE id IN (${placeholders})
+                AND claude_session_id IS NOT NULL
+                AND ended_at > ?
+              ORDER BY ended_at DESC
+              LIMIT ?`
+          )
+          .all(...opts.candidateIds, now - maxAge, limit) as never;
+      } else {
+        rows = getDatabase()
+          .prepare(
+            `SELECT id, claude_session_id
+               FROM sessions
+              WHERE status IN ('done', 'errored')
+                AND claude_session_id IS NOT NULL
+                AND ended_at > ?
+              ORDER BY ended_at DESC
+              LIMIT ?`
+          )
+          .all(now - maxAge, limit) as never;
+      }
+    } catch {
+      return;
+    }
+
+    for (const r of rows) {
+      try {
+        await this.resume(r.id);
+      } catch (err) {
+        // Resume can fail for legitimate reasons (Claude's transcript
+        // was deleted, --resume rejects the id, etc.). Don't let one
+        // bad row stop the rest.
+        // eslint-disable-next-line no-console
+        console.warn(`[code24] auto-resume of ${r.id} failed:`, err);
+      }
     }
   }
 

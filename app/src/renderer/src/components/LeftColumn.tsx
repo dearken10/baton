@@ -131,28 +131,23 @@ function ProjectBlock(props: {
         <div className="sessions-list">
           {sessions.map((s) => {
             const isEnded = s.status === 'done' || s.status === 'errored';
+            const canResume = isEnded && !!s.claudeSessionId;
+            const onClick = canResume
+              ? () => onResume(s.id)   // resume by default
+              : () => onSelect(s.id);  // live OR ended-without-id → just select
             return (
-              <div
+              <button
                 key={s.id}
                 className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}`}
-                onClick={() => onSelect(s.id)}
-                title={`session ${s.id}`}
+                onClick={onClick}
+                disabled={props.busy && canResume}
+                title={canResume ? 'Click to resume this Claude session' : `session ${s.id}`}
               >
                 <span className="branch">
                   {s.branch} · <span className="dim">{s.id.slice(0, 6)}</span>
                 </span>
                 <span className={`status status-${s.status}`}>{s.status}</span>
-                {isEnded && s.claudeSessionId ? (
-                  <button
-                    className="resume-btn"
-                    onClick={(e) => { e.stopPropagation(); onResume(s.id); }}
-                    disabled={props.busy}
-                    title="Resume this Claude session"
-                  >
-                    ↻ Resume
-                  </button>
-                ) : null}
-              </div>
+              </button>
             );
           })}
         </div>

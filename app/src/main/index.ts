@@ -55,6 +55,9 @@ function installCsp(): void {
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 let mainWindow: BrowserWindow | null = null;
+/** Session ids that the boot reconcile swept; the auto-resume hook
+ *  reads this once the renderer is loaded. Populated in whenReady. */
+let reconciledSessionIds: string[] = [];
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -81,6 +84,19 @@ function createWindow(): void {
     // reload (WebSocket drop + second mount) on some Electron
     // versions. Press Cmd+Opt+I in the window to open them
     // manually if you need them.
+  });
+
+  // After the renderer is fully loaded and subscribed to events,
+  // resume sessions that were live before the last shutdown. This
+  // is the "default resume" behaviour — sessions don't tombstone
+  // across an app restart; they pick back up automatically.
+  mainWindow.webContents.once('did-finish-load', () => {
+    if (reconciledSessionIds.length === 0) return;
+    setTimeout(() => {
+      void getSessionManager()
+        .autoResumeRecent({ candidateIds: reconciledSessionIds })
+        .catch((err) => console.warn('[code24] autoResumeRecent failed:', err));
+    }, 800);
   });
 
   // CODE24_TEST=1 → after first render, auto-add the project at
@@ -183,7 +199,9 @@ app.whenReady().then(() => {
   // Sessions from previous runs are still flagged as `running` in
   // SQLite — mark them as ended so the radar doesn't lie on reopen.
   // (PRD F2.4 restore must never leave stale live-status rows.)
-  getSessionManager().reconcileStaleSessions();
+  // Remember which ids were swept so we can auto-resume them after
+  // the renderer is subscribed to events.
+  reconciledSessionIds = getSessionManager().reconcileStaleSessions();
 
   // Wire the control-channel IPC bus before the window opens so the
   // renderer can call ping/meta/session.list immediately on mount.
