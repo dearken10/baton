@@ -71,6 +71,17 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const session = await getSessionManager().resume(req.sessionId);
     return { session };
   },
+  'session.delete': async (req) => {
+    const opts =
+      req.removeWorktree === undefined
+        ? {}
+        : { removeWorktree: req.removeWorktree };
+    const { worktreeRemoved } = await getSessionManager().delete(
+      req.sessionId,
+      opts
+    );
+    return { ok: true as const, worktreeRemoved };
+  },
 
   'pty.write': (req) => {
     const bytes = Buffer.from(req.data, 'base64').toString('utf-8');

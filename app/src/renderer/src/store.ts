@@ -74,6 +74,13 @@ export const useAppStore = create<AppState>()(
             }
             break;
           }
+          case 'session.deleted': {
+            delete s.sessions[event.sessionId];
+            if (s.selectedSessionId === event.sessionId) {
+              s.selectedSessionId = null;
+            }
+            break;
+          }
         }
       }),
 

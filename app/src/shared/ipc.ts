@@ -97,6 +97,17 @@ const SessionKillResponse = z.object({ ok: z.literal(true) });
 const SessionResumeRequest = z.object({ sessionId: SessionId });
 const SessionResumeResponse = z.object({ session: Session });
 
+const SessionDeleteRequest = z.object({
+  sessionId: SessionId,
+  /** Also `git worktree remove` and delete the worktree dir.
+   *  Defaults to true when the session was spawned in a worktree. */
+  removeWorktree: z.boolean().optional(),
+});
+const SessionDeleteResponse = z.object({
+  ok: z.literal(true),
+  worktreeRemoved: z.boolean(),
+});
+
 const PtyWriteRequest = z.object({
   sessionId: SessionId,
   // base64-encoded bytes — see PtyDataFrame for the symmetric inbound type.
@@ -120,6 +131,7 @@ export const ControlVerbs = {
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume': { request: SessionResumeRequest, response: SessionResumeResponse },
+  'session.delete': { request: SessionDeleteRequest, response: SessionDeleteResponse },
 
   'pty.write':  { request: PtyWriteRequest, response: Empty },
   'pty.resize': { request: PtyResizeRequest, response: Empty },
@@ -173,12 +185,18 @@ const SessionExitedEvent = EventEnvelope.extend({
   exitCode: z.number().nullable(),
 });
 
+const SessionDeletedEvent = EventEnvelope.extend({
+  type: z.literal('session.deleted'),
+  sessionId: SessionId,
+});
+
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   SessionSpawnedEvent,
   SessionStatusChangedEvent,
   SessionSummarizedEvent,
   SessionExitedEvent,
+  SessionDeletedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 

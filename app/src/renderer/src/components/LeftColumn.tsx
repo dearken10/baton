@@ -115,6 +115,33 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  async function deleteSession(s: Session): Promise<void> {
+    const project = projectsRecord[s.projectId];
+    const isWorktreeSession =
+      !!project &&
+      s.worktreePath !== project.path &&
+      s.worktreePath.startsWith(project.path);
+    const lines = [
+      'Delete this session permanently?',
+      `branch: ${s.branch}`,
+      s.status === 'running' || s.status === 'idle' || s.status === 'needs-input'
+        ? '(Claude will be terminated.)'
+        : '',
+      isWorktreeSession
+        ? `Also remove the worktree directory:\n${s.worktreePath}`
+        : '',
+    ].filter(Boolean).join('\n\n');
+    if (!window.confirm(lines)) return;
+    setBusy(true);
+    try {
+      await window.code24.call('session.delete', { sessionId: s.id });
+    } catch (err) {
+      alert(`Delete failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <aside className="col col-left">
       <div className="col-head">
@@ -148,6 +175,7 @@ export function LeftColumn(): JSX.Element {
               onSpawn={() => spawnAgent(p.id)}
               onSpawnInWorktree={() => openWorktreeDialog(p)}
               onResume={resumeSession}
+              onDelete={deleteSession}
               busy={busy}
             />
           ))
@@ -172,9 +200,10 @@ function ProjectBlock(props: {
   onSpawn: () => void;
   onSpawnInWorktree: () => void;
   onResume: (id: string) => void;
+  onDelete: (s: Session) => void;
   busy: boolean;
 }): JSX.Element {
-  const { project, sessions, selectedId, onSelect, onSpawn, onSpawnInWorktree, onResume, busy } = props;
+  const { project, sessions, selectedId, onSelect, onSpawn, onSpawnInWorktree, onResume, onDelete, busy } = props;
   return (
     <div className="project-block">
       <div className="project-head">
@@ -197,16 +226,27 @@ function ProjectBlock(props: {
               ? () => onResume(s.id)   // resume by default
               : () => onSelect(s.id);  // live OR ended-without-id → just select
             return (
-              <button
+              <div
                 key={s.id}
                 className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}`}
                 onClick={onClick}
-                disabled={props.busy && canResume}
                 title={canResume ? 'Click to resume this Claude session' : `session ${s.id}`}
               >
                 <span className="branch">{s.branch}</span>
                 <span className={`status status-${s.status}`}>{s.status}</span>
-              </button>
+                <button
+                  className="session-del"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDelete(s);
+                  }}
+                  disabled={busy}
+                  aria-label="Delete session"
+                  title="Delete session"
+                >
+                  ×
+                </button>
+              </div>
             );
           })}
         </div>

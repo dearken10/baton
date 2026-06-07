@@ -35,6 +35,7 @@ describe('control verb registry', () => {
         "project.pickFolder",
         "pty.resize",
         "pty.write",
+        "session.delete",
         "session.kill",
         "session.list",
         "session.resume",

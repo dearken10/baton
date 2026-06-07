@@ -32,7 +32,8 @@ import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
 import { readCurrentBranch } from './gitReader.js';
-import { createWorktree } from './worktreeManager.js';
+import { createWorktree, removeWorktree } from './worktreeManager.js';
+import { getProject } from './projectStore.js';
 
 interface LiveSession {
   meta: Session;
@@ -379,6 +380,68 @@ export class SessionManager {
       const live = this.live.get(sessionId);
       if (!live) return;
       live.handle.kill('SIGTERM');
+    });
+  }
+
+  /**
+   * Hard-delete a session: kill if live, optionally remove its
+   * worktree, then DELETE the row from SQLite and emit
+   * `session.deleted` so the renderer drops it from view. The
+   * conversation transcript Claude saves at
+   * `~/.claude/projects/<sanitised>/<claude_session_id>.jsonl` is
+   * NOT removed — that's the user's data, in Claude's space. They
+   * can clear it from their own `~/.claude/` if they want.
+   */
+  async delete(
+    sessionId: string,
+    opts: { removeWorktree?: boolean } = {}
+  ): Promise<{ worktreeRemoved: boolean }> {
+    return this.queue.run(sessionId, async () => {
+      // Snapshot what we need before deleting anything.
+      const row = getDatabase()
+        .prepare(
+          'SELECT project_id, worktree_path FROM sessions WHERE id = ?'
+        )
+        .get(sessionId) as
+        | { project_id: string; worktree_path: string }
+        | undefined;
+      if (!row) return { worktreeRemoved: false };
+
+      // Kill the pty if it's still running. Wait briefly so the exit
+      // handler doesn't race with the row DELETE.
+      const live = this.live.get(sessionId);
+      if (live) {
+        try { live.handle.kill('SIGTERM'); } catch { /* already gone */ }
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        this.live.delete(sessionId);
+      }
+
+      // Auto-detect "this is a worktree session" — the worktree path
+      // sits inside the project's .code24/worktrees/. If the caller
+      // explicitly set removeWorktree, honor that; otherwise default
+      // to true for worktree sessions, false for project-root sessions.
+      const project = getProject(row.project_id);
+      const isWorktreeSession =
+        !!project &&
+        row.worktree_path !== project.path &&
+        row.worktree_path.startsWith(project.path);
+      const shouldRemoveWt = opts.removeWorktree ?? isWorktreeSession;
+
+      let worktreeRemoved = false;
+      if (shouldRemoveWt && project && isWorktreeSession) {
+        try {
+          await removeWorktree(project.path, row.worktree_path);
+          worktreeRemoved = true;
+        } catch {
+          // best-effort — the row still goes away
+        }
+      }
+
+      // Drop the row and tell the renderer to forget it.
+      getDatabase().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
+      emit({ type: 'session.deleted', sessionId });
+
+      return { worktreeRemoved };
     });
   }
 
