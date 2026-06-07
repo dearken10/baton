@@ -258,30 +258,62 @@ button {
 .session-row.ended { opacity: 0.7; }
 .session-row.ended .branch { color: var(--text-dim); }
 .session-row:disabled { cursor: progress; }
-.session-del {
-  /* Fully removed from layout unless the row is hovered — no
-     reserved space, no faint icon when the row is just selected. */
+/* Row-actions menu — hidden until the row is hovered, or while the
+   menu itself is open. Zero width when collapsed so the row layout
+   is identical with/without it. */
+.row-menu {
   display: none;
-  width: 18px;
-  height: 18px;
+  position: relative;
+  margin-left: 6px;
+}
+.session-row:hover .row-menu,
+.row-menu:has([aria-expanded="true"]) { display: block; }
+.row-menu-trigger {
+  width: 20px;
+  height: 20px;
+  display: grid;
   place-items: center;
   border-radius: 4px;
   background: transparent;
   border: none;
   color: var(--text-faint);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
   cursor: pointer;
-  margin-left: 6px;
   padding: 0;
   transition: background 0.12s, color 0.12s;
 }
-.session-row:hover .session-del { display: grid; }
-.session-del:hover {
-  background: rgba(239, 84, 84, 0.12);
-  color: var(--errored);
+.row-menu-trigger:hover { background: var(--bg-3); color: var(--text); }
+.row-menu-trigger:disabled { cursor: not-allowed; opacity: 0.5; }
+.row-menu-trigger[aria-expanded="true"] { background: var(--bg-3); color: var(--text); }
+.row-menu-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: var(--bg-1);
+  border: 1px solid var(--border-2);
+  border-radius: 7px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.45), 0 0 0 1px rgba(91,141,239,0.10);
+  min-width: 140px;
+  padding: 4px;
+  z-index: 60;
 }
-.session-del:disabled { cursor: not-allowed; }
+.row-menu-item {
+  display: block;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  background: transparent;
+  border-radius: 5px;
+  text-align: left;
+  color: var(--text);
+  font-size: 12.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.row-menu-item:hover { background: var(--bg-2); }
+.row-menu-item.danger { color: var(--errored); }
+.row-menu-item.danger:hover { background: rgba(239, 84, 84, 0.10); }
 .session-row:hover { background: var(--bg-2); }
 .session-row .dim { color: var(--text-faint); font-weight: 400; }
 .session-row .branch {

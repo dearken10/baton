@@ -108,6 +108,12 @@ const SessionDeleteResponse = z.object({
   worktreeRemoved: z.boolean(),
 });
 
+const SessionRenameRequest = z.object({
+  sessionId: SessionId,
+  newBranchName: z.string().min(1),
+});
+const SessionRenameResponse = z.object({ session: Session });
+
 const PtyWriteRequest = z.object({
   sessionId: SessionId,
   // base64-encoded bytes — see PtyDataFrame for the symmetric inbound type.
@@ -132,6 +138,7 @@ export const ControlVerbs = {
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume': { request: SessionResumeRequest, response: SessionResumeResponse },
   'session.delete': { request: SessionDeleteRequest, response: SessionDeleteResponse },
+  'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
 
   'pty.write':  { request: PtyWriteRequest, response: Empty },
   'pty.resize': { request: PtyResizeRequest, response: Empty },
@@ -190,6 +197,13 @@ const SessionDeletedEvent = EventEnvelope.extend({
   sessionId: SessionId,
 });
 
+const SessionRenamedEvent = EventEnvelope.extend({
+  type: z.literal('session.renamed'),
+  sessionId: SessionId,
+  newBranch: z.string(),
+  newWorktreePath: z.string(),
+});
+
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   SessionSpawnedEvent,
@@ -197,6 +211,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionSummarizedEvent,
   SessionExitedEvent,
   SessionDeletedEvent,
+  SessionRenamedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 

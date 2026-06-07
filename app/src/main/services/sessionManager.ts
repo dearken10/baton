@@ -32,7 +32,11 @@ import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
 import { readCurrentBranch } from './gitReader.js';
-import { createWorktree, removeWorktree } from './worktreeManager.js';
+import {
+  createWorktree,
+  removeWorktree,
+  renameWorktree,
+} from './worktreeManager.js';
 import { getProject } from './projectStore.js';
 
 interface LiveSession {
@@ -380,6 +384,86 @@ export class SessionManager {
       const live = this.live.get(sessionId);
       if (!live) return;
       live.handle.kill('SIGTERM');
+    });
+  }
+
+  /**
+   * Rename a worktree session's branch + move its dir to match.
+   * Refuses for live sessions (files would shift while Claude is
+   * holding them) and for project-root sessions (renaming the
+   * project's main branch would surprise every other session
+   * sharing it). Emits `session.renamed` so the renderer's chip
+   * label updates without a full reload.
+   */
+  async rename(sessionId: string, newBranchName: string): Promise<Session> {
+    return this.queue.run(sessionId, async () => {
+      if (this.live.has(sessionId)) {
+        throw new Error(
+          'Stop this session before renaming — files in the worktree are in use.'
+        );
+      }
+      const row = getDatabase()
+        .prepare(
+          `SELECT id, project_id, backend_id, branch, worktree_path, status,
+                  started_at, ended_at, tokens_in, tokens_out, last_summary,
+                  claude_session_id
+             FROM sessions WHERE id = ?`
+        )
+        .get(sessionId) as
+        | {
+            id: string; project_id: string; backend_id: string;
+            branch: string; worktree_path: string; status: string;
+            started_at: number; ended_at: number | null;
+            tokens_in: number; tokens_out: number;
+            last_summary: string | null; claude_session_id: string | null;
+          }
+        | undefined;
+      if (!row) throw new Error(`No such session: ${sessionId}`);
+
+      const project = getProject(row.project_id);
+      const isWorktreeSession =
+        !!project &&
+        row.worktree_path !== project.path &&
+        row.worktree_path.startsWith(project.path);
+      if (!project || !isWorktreeSession) {
+        throw new Error(
+          'Rename only applies to worktree sessions. Renaming the project root branch would affect every session on this project.'
+        );
+      }
+
+      const updated = await renameWorktree({
+        projectRoot: project.path,
+        worktreePath: row.worktree_path,
+        newBranchName,
+      });
+
+      getDatabase()
+        .prepare(
+          'UPDATE sessions SET branch = ?, worktree_path = ? WHERE id = ?'
+        )
+        .run(updated.branch, updated.path, sessionId);
+
+      const next: Session = {
+        id: row.id,
+        projectId: row.project_id,
+        backendId: row.backend_id as Session['backendId'],
+        branch: updated.branch,
+        worktreePath: updated.path,
+        status: row.status as Session['status'],
+        startedAt: row.started_at,
+        endedAt: row.ended_at,
+        tokensIn: row.tokens_in,
+        tokensOut: row.tokens_out,
+        lastSummary: row.last_summary,
+        claudeSessionId: row.claude_session_id,
+      };
+      emit({
+        type: 'session.renamed',
+        sessionId,
+        newBranch: updated.branch,
+        newWorktreePath: updated.path,
+      });
+      return next;
     });
   }
 

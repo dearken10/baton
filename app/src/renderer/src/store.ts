@@ -81,6 +81,14 @@ export const useAppStore = create<AppState>()(
             }
             break;
           }
+          case 'session.renamed': {
+            const sess = s.sessions[event.sessionId];
+            if (sess) {
+              sess.branch = event.newBranch;
+              sess.worktreePath = event.newWorktreePath;
+            }
+            break;
+          }
         }
       }),
 

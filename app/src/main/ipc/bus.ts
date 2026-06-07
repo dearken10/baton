@@ -82,6 +82,13 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     );
     return { ok: true as const, worktreeRemoved };
   },
+  'session.rename': async (req) => {
+    const session = await getSessionManager().rename(
+      req.sessionId,
+      req.newBranchName
+    );
+    return { session };
+  },
 
   'pty.write': (req) => {
     const bytes = Buffer.from(req.data, 'base64').toString('utf-8');

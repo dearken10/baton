@@ -147,6 +147,87 @@ function ensureGitignored(projectRoot: string): void {
   fs.writeFileSync(gitignorePath, content + block);
 }
 
+export interface RenameWorktreeArgs {
+  projectRoot: string;
+  worktreePath: string;
+  newBranchName: string;
+}
+
+/**
+ * Rename a worktree's branch + move its directory to match. Used when
+ * the user picked the auto-generated `wip-<hex>` default and now wants
+ * a real branch name.
+ *
+ * Steps:
+ *   1) git branch -m <old> <new>  (inside the worktree)
+ *   2) git worktree move <oldDir> <newDir>  (from the project root)
+ *
+ * Caller is responsible for ensuring the worktree's pty/agent is NOT
+ * live (no held file handles).
+ */
+export async function renameWorktree(
+  args: RenameWorktreeArgs
+): Promise<WorktreeInfo> {
+  const newBranch = args.newBranchName.trim();
+  if (!newBranch) throw new Error('New branch name is required.');
+
+  const newSlug = slugify(newBranch);
+  const newDir = path.join(
+    path.dirname(args.worktreePath),
+    newSlug
+  );
+  if (newDir === args.worktreePath) {
+    // No real change. Read the current branch and return.
+    const cur = await simpleGit(args.worktreePath).revparse([
+      '--abbrev-ref', 'HEAD',
+    ]);
+    return { path: args.worktreePath, branch: cur.trim() };
+  }
+  if (fs.existsSync(newDir)) {
+    throw new Error(`A worktree already exists at ${newDir}.`);
+  }
+
+  const lockKey = `wt:${args.projectRoot}:${newSlug}`;
+  return withLock(lockKey, async () => {
+    const wtGit = simpleGit(args.worktreePath);
+    const oldBranch = (
+      await wtGit.revparse(['--abbrev-ref', 'HEAD'])
+    ).trim();
+
+    // 1) Rename the branch inside the worktree. `branch -m` keeps
+    //    HEAD pointing at the renamed ref.
+    if (oldBranch !== newBranch) {
+      try {
+        await wtGit.raw(['branch', '-m', oldBranch, newBranch]);
+      } catch (err) {
+        throw new Error(
+          `git branch -m failed: ${err instanceof Error ? err.message : String(err)}`
+        );
+      }
+    }
+
+    // 2) Move the worktree directory. From the project root.
+    try {
+      await simpleGit(args.projectRoot).raw([
+        'worktree', 'move', args.worktreePath, newDir,
+      ]);
+    } catch (err) {
+      // Try to roll the branch rename back so we don't leave the
+      // user in a confused half-state.
+      try {
+        if (oldBranch !== newBranch) {
+          await wtGit.raw(['branch', '-m', newBranch, oldBranch]);
+        }
+      } catch { /* best-effort rollback */ }
+      throw new Error(
+        `git worktree move failed: ${err instanceof Error ? err.message : String(err)}`
+      );
+    }
+
+    return { path: newDir, branch: newBranch };
+  });
+}
+
 /** Tolerant remove — never throws. */
 export async function removeWorktree(
   projectRoot: string,
