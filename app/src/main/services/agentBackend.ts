@@ -13,6 +13,8 @@
 import type { AgentBackendId } from '../../shared/ipc.js';
 
 export interface AgentSpawnOpts {
+  /** Stable session id. The backend uses it to scope hook events. */
+  sessionId: string;
   /** Working directory for the agent process. */
   cwd: string;
   /** Initial pty size. */

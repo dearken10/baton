@@ -2,12 +2,15 @@
  * SessionManager — owns the in-memory set of live agent sessions,
  * persists them to SQLite, and emits AppEvents on lifecycle changes.
  *
- * Per PRD F2.3 + F2.5: panels-first model. v1 MVP exposes a single
- * "agent" panel per session; the data shape already accommodates
- * multiple panels per session for v2.
+ * Status state machine (PRD F3.2):
+ *   - spawn                        → running
+ *   - hook: PreToolUse (after idle) → running
+ *   - hook: Notification           → needs-input
+ *   - hook: Stop                   → idle
+ *   - hook: SessionEnd | pty exit  → done | errored
  *
- * Per PRD F2.6: backends are pluggable. v1 ships ClaudeCodeBackend
- * and MockAgentBackend.
+ * Hooks always fail-open: handler returns `{}` so Claude is never
+ * blocked even if our state machine throws (F2.7).
  *
  * Pty pipe path (F8.5): pty.onData → SessionManager → renderer via
  * `Channels.ptyData` push (NOT via the control bus or the event
@@ -27,25 +30,29 @@ import type { AgentBackend, AgentHandle } from './agentBackend.js';
 import { ClaudeCodeBackend } from './claudeCodeBackend.js';
 import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
+import { getHookServer, type HookEvent } from './hookServer.js';
 
 interface LiveSession {
   meta: Session;
   handle: AgentHandle;
-  /** Coalesced data buffer not yet flushed to renderer (reserved for F8.6). */
-  // pending: Buffer[];
 }
 
 export class SessionManager {
   private live = new Map<string, LiveSession>();
   private queue = new LifecycleQueue();
   private backends: Record<AgentBackendId, AgentBackend>;
+  private hooksReady = false;
 
   constructor() {
     this.backends = {
       'claude-code': new ClaudeCodeBackend(),
-      // 'codex': new CodexBackend(),  // v2
-      // 'mock': new MockAgentBackend(), // wired in next pass
     } as unknown as Record<AgentBackendId, AgentBackend>;
+  }
+
+  async startHookServer(): Promise<void> {
+    if (this.hooksReady) return;
+    await getHookServer().start((e) => this.handleHookEvent(e));
+    this.hooksReady = true;
   }
 
   async spawn(opts: {
@@ -53,6 +60,8 @@ export class SessionManager {
     backendId: AgentBackendId;
     cwd: string;
   }): Promise<Session> {
+    await this.startHookServer();
+
     const backend = this.backends[opts.backendId];
     if (!backend) throw new Error(`Unknown backend: ${opts.backendId}`);
 
@@ -66,6 +75,7 @@ export class SessionManager {
       }
 
       const handle = await backend.spawn({
+        sessionId,
         cwd: opts.cwd,
         cols: 100,
         rows: 32,
@@ -85,7 +95,6 @@ export class SessionManager {
         lastSummary: null,
       };
 
-      // Persist.
       getDatabase()
         .prepare(
           `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary)
@@ -144,7 +153,6 @@ export class SessionManager {
       const live = this.live.get(sessionId);
       if (!live) return;
       live.handle.kill('SIGTERM');
-      // Exit handler will mark the session and emit.
     });
   }
 
@@ -152,23 +160,45 @@ export class SessionManager {
     return [...this.live.values()].map((l) => l.meta);
   }
 
+  /** Apply a status transition, persist, and emit if it changed. */
+  private setStatus(sessionId: string, next: SessionStatus): void {
+    const live = this.live.get(sessionId);
+    if (!live) return;
+    const prev = live.meta.status;
+    if (prev === next) return;
+    live.meta = { ...live.meta, status: next };
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET status = ? WHERE id = ?')
+        .run(next, sessionId);
+    } catch {
+      // fail-open on persistence — never block the agent
+    }
+    emit({
+      type: 'session.status_changed',
+      sessionId,
+      from: prev,
+      to: next,
+    });
+  }
+
   private markExited(sessionId: string, exitCode: number | null): void {
     const live = this.live.get(sessionId);
     if (!live) return;
 
-    const prev = live.meta.status;
     const next: SessionStatus = exitCode === 0 ? 'done' : 'errored';
+    const prev = live.meta.status;
     live.meta = {
       ...live.meta,
       status: next,
       endedAt: Date.now(),
     };
 
-    getDatabase()
-      .prepare(
-        'UPDATE sessions SET status = ?, ended_at = ? WHERE id = ?'
-      )
-      .run(next, live.meta.endedAt, sessionId);
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET status = ?, ended_at = ? WHERE id = ?')
+        .run(next, live.meta.endedAt, sessionId);
+    } catch { /* best-effort */ }
 
     if (prev !== next) {
       emit({
@@ -183,14 +213,51 @@ export class SessionManager {
     this.live.delete(sessionId);
   }
 
+  /**
+   * Translate Claude Code hook events into status transitions.
+   * Always returns `{}` so Claude proceeds normally (F2.7 fail-open).
+   */
+  private handleHookEvent(event: HookEvent): object {
+    try {
+      const live = this.live.get(event.sessionId);
+      if (!live) return {};
+
+      switch (event.event) {
+        case 'PreToolUse':
+          // Claude is actively working — only flip status if we're
+          // currently idle (i.e. between turns) so we don't churn
+          // the chip on every tool call inside one turn.
+          if (live.meta.status === 'idle' || live.meta.status === 'needs-input') {
+            this.setStatus(event.sessionId, 'running');
+          }
+          break;
+
+        case 'Notification':
+          this.setStatus(event.sessionId, 'needs-input');
+          break;
+
+        case 'Stop':
+          this.setStatus(event.sessionId, 'idle');
+          break;
+
+        case 'SessionEnd':
+          // pty exit will follow; treat as done preemptively.
+          this.setStatus(event.sessionId, 'done');
+          break;
+      }
+    } catch {
+      // Never throw out to Claude.
+    }
+    return {};
+  }
+
   killAll(): void {
     for (const { handle } of this.live.values()) {
       try {
         handle.kill('SIGTERM');
-      } catch {
-        // best effort during shutdown
-      }
+      } catch { /* best effort during shutdown */ }
     }
+    getHookServer().stop();
   }
 }
 
