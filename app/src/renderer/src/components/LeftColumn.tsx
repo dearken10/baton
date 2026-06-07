@@ -2,6 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { Project, Session } from '@shared/ipc.js';
 
+function randomHex(n: number): string {
+  const arr = new Uint8Array(Math.ceil(n / 2));
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (b) => b.toString(16).padStart(2, '0'))
+    .join('')
+    .slice(0, n);
+}
+
 export function LeftColumn(): JSX.Element {
   const projectsRecord = useAppStore((s) => s.projects);
   const sessionsRecord = useAppStore((s) => s.sessions);
@@ -61,12 +69,17 @@ export function LeftColumn(): JSX.Element {
   }
 
   async function spawnInWorktree(projectId: string): Promise<void> {
+    // Pre-fill a "wip-<6 hex>" default so the user can press Enter to
+    // accept, or type a real branch name (e.g. tts/fix-retries) if
+    // they have one in mind. Once the LLM summarizer is wired, we'll
+    // suggest a name based on the user's first prompt (PRD F2.2).
+    const suggestion = `wip-${randomHex(6)}`;
     const raw = window.prompt(
-      'New worktree branch name (e.g. tts/fix-retries):'
+      'New worktree branch name (Enter to accept, or type a real branch like tts/fix-retries):',
+      suggestion
     );
     if (raw == null) return;
-    const branch = raw.trim();
-    if (!branch) return;
+    const branch = raw.trim() || suggestion;
     setBusy(true);
     try {
       const { session } = await window.code24.call('session.spawn', {
@@ -215,14 +228,15 @@ function SpawnMenu(props: {
   return (
     <div className="spawn-menu" ref={ref}>
       <button
-        className="spawn-btn"
+        className="spawn-icon-btn"
         onClick={() => setOpen((v) => !v)}
         disabled={props.busy}
         aria-expanded={open}
         aria-haspopup="menu"
+        aria-label="Spawn a new session"
         title="Spawn a new session"
       >
-        + Agent ▾
+        +
       </button>
       {open && (
         <div className="spawn-menu-pop" role="menu">

@@ -173,6 +173,23 @@ button {
 
 .spawn-menu { position: relative; margin-left: auto; }
 .spawn-menu .spawn-btn { margin-left: 0; }
+.spawn-icon-btn {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0;
+}
+.spawn-icon-btn:hover { background: var(--bg-3); color: var(--text); border-color: var(--accent); }
+.spawn-icon-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.spawn-icon-btn[aria-expanded="true"] { background: var(--bg-3); color: var(--accent); border-color: var(--accent); }
 .spawn-menu-pop {
   position: absolute;
   top: calc(100% + 4px);
