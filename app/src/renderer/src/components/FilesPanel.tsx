@@ -1,6 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
+import { FileContextMenu } from './FileContextMenu.js';
+import { browserTabId } from './EditorPane.js';
 import type { FileTreeNodeT } from '@shared/ipc.js';
+
+const HTML_EXTS = new Set(['html', 'htm']);
+export function isHtmlPath(p: string): boolean {
+  const dot = p.lastIndexOf('.');
+  if (dot < 0) return false;
+  return HTML_EXTS.has(p.slice(dot + 1).toLowerCase());
+}
 
 interface Props {
   sessionId: string;
@@ -16,11 +25,25 @@ interface Props {
  * We open all top-level dirs by default; everything else stays
  * collapsed until the user clicks it.
  */
+/** MIME used for dragging a single file path out of Files/Git into the
+ *  terminal host. Value is mirrored in GitPanel and TerminalPane —
+ *  keep them in sync if you rename it. */
+export const DRAG_FILE_PATH = 'application/x-code24-filepath';
+
 export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.Element {
   const [root, setRoot] = useState<FileTreeNodeT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set(['']));
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; absPath: string } | null>(null);
   const openInEditor = useAppStore((s) => s.openFile);
+
+  function openContextMenu(e: React.MouseEvent, absPath: string): void {
+    e.preventDefault();
+    setCtxMenu({ x: e.clientX, y: e.clientY, absPath });
+  }
+  function openHtmlInBrowser(absPath: string): void {
+    openInEditor(browserTabId(absPath), 'sticky');
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +86,24 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
         onToggle={toggle}
         onPreview={openFilePreview}
         onPin={openFileSticky}
+        onContextMenu={openContextMenu}
+        worktreePath={worktreePath}
       />
+      {ctxMenu ? (
+        <FileContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={
+            isHtmlPath(ctxMenu.absPath)
+              ? [{
+                  label: 'Open in browser',
+                  onClick: () => openHtmlInBrowser(ctxMenu.absPath),
+                }]
+              : []
+          }
+          onClose={() => setCtxMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -75,9 +115,11 @@ interface NodeProps {
   onToggle: (path: string) => void;
   onPreview: (path: string) => void;
   onPin: (path: string) => void;
+  onContextMenu: (e: React.MouseEvent, absPath: string) => void;
+  worktreePath: string;
 }
 
-function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin }: NodeProps): JSX.Element {
+function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin, onContextMenu, worktreePath }: NodeProps): JSX.Element {
   const isOpen = openPaths.has(node.path);
   const indent = depth * 12;
   if (node.type === 'dir') {
@@ -106,6 +148,8 @@ function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin }: NodePr
                 onToggle={onToggle}
                 onPreview={onPreview}
                 onPin={onPin}
+                onContextMenu={onContextMenu}
+                worktreePath={worktreePath}
               />
             ))}
           </div>
@@ -113,6 +157,7 @@ function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin }: NodePr
       </div>
     );
   }
+  const abs = `${worktreePath}/${node.path}`;
   return (
     <button
       type="button"
@@ -120,7 +165,14 @@ function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin }: NodePr
       style={{ paddingLeft: 8 + indent }}
       onClick={() => onPreview(node.path)}
       onDoubleClick={() => onPin(node.path)}
-      title={`Click to preview · double-click to pin ${node.path}`}
+      onContextMenu={(e) => onContextMenu(e, abs)}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_FILE_PATH, abs);
+        e.dataTransfer.setData('text/plain', abs);
+        e.dataTransfer.effectAllowed = 'copy';
+      }}
+      title={`Click to preview · double-click to pin · drag into terminal to paste path  ·  ${node.path}`}
     >
       <span className="tree-caret" />
       <span className="tree-icon">📄</span>

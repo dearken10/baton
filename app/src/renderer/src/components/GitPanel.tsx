@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
-import { diffTabId } from './EditorPane.js';
+import { diffTabId, browserTabId } from './EditorPane.js';
+import { DRAG_FILE_PATH, isHtmlPath } from './FilesPanel.js';
+import { FileContextMenu } from './FileContextMenu.js';
 import type { ResponseOf } from '@shared/ipc.js';
 
 interface Props {
@@ -30,6 +32,7 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
   const [nonce, setNonce] = useState(0);
   const [commitMsg, setCommitMsg] = useState('');
   const [busy, setBusy] = useState(false);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; absPath: string } | null>(null);
   const openInEditor = useAppStore((s) => s.openFile);
 
   useEffect(() => {
@@ -251,7 +254,22 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
                       className="git-row-path-btn"
                       onClick={() => preview(f.path)}
                       onDoubleClick={() => pin(f.path)}
-                      title={f.path}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setCtxMenu({
+                          x: e.clientX,
+                          y: e.clientY,
+                          absPath: `${worktreePath}/${f.path}`,
+                        });
+                      }}
+                      draggable
+                      onDragStart={(e) => {
+                        const abs = `${worktreePath}/${f.path}`;
+                        e.dataTransfer.setData(DRAG_FILE_PATH, abs);
+                        e.dataTransfer.setData('text/plain', abs);
+                        e.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      title={`${f.path}  ·  drag into terminal to paste path`}
                     >
                       {f.path}
                     </button>
@@ -285,6 +303,21 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
             </button>
           </div>
         </div>
+      ) : null}
+      {ctxMenu ? (
+        <FileContextMenu
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          items={
+            isHtmlPath(ctxMenu.absPath)
+              ? [{
+                  label: 'Open in browser',
+                  onClick: () => openInEditor(browserTabId(ctxMenu.absPath), 'sticky'),
+                }]
+              : []
+          }
+          onClose={() => setCtxMenu(null)}
+        />
       ) : null}
     </div>
   );

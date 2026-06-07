@@ -1,164 +1,236 @@
-import { useEffect, useMemo, useState } from 'react';
-import { formatTokens } from '../lib/format.js';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { ResponseOf } from '@shared/ipc.js';
 
 /**
- * Nimbalyst-style plan-usage indicator. Two compact bars labelled
- * "5h" and "7d", each filled with the fraction of the configured
- * plan limit that has been spent in that rolling window (PRD F11.3).
+ * Plan-usage chip + popup, modeled on Nimbalyst. The chip is a small
+ * circular progress showing the higher of the two windows (the
+ * binding constraint at a glance). Click → popup with both windows,
+ * each showing % + bar + a live "Resets in Xh Ym" countdown.
  *
- * v1 ships a small set of preset plans (Pro / Max 5x / Max 20x) and
- * picks Pro by default. The user can switch via the menu on the chip
- * — the choice persists in localStorage. A full Settings page comes
- * later.
+ * Data is the real Anthropic OAuth-usage API response, fetched
+ * server-side. No more local approximation.
  */
 
-interface Stats {
-  fiveH: { tokensIn: number; tokensOut: number };
-  sevenD: { tokensIn: number; tokensOut: number };
-}
+type Stats = ResponseOf<'usage.getStats'>;
+type Win = Stats['fiveH'];
 
-interface Plan {
-  id: string;
-  label: string;
-  /** Approximate token budget per rolling 5-hour window. */
-  fiveHLimit: number;
-  /** Approximate token budget per rolling 7-day window. */
-  sevenDLimit: number;
-}
-
-const PLANS: Plan[] = [
-  { id: 'pro',    label: 'Pro',     fiveHLimit:   5_000_000, sevenDLimit:  35_000_000 },
-  { id: 'max5',   label: 'Max 5×',  fiveHLimit:  25_000_000, sevenDLimit: 175_000_000 },
-  { id: 'max20',  label: 'Max 20×', fiveHLimit: 100_000_000, sevenDLimit: 700_000_000 },
-];
-
-const PLAN_LS_KEY = 'code24:plan';
-const REFRESH_MS = 30_000;
-
-function loadPlanId(): string {
-  try {
-    const v = localStorage.getItem(PLAN_LS_KEY);
-    if (v && PLANS.some((p) => p.id === v)) return v;
-  } catch { /* ignore */ }
-  return 'pro';
-}
+/** Poll the API at most once per minute from the renderer — the main
+ *  process caches at 5 minutes anyway, so this is mostly chosen so the
+ *  "Resets in X" label stays approximately fresh. */
+const POLL_MS = 60_000;
 
 export function UsageBars(): JSX.Element {
   const [stats, setStats] = useState<Stats | null>(null);
-  const [planId, setPlanId] = useState<string>(() => loadPlanId());
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
 
-  const plan = useMemo(() => PLANS.find((p) => p.id === planId) ?? PLANS[0]!, [planId]);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function tick(): Promise<void> {
-      try {
-        const s = await window.code24.call('usage.getStats', {});
-        if (!cancelled) setStats(s);
-      } catch { /* leave previous reading */ }
-    }
-    void tick();
-    const id = window.setInterval(() => { void tick(); }, REFRESH_MS);
-    return () => { cancelled = true; window.clearInterval(id); };
+  const refresh = useCallback(async (): Promise<void> => {
+    setRefreshing(true);
+    try {
+      const s = await window.code24.call('usage.getStats', {});
+      setStats(s);
+    } catch { /* leave previous reading */ }
+    finally { setRefreshing(false); }
   }, []);
 
   useEffect(() => {
-    if (!menuOpen) return;
+    void refresh();
+    const id = window.setInterval(() => { void refresh(); }, POLL_MS);
+    return () => window.clearInterval(id);
+  }, [refresh]);
+
+  // Close popup on outside click / Escape.
+  useEffect(() => {
+    if (!open) return;
     const onDown = (e: MouseEvent): void => {
-      if (!(e.target as Element).closest('.usage-wrapper')) setMenuOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setMenuOpen(false); };
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [menuOpen]);
+  }, [open]);
 
-  function pickPlan(id: string): void {
-    setPlanId(id);
-    try { localStorage.setItem(PLAN_LS_KEY, id); } catch { /* ignore */ }
-    setMenuOpen(false);
+  if (!stats) {
+    return <div className="usage-wrapper usage-loading">…</div>;
   }
 
-  if (!stats) return <div className="usage-wrapper usage-loading">…</div>;
-
-  const fiveH = stats.fiveH.tokensIn + stats.fiveH.tokensOut;
-  const sevenD = stats.sevenD.tokensIn + stats.sevenD.tokensOut;
-  const fiveHPct  = Math.min(100, (fiveH  / plan.fiveHLimit ) * 100);
-  const sevenDPct = Math.min(100, (sevenD / plan.sevenDLimit) * 100);
+  // Pct shown in the chip = whichever window is currently binding.
+  // Errored API → leave the ring empty + show a `?`.
+  const fiveHPct  = clampPct(stats.fiveH.utilization);
+  const sevenDPct = clampPct(stats.sevenD.utilization);
+  const chipPct = Math.max(fiveHPct, sevenDPct);
+  const tone =
+    stats.error ? 'err'
+    : chipPct >= 90 ? 'crit'
+    : chipPct >= 70 ? 'warn'
+    : 'ok';
 
   return (
-    <div className="usage-wrapper">
+    <div className="usage-wrapper" ref={ref}>
       <button
         type="button"
-        className="usage-plan"
-        onClick={() => setMenuOpen((v) => !v)}
-        title={`${plan.label} plan — click to change`}
-        aria-haspopup="menu"
-        aria-expanded={menuOpen}
+        className={`usage-chip usage-${tone}`}
+        onClick={() => setOpen((v) => !v)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        title={stats.error ?? `${chipPct.toFixed(0)}% of plan used — click for detail`}
       >
-        {plan.label} ▾
+        <CircleProgress pct={chipPct} tone={tone} error={!!stats.error} />
       </button>
-      <UsageBar
-        label="5h"
-        used={fiveH}
-        limit={plan.fiveHLimit}
-        pct={fiveHPct}
-      />
-      <UsageBar
-        label="7d"
-        used={sevenD}
-        limit={plan.sevenDLimit}
-        pct={sevenDPct}
-      />
-      {menuOpen ? (
-        <div className="usage-menu" role="menu">
-          {PLANS.map((p) => (
-            <button
-              key={p.id}
-              className={`usage-menu-item ${p.id === planId ? 'selected' : ''}`}
-              role="menuitemradio"
-              aria-checked={p.id === planId}
-              onClick={() => pickPlan(p.id)}
-            >
-              <span>{p.label}</span>
-              <span className="dim mono">
-                {formatTokens(p.fiveHLimit)}/5h · {formatTokens(p.sevenDLimit)}/7d
-              </span>
-            </button>
-          ))}
-        </div>
+      {open ? (
+        <UsagePopup
+          stats={stats}
+          refreshing={refreshing}
+          onRefresh={() => void refresh()}
+        />
       ) : null}
     </div>
   );
 }
 
-interface BarProps {
-  label: string;
-  used: number;
-  limit: number;
-  pct: number;
+function clampPct(util: number): number {
+  return Math.max(0, Math.min(100, util * 100));
 }
 
-function UsageBar({ label, used, limit, pct }: BarProps): JSX.Element {
-  // Bucket the colour so the user can read severity at a glance.
-  const tone =
-    pct >= 90 ? 'crit' :
-    pct >= 70 ? 'warn' :
-    'ok';
+function CircleProgress(
+  { pct, tone, error }: { pct: number; tone: string; error: boolean }
+): JSX.Element {
+  const r = 9;
+  const c = 2 * Math.PI * r;
+  const dash = error ? 0 : (pct / 100) * c;
   return (
-    <div
-      className={`usage-bar usage-${tone}`}
-      title={`${used.toLocaleString()} / ${limit.toLocaleString()} tokens (${pct.toFixed(1)}%)`}
-    >
-      <span className="usage-bar-label">{label}</span>
-      <span className="usage-bar-track">
-        <span className="usage-bar-fill" style={{ width: `${pct}%` }} />
-      </span>
-      <span className="usage-bar-pct">{pct.toFixed(0)}%</span>
+    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden>
+      <circle cx="12" cy="12" r={r} fill="none"
+        stroke="var(--bg-3)" strokeWidth="2.5" />
+      {!error ? (
+        <circle cx="12" cy="12" r={r} fill="none"
+          stroke="currentColor" strokeWidth="2.5"
+          strokeDasharray={`${dash} ${c}`}
+          strokeLinecap="round"
+          transform="rotate(-90 12 12)" />
+      ) : null}
+      <text x="12" y="12" textAnchor="middle" dominantBaseline="central"
+        fontSize="9" fontWeight="600" fill={`var(--usage-${tone}-fg, currentColor)`}>
+        {error ? '?' : Math.round(pct)}
+      </text>
+    </svg>
+  );
+}
+
+interface PopupProps {
+  stats: Stats;
+  refreshing: boolean;
+  onRefresh: () => void;
+}
+
+function UsagePopup({ stats, refreshing, onRefresh }: PopupProps): JSX.Element {
+  // Recompute "Resets in" every 30s so the labels don't go stale
+  // while the popup is open.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <div className="usage-popup" role="dialog" aria-label="Claude usage">
+      <div className="usage-popup-head">
+        <span className="usage-popup-title">Claude Usage</span>
+        <button
+          type="button"
+          className="usage-popup-refresh"
+          onClick={onRefresh}
+          disabled={refreshing}
+          title="Refresh"
+          aria-label="Refresh"
+        >
+          ↻
+        </button>
+      </div>
+
+      {stats.error ? (
+        <div className="usage-popup-error">{stats.error}</div>
+      ) : (
+        <>
+          <UsageRow
+            label="Session"
+            sub="5-hour window"
+            win={stats.fiveH}
+            now={now}
+          />
+          <UsageRow
+            label="Weekly"
+            sub="7-day window"
+            win={stats.sevenD}
+            now={now}
+          />
+          {stats.sevenDOpus ? (
+            <UsageRow
+              label="Opus"
+              sub="7-day window"
+              win={stats.sevenDOpus}
+              now={now}
+            />
+          ) : null}
+        </>
+      )}
+
+      <div className="usage-popup-foot">
+        <span className="dim">Updated {fmtRelative(now - stats.lastUpdated)}</span>
+        <a href="https://status.anthropic.com" target="_blank" rel="noopener noreferrer">
+          Status
+        </a>
+      </div>
     </div>
   );
+}
+
+interface UsageRowProps {
+  label: string;
+  sub: string;
+  win: Win;
+  now: number;
+}
+
+function UsageRow({ label, sub, win, now }: UsageRowProps): JSX.Element {
+  const pct = clampPct(win.utilization);
+  const tone = pct >= 90 ? 'crit' : pct >= 70 ? 'warn' : 'ok';
+  const resetMs = win.resetsAt ? Date.parse(win.resetsAt) - now : NaN;
+  return (
+    <div className={`usage-row usage-${tone}`}>
+      <div className="usage-row-line">
+        <span className="usage-row-label">{label}</span>
+        <span className="usage-row-pct">{pct.toFixed(0)}%</span>
+      </div>
+      <div className="usage-row-track">
+        <span className="usage-row-fill" style={{ width: `${pct}%` }} />
+      </div>
+      <div className="usage-row-foot dim">
+        <span>{sub}</span>
+        {Number.isFinite(resetMs) && resetMs > 0
+          ? <span>Resets in {fmtDuration(resetMs)}</span>
+          : <span>Reset time unknown</span>}
+      </div>
+    </div>
+  );
+}
+
+function fmtDuration(ms: number): string {
+  const totalMin = Math.max(0, Math.round(ms / 60000));
+  const d = Math.floor(totalMin / (60 * 24));
+  const h = Math.floor((totalMin % (60 * 24)) / 60);
+  const m = totalMin % 60;
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function fmtRelative(ms: number): string {
+  if (ms < 60_000) return 'just now';
+  return `${fmtDuration(ms)} ago`;
 }

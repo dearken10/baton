@@ -60,6 +60,7 @@ describe('control verb registry', () => {
         "session.spawn",
         "session.toggleYolo",
         "shell.openPath",
+        "shell.openTerminal",
         "usage.getStats",
         "worktree.fileTree",
         "worktree.gitStatus",

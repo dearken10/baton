@@ -148,19 +148,21 @@ export function MiddleColumn(): JSX.Element {
             <span className="title">
               {selectedProject?.name ?? 'project'} · {sessionLabel(selected)}
             </span>
-            <button
-              type="button"
-              className={`skip-perm-chip ${selected.skipPermissions ? 'on' : 'off'}`}
-              onClick={() => void toggleSkipPermissions(selected)}
-              disabled={skipPermBusy}
-              title={
-                selected.skipPermissions
-                  ? '"Skip Permission" ON — Claude auto-approves every tool. Click to turn off (restarts session).'
-                  : '"Skip Permission" OFF — Claude asks before each tool. Click to turn on (restarts session).'
-              }
-            >
-              {selected.skipPermissions ? '⚠️ Skip Permission ON' : '🛡️ Skip Permission OFF'}
-            </button>
+            {selected.backendId === 'claude-code' ? (
+              <button
+                type="button"
+                className={`skip-perm-chip ${selected.skipPermissions ? 'on' : 'off'}`}
+                onClick={() => void toggleSkipPermissions(selected)}
+                disabled={skipPermBusy}
+                title={
+                  selected.skipPermissions
+                    ? '"Skip Permission" ON — Claude auto-approves every tool. Click to turn off (restarts session).'
+                    : '"Skip Permission" OFF — Claude asks before each tool. Click to turn on (restarts session).'
+                }
+              >
+                {selected.skipPermissions ? '⚠️ Skip Permission ON' : '🛡️ Skip Permission OFF'}
+              </button>
+            ) : null}
           </>
         ) : (
           <span className="title">No session selected</span>
@@ -196,8 +198,14 @@ export function MiddleColumn(): JSX.Element {
               (one of these, mutually exclusive with the live slots). */}
           {selected && !selectedIsLive ? (
             <div className="empty session-ended">
-              <h3>Session ended</h3>
-              {selected.claudeSessionId ? (
+              <h3>{selected.backendId === 'shell' ? 'Terminal ended' : 'Session ended'}</h3>
+              {selected.backendId === 'shell' ? (
+                <p className="dim">
+                  The shell exited. Open a fresh terminal in the same
+                  folder — your scrollback is gone but the working
+                  directory is unchanged.
+                </p>
+              ) : selected.claudeSessionId ? (
                 <p className="dim">
                   The prior conversation is still on disk. Resume picks
                   it up where it left off; Start fresh keeps the worktree
@@ -211,7 +219,7 @@ export function MiddleColumn(): JSX.Element {
                 </p>
               )}
               <div className="session-ended-actions">
-                {selected.claudeSessionId ? (
+                {selected.backendId !== 'shell' && selected.claudeSessionId ? (
                   <button
                     type="button"
                     className="btn primary"
@@ -223,11 +231,11 @@ export function MiddleColumn(): JSX.Element {
                 ) : null}
                 <button
                   type="button"
-                  className="btn"
+                  className={`btn${selected.backendId === 'shell' ? ' primary' : ''}`}
                   onClick={() => respawnHere(selected.id)}
                   disabled={respawnBusy}
                 >
-                  Start fresh session here
+                  {selected.backendId === 'shell' ? 'Open fresh terminal' : 'Start fresh session here'}
                 </button>
               </div>
               <p className="dim mono">

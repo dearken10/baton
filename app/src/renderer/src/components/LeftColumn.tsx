@@ -138,6 +138,23 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  /** Spawn a plain shell session — same xterm + scrollback path as
+   *  Claude sessions, just a login shell instead of `claude`. */
+  async function spawnTerminal(projectId: string): Promise<void> {
+    setBusy(true);
+    try {
+      const { session } = await window.code24.call('session.spawn', {
+        projectId,
+        backendId: 'shell',
+      });
+      selectSession(session.id);
+    } catch (err) {
+      alert(`Terminal spawn failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /**
    * Opens the worktree dialog with a suggested branch name. The
    * actual spawn happens in createWorktreeFromDialog when the user
@@ -321,6 +338,7 @@ export function LeftColumn(): JSX.Element {
               onRename={renameSession}
               onDelete={deleteSession}
               onGetInfo={() => window.alert(`${p.name}\n\n${p.path}`)}
+              onNewTerminal={() => void spawnTerminal(p.id)}
               onRemoveProject={() => void removeProjectFromList(p)}
               onReorderProjects={reorderProjects}
               onReorderSessions={(fromId, beforeId) =>
@@ -353,6 +371,7 @@ interface ProjectBlockProps {
   onRename: (s: Session) => void;
   onDelete: (s: Session) => void;
   onGetInfo: () => void;
+  onNewTerminal: () => void;
   onRemoveProject: () => void;
   onReorderProjects: (fromId: string, beforeId: string) => void;
   onReorderSessions: (fromId: string, beforeId: string) => void;
@@ -368,7 +387,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, sessions, selectedId,
     onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete,
-    onGetInfo, onRemoveProject, onReorderProjects, onReorderSessions,
+    onGetInfo, onNewTerminal, onRemoveProject, onReorderProjects, onReorderSessions,
     busy,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -404,6 +423,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           onSpawn={onSpawn}
           onSpawnInWorktree={onSpawnInWorktree}
           onGetInfo={onGetInfo}
+          onNewTerminal={onNewTerminal}
           onRemoveProject={onRemoveProject}
           busy={busy}
         />
@@ -419,6 +439,23 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
             const isWorktreeSession =
               s.worktreePath !== project.path &&
               s.worktreePath.startsWith(project.path);
+            // Type-specific badge at the start of the row so the user
+            // can scan the list at a glance:
+            //   💬 = Claude session in the project root (shared FS)
+            //   🌿 = Claude session in a worktree branch (isolated)
+            //   ❯  = plain login shell (terminal)
+            const badge =
+              s.backendId === 'shell' ? { glyph: '❯',  cls: 'badge-shell' }
+              : isWorktreeSession    ? { glyph: '🌿', cls: 'badge-worktree' }
+              :                        { glyph: '💬', cls: 'badge-session' };
+            // We only want the chip to draw attention when something
+            // worth noting is happening:
+            //   - shell sessions while live → no chip (they're just open)
+            //   - Claude sessions at `idle` → no chip (boring default state)
+            //   - everything else (running / needs-input / paused / done /
+            //     errored / disconnected) → chip stays so the user sees it.
+            const shellLive = s.backendId === 'shell' && !isEnded;
+            const showStatusChip = !shellLive && s.status !== 'idle';
             // Rename is shown for ALL worktree sessions; for live ones
             // the handler will offer to stop the session first.
             const canRename = isWorktreeSession;
@@ -450,7 +487,10 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                 }}
               >
                 <div className="session-row-main">
-                  <span className="branch">{s.branch}</span>
+                  <span className="branch">
+                    <span className={`session-badge ${badge.cls}`} aria-hidden>{badge.glyph}</span>
+                    {s.branch}
+                  </span>
                   {s.lastSummary ? (
                     <span className="session-intent" title={s.lastSummary}>
                       {s.lastSummary}
@@ -465,7 +505,9 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                     {formatTokens(s.tokensIn + s.tokensOut)}
                   </span>
                 ) : null}
-                <span className={`status status-${s.status}`}>{s.status}</span>
+                {showStatusChip ? (
+                  <span className={`status status-${s.status}`}>{s.status}</span>
+                ) : null}
                 <SessionRowMenu
                   canRename={canRename}
                   onRename={() => onRename(s)}
@@ -551,6 +593,7 @@ function SpawnMenu(props: {
   onSpawn: () => void;
   onSpawnInWorktree: () => void;
   onGetInfo: () => void;
+  onNewTerminal: () => void;
   onRemoveProject: () => void;
   busy: boolean;
 }): JSX.Element {
@@ -607,6 +650,16 @@ function SpawnMenu(props: {
             <span className="spawn-menu-title">New worktree</span>
             <span className="spawn-menu-sub">
               Fresh git worktree on a new branch. Isolated edits.
+            </span>
+          </button>
+          <button
+            className="spawn-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onNewTerminal(); }}
+          >
+            <span className="spawn-menu-title">New Terminal</span>
+            <span className="spawn-menu-sub">
+              Open the project folder in your system terminal app.
             </span>
           </button>
           <button

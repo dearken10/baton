@@ -94,96 +94,131 @@ button {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
   -webkit-app-region: no-drag;
 }
 .usage-loading {
   font-size: 11px;
   color: var(--text-faint);
+  padding: 0 4px;
 }
-.usage-plan {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
+
+/* Circular chip. SVG draws the ring; `color` cascades to the ring
+   stroke + the number in the middle. */
+.usage-chip {
+  background: transparent;
+  border: none;
+  padding: 2px;
   cursor: pointer;
-}
-.usage-plan:hover { color: var(--text); border-color: var(--accent); }
-.usage-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 10.5px;
-  color: var(--text-dim);
+  color: #5dd39e;
 }
-.usage-bar-label {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  color: var(--text-faint);
-  min-width: 14px;
-  text-align: right;
-}
-.usage-bar-track {
-  display: inline-block;
-  width: 80px;
-  height: 6px;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  overflow: hidden;
-  position: relative;
-}
-.usage-bar-fill {
-  display: block;
-  height: 100%;
-  background: #5dd39e;
-  transition: width 0.25s ease, background 0.25s ease;
-}
-.usage-warn .usage-bar-fill { background: #ffb86b; }
-.usage-crit .usage-bar-fill { background: #ef5454; }
-.usage-bar-pct {
-  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
-  min-width: 28px;
-  text-align: right;
-  color: var(--text-dim);
-}
-.usage-warn .usage-bar-pct { color: #ffb86b; }
-.usage-crit .usage-bar-pct { color: #ef5454; }
-.usage-menu {
+.usage-ok   { color: #5dd39e; }
+.usage-warn { color: #ffb86b; }
+.usage-crit { color: #ef5454; }
+.usage-err  { color: var(--text-faint); }
+.usage-chip:hover { filter: brightness(1.1); }
+
+/* Popup card — modelled on Nimbalyst's usage card. */
+.usage-popup {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  background: var(--bg-2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 4px;
+  width: 300px;
+  background: var(--bg-1);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  padding: 12px;
   display: flex;
   flex-direction: column;
-  min-width: 200px;
-  z-index: 30;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  gap: 12px;
+  z-index: 40;
+  font-size: 12px;
+  color: var(--text);
 }
-.usage-menu-item {
+.usage-popup-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 12px;
-  text-align: left;
+}
+.usage-popup-title { font-weight: 600; }
+.usage-popup-refresh {
   background: transparent;
   border: none;
-  color: var(--text);
-  padding: 6px 10px;
-  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 13px;
   cursor: pointer;
-  font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 4px;
 }
-.usage-menu-item:hover { background: var(--bg-3); }
-.usage-menu-item.selected { color: var(--accent); }
-.usage-menu-item .dim {
-  color: var(--text-faint);
-  font-size: 10.5px;
+.usage-popup-refresh:hover:not(:disabled) { background: var(--bg-2); color: var(--text); }
+.usage-popup-refresh:disabled { opacity: 0.5; cursor: progress; }
+
+.usage-row {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
+.usage-row-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.usage-row-label { font-weight: 600; }
+.usage-row-pct {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 16px;
+  font-weight: 600;
+  color: #5dd39e;
+}
+.usage-warn .usage-row-pct { color: #ffb86b; }
+.usage-crit .usage-row-pct { color: #ef5454; }
+.usage-row-track {
+  display: block;
+  height: 4px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.usage-row-fill {
+  display: block;
+  height: 100%;
+  background: #5dd39e;
+  transition: width 0.3s ease;
+}
+.usage-warn .usage-row-fill { background: #ffb86b; }
+.usage-crit .usage-row-fill { background: #ef5454; }
+.usage-row-foot {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+}
+
+.usage-popup-error {
+  background: rgba(239, 84, 84, 0.08);
+  border: 1px solid rgba(239, 84, 84, 0.4);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #ef5454;
+  font-size: 11.5px;
+}
+.usage-popup-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+}
+.usage-popup-foot .dim { color: var(--text-faint); }
+.usage-popup-foot a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.usage-popup-foot a:hover { text-decoration: underline; }
 
 /* ── 3-column layout with draggable splitters ─────────────── */
 .main {
@@ -530,6 +565,25 @@ button {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.session-row .session-badge {
+  display: inline-block;
+  width: 14px;
+  text-align: center;
+  margin-right: 4px;
+  font-size: 11px;
+  vertical-align: 1px;
+}
+/* Tighten the prompt-character look so it reads as a glyph, not a typo. */
+.session-row .session-badge.badge-shell {
+  color: var(--accent);
+  font-weight: 700;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+.session-row .session-badge.badge-session,
+.session-row .session-badge.badge-worktree {
+  font-size: 10px;
 }
 .session-row .session-intent {
   font-size: 10.5px;
@@ -955,6 +1009,45 @@ button {
   font-size: 12px;
 }
 .open-in-item:hover { background: var(--bg-3); }
+
+/* Right-click menu over file rows in Files / Git. */
+.ctx-menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  padding: 4px;
+}
+.ctx-menu-item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.ctx-menu-item:hover { background: var(--bg-3); }
+.ctx-menu-item:disabled { color: var(--text-dim); cursor: default; }
+
+/* In-app browser view for HTML files opened from Files / Git. */
+.html-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: #fff;
+}
+.html-preview > iframe {
+  flex: 1;
+  border: none;
+  width: 100%;
+  height: 100%;
+  background: #fff;
+}
 .editor-body {
   flex: 1;
   min-height: 0;

@@ -48,8 +48,19 @@ marked.setOptions({ gfm: true, breaks: false });
 const DIFF_TAB_PREFIX = 'diff://';
 export function diffTabId(absPath: string): string { return `${DIFF_TAB_PREFIX}${absPath}`; }
 function isDiffTab(id: string): boolean { return id.startsWith(DIFF_TAB_PREFIX); }
+
+/** "Open in browser" tabs for HTML files. Rendered as an <iframe srcdoc>
+ *  using the file's contents — relative asset URLs (./style.css etc)
+ *  won't resolve. For multi-file sites, use the external "Open in"
+ *  path instead. */
+const BROWSER_TAB_PREFIX = 'browser://';
+export function browserTabId(absPath: string): string { return `${BROWSER_TAB_PREFIX}${absPath}`; }
+function isBrowserTab(id: string): boolean { return id.startsWith(BROWSER_TAB_PREFIX); }
+
 function pathOf(id: string): string {
-  return isDiffTab(id) ? id.slice(DIFF_TAB_PREFIX.length) : id;
+  if (isDiffTab(id)) return id.slice(DIFF_TAB_PREFIX.length);
+  if (isBrowserTab(id)) return id.slice(BROWSER_TAB_PREFIX.length);
+  return id;
 }
 
 // Use the locally-bundled monaco — no CDN, offline-capable.
@@ -94,7 +105,7 @@ interface FileMeta {
   binary: boolean;
   tooLarge: boolean;
   size: number;
-  status: 'loading' | 'ready' | 'image' | 'binary' | 'tooLarge' | 'error' | 'diff';
+  status: 'loading' | 'ready' | 'image' | 'binary' | 'tooLarge' | 'error' | 'diff' | 'browser';
   error: string | null;
   /** True when the model's current value differs from baseline. */
   dirty: boolean;
@@ -199,6 +210,37 @@ export function EditorPane(): JSX.Element {
       if (!metaMap[p]) updateMeta(p, { ...EMPTY_META });
       void (async () => {
         try {
+          // Browser tabs render the file in an iframe; we just need
+          // the raw HTML stashed in `baseline`. No Monaco model.
+          if (isBrowserTab(p)) {
+            const realPath = pathOf(p);
+            const res = await window.code24.call('file.read', { absPath: realPath });
+            if (cancelled) return;
+            if (res.binary || res.tooLarge) {
+              updateMeta(p, {
+                status: res.tooLarge ? 'tooLarge' : 'binary',
+                size: res.size,
+                mtimeMs: res.mtimeMs,
+                error: null,
+                dirty: false,
+                baseline: '',
+              });
+              return;
+            }
+            updateMeta(p, {
+              status: 'browser',
+              baseline: res.content,
+              mtimeMs: res.mtimeMs,
+              size: res.size,
+              error: null,
+              dirty: false,
+              binary: false,
+              tooLarge: false,
+              imageSrc: null,
+            });
+            return;
+          }
+
           // Diff tabs (id starts with "diff://") render Monaco's
           // DiffEditor — we fetch HEAD + working sides from git.
           if (isDiffTab(p)) {
@@ -504,6 +546,19 @@ export function EditorPane(): JSX.Element {
                   }}
                 />
               </div>
+          ) : activeMeta.status === 'browser' ? (
+              <div className="html-preview">
+                <iframe
+                  /* srcdoc isolates the HTML in its own origin so it
+                     can't reach into the renderer. Relative asset
+                     refs (./style.css, images) WON'T resolve — that's
+                     a known trade-off for not relaxing CSP. */
+                  key={activeFilePath}
+                  title={pathOf(activeFilePath ?? '')}
+                  srcDoc={activeMeta.baseline}
+                  sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+                />
+              </div>
           ) : activeMeta.status === 'image' && activeMeta.imageSrc ? (
               <div className="image-viewer">
                 <div className="image-canvas">
@@ -612,21 +667,24 @@ function EditorTabs({
         const real = pathOf(p);
         const name = real.split('/').pop() ?? real;
         const diff = isDiffTab(p);
+        const browser = isBrowserTab(p);
+        const kindNote = diff ? ' (diff)' : browser ? ' (browser)' : '';
         return (
           <div
             key={p}
-            className={`editor-tab ${active ? 'active' : ''} ${preview ? 'preview' : ''} ${diff ? 'diff' : ''}`}
+            className={`editor-tab ${active ? 'active' : ''} ${preview ? 'preview' : ''} ${diff ? 'diff' : ''} ${browser ? 'browser' : ''}`}
             role="tab"
             aria-selected={active}
             onClick={() => onSelect(p)}
             onDoubleClick={() => onPin(p)}
             title={
               preview
-                ? `${real}${diff ? ' (diff)' : ''}\n(preview — double-click to pin)`
-                : `${real}${diff ? ' (diff)' : ''}`
+                ? `${real}${kindNote}\n(preview — double-click to pin)`
+                : `${real}${kindNote}`
             }
           >
             {diff ? <span className="editor-tab-icon" aria-hidden>±</span> : null}
+            {browser ? <span className="editor-tab-icon" aria-hidden>🌐</span> : null}
             <span className="editor-tab-name">
               {name}{meta?.dirty ? ' •' : ''}
             </span>
@@ -669,10 +727,12 @@ function EditorActionRow({
   if (!absPath) return null;
   const real = pathOf(absPath);
   const diff = isDiffTab(absPath);
+  const browser = isBrowserTab(absPath);
+  const kindNote = diff ? ' · diff' : browser ? ' · browser' : '';
   return (
     <div className="editor-head">
       <span className="editor-file mono" title={real}>
-        {real}{diff ? ' · diff' : ''}
+        {real}{kindNote}
       </span>
       {markdownToggle ? (
         <button
@@ -689,7 +749,7 @@ function EditorActionRow({
         </button>
       ) : null}
       <OpenInMenu absPath={real} />
-      {diff ? null : (
+      {diff || browser ? null : (
         <button
           type="button"
           className="btn"

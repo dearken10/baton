@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import '@xterm/xterm/css/xterm.css';
+import { DRAG_FILE_PATH } from './FilesPanel.js';
 
 /** How often to snapshot the visible terminal to disk. */
 const SCROLLBACK_SAVE_MS = 10_000;
@@ -75,16 +76,19 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
 
     // Replay previous scrollback BEFORE we attach the live pty data
     // subscription. Any live frames that arrive while we're loading
-    // get queued by main; once we subscribe they flush in order.
+    // get queued; we drop them after writing the snapshot because the
+    // main-side scrollback.load now returns either (a) the disk file
+    // (a SerializeAddon dump covering everything up to the last
+    // 10-s save), or (b) the in-memory ring of recent pty bytes
+    // (covering everything up to RIGHT NOW). In both cases the
+    // snapshot already includes whatever just arrived as a live
+    // frame — replaying queued frames would write those bytes twice.
     let liveReady = false;
     const queuedFrames: Uint8Array[] = [];
     void window.code24
       .call('scrollback.load', { sessionId })
       .then(({ data }) => {
         if (data) term.write(data);
-        // Now flush any frames we queued during the load and let
-        // future ones go straight to write.
-        for (const bytes of queuedFrames) term.write(bytes);
         queuedFrames.length = 0;
         liveReady = true;
       })
@@ -165,5 +169,57 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     };
   }, [sessionId]);
 
-  return <div className="terminal-host" ref={hostRef} />;
+  function acceptsDrop(e: React.DragEvent<HTMLDivElement>): boolean {
+    const types = e.dataTransfer.types;
+    if (!types) return false;
+    for (let i = 0; i < types.length; i++) {
+      if (types[i] === DRAG_FILE_PATH) return true;
+      if (types[i] === 'Files') return true;
+    }
+    return false;
+  }
+
+  function onDragOver(e: React.DragEvent<HTMLDivElement>): void {
+    if (!acceptsDrop(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  }
+
+  function onDrop(e: React.DragEvent<HTMLDivElement>): void {
+    if (!acceptsDrop(e)) return;
+    e.preventDefault();
+    const paths: string[] = [];
+    const internal = e.dataTransfer.getData(DRAG_FILE_PATH);
+    if (internal) {
+      paths.push(internal);
+    } else {
+      // OS-level drag (Finder, etc). Electron exposes .path on each File.
+      for (let i = 0; i < e.dataTransfer.files.length; i++) {
+        const f = e.dataTransfer.files[i] as File & { path?: string };
+        if (f.path) paths.push(f.path);
+      }
+    }
+    if (paths.length === 0) return;
+    const text = paths.map(shellQuotePath).join(' ') + ' ';
+    const encoded = btoa(unescape(encodeURIComponent(text)));
+    void window.code24.call('pty.write', { sessionId, data: encoded });
+  }
+
+  return (
+    <div
+      className="terminal-host"
+      ref={hostRef}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+    />
+  );
+}
+
+/** Wrap `path` so a POSIX shell parses it as a single token. Returns
+ *  the input unchanged if it contains only "safe" characters — that
+ *  keeps the typed text readable for Claude-style prompts where the
+ *  surrounding quotes aren't useful. */
+function shellQuotePath(path: string): string {
+  if (/^[A-Za-z0-9_./@:+,-]+$/.test(path)) return path;
+  return `'${path.replace(/'/g, "'\\''")}'`;
 }

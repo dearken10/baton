@@ -34,7 +34,7 @@ import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readGitStatus } from '../services/worktreeReader.js';
 import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
-import { scanTranscripts } from '../services/globalUsageScanner.js';
+import { getUsage } from '../services/claudeUsageApi.js';
 import { getDatabase } from '../database/index.js';
 
 type Handler<V extends ControlVerb> = (
@@ -85,33 +85,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
 
   'session.list': () => ({ sessions: getSessionManager().listAll() }),
-  'usage.getStats': async () => {
-    // Make sure external transcripts are folded in before we sum.
-    // scanTranscripts is re-entrant and cheap when up to date.
-    await scanTranscripts();
-    const now = Date.now();
-    const FIVE_H = 5 * 60 * 60 * 1000;
-    const SEVEN_D = 7 * 24 * 60 * 60 * 1000;
-    const rowFiveH = getDatabase()
-      .prepare(
-        `SELECT COALESCE(SUM(tokens_in), 0)  AS ti,
-                COALESCE(SUM(tokens_out), 0) AS to_
-           FROM token_usage_events WHERE ts > ?`
-      )
-      .get(now - FIVE_H) as { ti: number; to_: number };
-    const rowSevenD = getDatabase()
-      .prepare(
-        `SELECT COALESCE(SUM(tokens_in), 0)  AS ti,
-                COALESCE(SUM(tokens_out), 0) AS to_
-           FROM token_usage_events WHERE ts > ?`
-      )
-      .get(now - SEVEN_D) as { ti: number; to_: number };
-    return {
-      fiveH:  { tokensIn: rowFiveH.ti,  tokensOut: rowFiveH.to_  },
-      sevenD: { tokensIn: rowSevenD.ti, tokensOut: rowSevenD.to_ },
-      serverTs: now,
-    };
-  },
+  'usage.getStats': async () => getUsage(),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
@@ -257,6 +231,27 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     // failure. We surface it as a boolean for the renderer.
     const err = await shell.openPath(req.absPath);
     return { ok: err === '' };
+  },
+  'shell.openTerminal': async (req) => {
+    // Launch the platform's default terminal at the project path.
+    // macOS: `open -a Terminal <path>` — works for both Terminal.app
+    // and any user-set default (iTerm, etc.) if they've made it the
+    // .terminal handler.
+    try {
+      if (process.platform === 'darwin') {
+        await execFileP('open', ['-a', 'Terminal', req.absPath]);
+      } else if (process.platform === 'win32') {
+        await execFileP('cmd', ['/c', 'start', '', 'cmd', '/K', `cd /d "${req.absPath}"`]);
+      } else {
+        await execFileP('x-terminal-emulator', [], { cwd: req.absPath });
+      }
+      return { ok: true, error: null };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   },
   'editor.openIn': async (req) => {
     // VS Code + Cursor register URL schemes that handle file:// paths.
@@ -439,6 +434,15 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       const data = await fsp.readFile(file, 'utf-8');
       return { data };
     } catch {
+      // No disk scrollback yet (brand-new session, hasn't had its
+      // first 10-second snapshot). Fall back to the in-memory ring
+      // buffer of recent pty bytes so the welcome banner / initial
+      // prompt isn't lost on TerminalPane mount. The same bytes are
+      // also broadcast as live pty.data frames; the TerminalPane drops
+      // those queued frames after writing this snapshot so the user
+      // doesn't see duplicates.
+      const buf = getSessionManager().getRecentPtyBytes(req.sessionId);
+      if (buf && buf.length > 0) return { data: buf.toString('utf-8') };
       return { data: null };
     }
   },

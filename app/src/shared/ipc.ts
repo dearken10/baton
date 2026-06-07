@@ -34,7 +34,7 @@ export const SessionStatus = z.enum([
 ]);
 export type SessionStatus = z.infer<typeof SessionStatus>;
 
-export const AgentBackendId = z.enum(['claude-code', 'codex', 'mock']);
+export const AgentBackendId = z.enum(['claude-code', 'codex', 'mock', 'shell']);
 export type AgentBackendId = z.infer<typeof AgentBackendId>;
 
 export const Project = z.object({
@@ -100,18 +100,26 @@ const SessionListResponse = z.object({ sessions: z.array(Session) });
  *  Returns absolute totals for the last 5h and 7d; the renderer
  *  divides by the user-selected plan limits to compute the percent. */
 const UsageGetStatsRequest = z.object({});
+/** Authoritative usage data from Anthropic's OAuth usage endpoint —
+ *  same source Claude Code itself uses for the in-CLI "approaching
+ *  limit" warnings. Replaced the locally-aggregated transcript scan
+ *  we used to do. */
+const UsageWindow = z.object({
+  /** 0..1 = % of plan used in this rolling window. Can exceed 1. */
+  utilization: z.number(),
+  /** ISO-8601 string. Null when the API can't compute a reset time. */
+  resetsAt: z.string().nullable(),
+});
 const UsageGetStatsResponse = z.object({
-  fiveH: z.object({
-    tokensIn: z.number().int().nonnegative(),
-    tokensOut: z.number().int().nonnegative(),
-  }),
-  sevenD: z.object({
-    tokensIn: z.number().int().nonnegative(),
-    tokensOut: z.number().int().nonnegative(),
-  }),
-  /** Wall-clock ms at the query — handy for the renderer to time its
-   *  next refresh. */
-  serverTs: z.number(),
+  fiveH:  UsageWindow,
+  sevenD: UsageWindow,
+  /** Opus-specific 7d window (some plans return this). */
+  sevenDOpus: UsageWindow.nullable(),
+  /** Wall-clock ms when the API was last polled. */
+  lastUpdated: z.number(),
+  /** Human-readable error when fetch failed (e.g. no token, 401);
+   *  null on success. Renderer renders a fallback state when set. */
+  error: z.string().nullable(),
 });
 
 /** Renderer tells main which session is currently focused in the UI
@@ -217,6 +225,11 @@ const WorktreeGitStatusResponse = z.object({
 /** Open a file or dir in the system default application. */
 const ShellOpenPathRequest = z.object({ absPath: z.string().min(1) });
 const ShellOpenPathResponse = z.object({ ok: z.boolean() });
+
+/** Launch the platform's default terminal app with cwd = absPath.
+ *  Used by the project menu's "New Terminal" item. */
+const ShellOpenTerminalRequest = z.object({ absPath: z.string().min(1) });
+const ShellOpenTerminalResponse = z.object({ ok: z.boolean(), error: z.string().nullable() });
 
 /** Hand off the active file to a specific external editor. URL-scheme
  *  approach for the GUI editors that register one (VS Code, Cursor);
@@ -438,6 +451,7 @@ export const ControlVerbs = {
   'git.push':              { request: GitPushRequest,              response: GitPushResponse },
   'git.pull':              { request: GitPullRequest,              response: GitPullResponse },
   'shell.openPath':        { request: ShellOpenPathRequest,       response: ShellOpenPathResponse },
+  'shell.openTerminal':    { request: ShellOpenTerminalRequest,   response: ShellOpenTerminalResponse },
   'editor.openIn':         { request: EditorOpenInRequest,        response: EditorOpenInResponse },
   'file.read':             { request: FileReadRequest,            response: FileReadResponse },
   'file.readBinary':       { request: FileReadBinaryRequest,      response: FileReadBinaryResponse },

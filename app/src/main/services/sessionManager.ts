@@ -31,6 +31,7 @@ import {
 import { getDatabase } from '../database/index.js';
 import type { AgentBackend, AgentHandle } from './agentBackend.js';
 import { ClaudeCodeBackend } from './claudeCodeBackend.js';
+import { ShellBackend } from './shellBackend.js';
 import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
@@ -52,7 +53,14 @@ interface LiveSession {
    *  if the session has never been idle). Used by the idle-pause
    *  sweeper (PRD F11.4). Cleared when status moves off 'idle'. */
   lastIdleAt: number | null;
+  /** Recent raw pty bytes — the last RECENT_PTY_CAP bytes the pty has
+   *  emitted. Used so a TerminalPane mounting AFTER pty data started
+   *  flowing (typical for shell sessions, whose welcome banner is
+   *  printed in milliseconds) can still replay the initial state. */
+  recentPtyBytes: Buffer;
 }
+
+const RECENT_PTY_CAP = 1_000_000;
 
 /** Default idle threshold for auto-pause. Per-project override (F11.4)
  *  comes later; for now a single global value. Override at runtime
@@ -131,6 +139,7 @@ export class SessionManager {
   constructor() {
     this.backends = {
       'claude-code': new ClaudeCodeBackend(),
+      'shell':       new ShellBackend(),
     } as unknown as Record<AgentBackendId, AgentBackend>;
   }
 
@@ -225,24 +234,36 @@ export class SessionManager {
     maxAgeMs?: number;
     limit?: number;
   } = {}): Promise<void> {
-    const maxAge = opts.maxAgeMs ?? 24 * 60 * 60 * 1000;
+    // 30-minute window catches typical "quit then restart" cycles.
+    // Older sessions are treated as "the user let them die" and stay
+    // ended. Override for tests; reconciled IDs were a 1:1 list of
+    // sessions we KNOW were live at quit time, but we no longer scope
+    // by them because shell sessions that ended cleanly via SIGTERM
+    // get their markExited written to DB BEFORE app close — so they're
+    // already 'done' at next boot and reconcile doesn't see them.
+    const maxAge = opts.maxAgeMs ?? 30 * 60 * 1000;
     const limit = opts.limit ?? 10;
     const now = Date.now();
     let rows: {
       id: string;
+      backend_id: string;
       claude_session_id: string | null;
       worktree_path: string;
       status: string;
     }[];
     try {
+      // Include shell sessions (which have no claude_session_id by
+      // design) so the user's terminals reappear after restart with a
+      // fresh shell. Claude sessions still need a claude_session_id
+      // to attempt --resume — otherwise we just fall through to the
+      // respawn branch below.
       if (opts.candidateIds && opts.candidateIds.length > 0) {
         const placeholders = opts.candidateIds.map(() => '?').join(',');
         rows = getDatabase()
           .prepare(
-            `SELECT id, claude_session_id, worktree_path, status
+            `SELECT id, backend_id, claude_session_id, worktree_path, status
                FROM sessions
               WHERE id IN (${placeholders})
-                AND claude_session_id IS NOT NULL
                 AND ended_at > ?
               ORDER BY ended_at DESC
               LIMIT ?`
@@ -251,10 +272,9 @@ export class SessionManager {
       } else {
         rows = getDatabase()
           .prepare(
-            `SELECT id, claude_session_id, worktree_path, status
+            `SELECT id, backend_id, claude_session_id, worktree_path, status
                FROM sessions
               WHERE status IN ('done', 'errored')
-                AND claude_session_id IS NOT NULL
                 AND ended_at > ?
               ORDER BY ended_at DESC
               LIMIT ?`
@@ -266,15 +286,15 @@ export class SessionManager {
     }
 
     for (const r of rows) {
-      // No transcript == the user never submitted a prompt last run.
-      // `claude --resume <id>` would reject the id, so we can't restore
-      // the conversation — but the user's expectation is "my session
-      // is still here". Respawn fresh in the same worktree so the
-      // chip stays alive instead of dead-ending with "Session ended".
-      // The new SessionStart will overwrite claude_session_id with
-      // the new conversation's id; the user just sees a fresh prompt.
-      if (!r.claude_session_id ||
-          !claudeTranscriptExists(r.worktree_path, r.claude_session_id)) {
+      // Shell sessions have nothing to restore — just respawn a fresh
+      // pty at the same cwd. Same for Claude sessions whose transcript
+      // is gone (the conversation can't be reloaded).
+      const shellSession = r.backend_id === 'shell';
+      const needsRespawn =
+        shellSession ||
+        !r.claude_session_id ||
+        !claudeTranscriptExists(r.worktree_path, r.claude_session_id);
+      if (needsRespawn) {
         try {
           await this.respawn(r.id);
         } catch (err) {
@@ -469,7 +489,12 @@ export class SessionManager {
 
       // Make the session visible to the hook handler IMMEDIATELY,
       // before any IO that could race against SessionStart firing.
-      this.live.set(sessionId, { meta: session, handle, lastIdleAt: null });
+      this.live.set(sessionId, {
+        meta: session,
+        handle,
+        lastIdleAt: null,
+        recentPtyBytes: Buffer.alloc(0),
+      });
 
       // Insert OR revive (resume): on conflict, restore the row.
       // We also update skip_permissions on conflict because the user
@@ -502,6 +527,19 @@ export class SessionManager {
 
       // Wire pty → renderer via the dedicated pty.data channel.
       handle.onData((chunk) => {
+        // Stash a copy in the recent-bytes ring so a TerminalPane that
+        // mounts AFTER pty data started flowing (very common for shell
+        // sessions, whose prompt is printed in ms) can still replay
+        // the initial state via scrollback.load.
+        const live = this.live.get(sessionId);
+        if (live) {
+          live.recentPtyBytes = Buffer.concat([live.recentPtyBytes, chunk]);
+          if (live.recentPtyBytes.length > RECENT_PTY_CAP) {
+            live.recentPtyBytes = live.recentPtyBytes.subarray(
+              live.recentPtyBytes.length - RECENT_PTY_CAP
+            );
+          }
+        }
         const frame = {
           sessionId,
           data: chunk.toString('base64'),
@@ -846,6 +884,13 @@ export class SessionManager {
     return [...this.live.values()].map((l) => l.meta);
   }
 
+  /** Snapshot of recent pty bytes for `sessionId`, used by
+   *  scrollback.load as a fallback when no disk scrollback exists
+   *  yet. Returns null if the session isn't live. */
+  getRecentPtyBytes(sessionId: string): Buffer | null {
+    return this.live.get(sessionId)?.recentPtyBytes ?? null;
+  }
+
   /** Re-stamp display_order for the given sessions in order. The
    *  renderer scopes this per-project, so we don't enforce a single
    *  cross-project sequence. */
@@ -891,22 +936,6 @@ export class SessionManager {
       .prepare('SELECT tokens_in, tokens_out FROM sessions WHERE id = ?')
       .get(sessionId) as { tokens_in: number; tokens_out: number } | undefined;
     if (prior && prior.tokens_in === tokensIn && prior.tokens_out === tokensOut) return;
-
-    // Persist a timestamped delta row so the plan-usage panel can
-    // compute rolling 5h / 7d windows without re-parsing transcripts
-    // each tick (PRD F11.3). Deltas can briefly be negative if Claude
-    // compacts the transcript — clamp at 0 to avoid funny sums.
-    const inDelta = Math.max(0, tokensIn - (prior?.tokens_in ?? 0));
-    const outDelta = Math.max(0, tokensOut - (prior?.tokens_out ?? 0));
-    if (inDelta > 0 || outDelta > 0) {
-      try {
-        getDatabase()
-          .prepare(
-            'INSERT INTO token_usage_events (session_id, ts, tokens_in, tokens_out) VALUES (?, ?, ?, ?)'
-          )
-          .run(sessionId, Date.now(), inDelta, outDelta);
-      } catch { /* best-effort — usage tracking never blocks the agent */ }
-    }
 
     try {
       getDatabase()

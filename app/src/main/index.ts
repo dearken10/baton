@@ -23,7 +23,6 @@ import { initDatabase, closeDatabase } from './database/index.js';
 import { getSessionManager } from './services/sessionManager.js';
 import { addProject } from './services/projectStore.js';
 import { startNotifier } from './services/notifier.js';
-import { scanTranscripts } from './services/globalUsageScanner.js';
 
 /**
  * Per PRD NF6: tight CSP in production. In dev we relax it just
@@ -93,13 +92,13 @@ function createWindow(): void {
   // is the "default resume" behaviour — sessions don't tombstone
   // across an app restart; they pick back up automatically.
   mainWindow.webContents.once('did-finish-load', () => {
-    if (reconciledSessionIds.length === 0) return;
     setTimeout(() => {
       void getSessionManager()
-        .autoResumeRecent({ candidateIds: reconciledSessionIds })
+        .autoResumeRecent()
         .catch((err) => console.warn('[code24] autoResumeRecent failed:', err));
     }, 800);
   });
+  void reconciledSessionIds; // kept for diagnostics; no longer scopes auto-resume
 
   // CODE24_TEST=1 → after first render, auto-add the project at
   // CODE24_TEST_PATH (default = repo root) and spawn a Claude Code
@@ -213,11 +212,6 @@ app.whenReady().then(() => {
   // transitions into native macOS notifications + dock badge. (PRD F9)
   startNotifier();
 
-  // Global usage scanner runs in the background so the plan-usage
-  // bars (F11.3) reflect Claude work done outside the app too. First
-  // pass on boot, then every 90s.
-  void scanTranscripts();
-  setInterval(() => { void scanTranscripts(); }, 90_000);
 
   createWindow();
 
