@@ -115,16 +115,22 @@ function ProjectBlock(props: {
       </div>
       {sessions.length === 0 ? null : (
         <div className="sessions-list">
-          {sessions.map((s) => (
-            <button
-              key={s.id}
-              className={`session-row ${selectedId === s.id ? 'selected' : ''}`}
-              onClick={() => onSelect(s.id)}
-            >
-              <span className="branch">{s.branch}</span>
-              <span className={`status status-${s.status}`}>{s.status}</span>
-            </button>
-          ))}
+          {sessions.map((s) => {
+            const isEnded = s.status === 'done' || s.status === 'errored';
+            return (
+              <button
+                key={s.id}
+                className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}`}
+                onClick={() => onSelect(s.id)}
+                title={`session ${s.id}`}
+              >
+                <span className="branch">
+                  {s.branch} · <span className="dim">{s.id.slice(0, 6)}</span>
+                </span>
+                <span className={`status status-${s.status}`}>{s.status}</span>
+              </button>
+            );
+          })}
         </div>
       )}
     </div>

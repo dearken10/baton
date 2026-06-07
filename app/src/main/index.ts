@@ -89,17 +89,20 @@ function createWindow(): void {
   // a human at the keyboard. Strictly dev-only.
   if (process.env['CODE24_TEST'] === '1') {
     const target = process.env['CODE24_TEST_PATH'] ?? process.cwd();
+    const sessions = Number(process.env['CODE24_TEST_SESSIONS'] ?? '1');
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         try {
           const p = addProject(target);
           console.log(`[CODE24_TEST] addProject ok: id=${p.id} path=${p.path}`);
-          const s = await getSessionManager().spawn({
-            projectId: p.id,
-            backendId: 'claude-code',
-            cwd: p.path,
-          });
-          console.log(`[CODE24_TEST] spawn ok: session=${s.id} pid=${(s as { id: string }).id}`);
+          for (let i = 0; i < sessions; i++) {
+            const s = await getSessionManager().spawn({
+              projectId: p.id,
+              backendId: 'claude-code',
+              cwd: p.path,
+            });
+            console.log(`[CODE24_TEST] spawn ${i + 1}/${sessions} ok: session=${s.id}`);
+          }
         } catch (err) {
           console.error('[CODE24_TEST] failed:', err);
         }
@@ -176,6 +179,11 @@ app.whenReady().then(() => {
 
   // Initialise SQLite — F2.4 / F12.3 / NF4 (crash recovery substrate).
   initDatabase();
+
+  // Sessions from previous runs are still flagged as `running` in
+  // SQLite — mark them as ended so the radar doesn't lie on reopen.
+  // (PRD F2.4 restore must never leave stale live-status rows.)
+  getSessionManager().reconcileStaleSessions();
 
   // Wire the control-channel IPC bus before the window opens so the
   // renderer can call ping/meta/session.list immediately on mount.

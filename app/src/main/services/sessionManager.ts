@@ -55,6 +55,68 @@ export class SessionManager {
     this.hooksReady = true;
   }
 
+  /**
+   * Boot housekeeping: SQLite may still have sessions marked
+   * `running` / `needs-input` / `idle` from before the app was last
+   * closed. Their pty processes are gone — mark them ended so the
+   * UI doesn't lie. (PRD F2.4 says restore must never leave stale
+   * state.)
+   */
+  reconcileStaleSessions(): void {
+    try {
+      const now = Date.now();
+      getDatabase()
+        .prepare(
+          `UPDATE sessions
+             SET status = 'done',
+                 ended_at = COALESCE(ended_at, ?)
+           WHERE status IN ('running', 'needs-input', 'idle', 'paused', 'disconnected')`
+        )
+        .run(now);
+    } catch {
+      // best-effort — never block boot
+    }
+  }
+
+  /**
+   * All sessions known to SQLite + live in-memory state. Live rows
+   * win because they're authoritative for status while the app is
+   * running. Ordered most-recently-started first.
+   */
+  listAll(): Session[] {
+    const rows = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, branch, worktree_path, status,
+                started_at, ended_at, tokens_in, tokens_out, last_summary
+           FROM sessions
+          ORDER BY started_at DESC`
+      )
+      .all() as {
+        id: string; project_id: string; backend_id: string;
+        branch: string; worktree_path: string; status: string;
+        started_at: number; ended_at: number | null;
+        tokens_in: number; tokens_out: number; last_summary: string | null;
+      }[];
+
+    return rows.map((r) => {
+      const live = this.live.get(r.id);
+      if (live) return live.meta;
+      return {
+        id: r.id,
+        projectId: r.project_id,
+        backendId: r.backend_id as Session['backendId'],
+        branch: r.branch,
+        worktreePath: r.worktree_path,
+        status: r.status as Session['status'],
+        startedAt: r.started_at,
+        endedAt: r.ended_at,
+        tokensIn: r.tokens_in,
+        tokensOut: r.tokens_out,
+        lastSummary: r.last_summary,
+      };
+    });
+  }
+
   async spawn(opts: {
     projectId: string;
     backendId: AgentBackendId;

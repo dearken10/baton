@@ -207,7 +207,10 @@ button {
   border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
 }
+.session-row.ended { opacity: 0.7; }
+.session-row.ended .branch { color: var(--text-dim); }
 .session-row:hover { background: var(--bg-2); }
+.session-row .dim { color: var(--text-faint); font-weight: 400; }
 .session-row .branch {
   flex: 1;
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
@@ -243,7 +246,8 @@ button {
   flex: 0 0 auto;
 }
 .conv-head .title { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.conv-body { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.terminal-slot { flex: 1; min-height: 0; flex-direction: column; }
 .terminal-host {
   flex: 1;
   min-height: 0;

@@ -49,7 +49,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'project.add': (req) => ({ project: addProject(req.path) }),
   'project.list': () => ({ projects: listProjects() }),
 
-  'session.list': () => ({ sessions: getSessionManager().list() }),
+  'session.list': () => ({ sessions: getSessionManager().listAll() }),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
