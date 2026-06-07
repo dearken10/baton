@@ -127,9 +127,17 @@ export function LeftColumn(): JSX.Element {
       );
       return;
     }
-    if (s.status !== 'done' && s.status !== 'errored') {
-      alert('Stop this session before renaming — files are in use.');
-      return;
+    const isLive = s.status !== 'done' && s.status !== 'errored';
+    if (isLive) {
+      const ok = window.confirm(
+        [
+          'This session is still running and Claude has files open in the worktree.',
+          'To rename, code24 will stop the session first (you can resume it after).',
+          '',
+          'Continue?',
+        ].join('\n')
+      );
+      if (!ok) return;
     }
     const raw = window.prompt(
       'New branch name for this worktree (e.g. tts/fix-retries):',
@@ -140,6 +148,12 @@ export function LeftColumn(): JSX.Element {
     if (!branch || branch === s.branch) return;
     setBusy(true);
     try {
+      if (isLive) {
+        await window.code24.call('session.kill', { sessionId: s.id });
+        // Wait for the exit handler to flip the row to done/errored and
+        // free file handles before we move the worktree dir.
+        await new Promise((r) => setTimeout(r, 800));
+      }
       await window.code24.call('session.rename', {
         sessionId: s.id,
         newBranchName: branch,
@@ -266,7 +280,9 @@ function ProjectBlock(props: {
             const isWorktreeSession =
               s.worktreePath !== project.path &&
               s.worktreePath.startsWith(project.path);
-            const canRename = isEnded && isWorktreeSession;
+            // Rename is shown for ALL worktree sessions; for live ones
+            // the handler will offer to stop the session first.
+            const canRename = isWorktreeSession;
             return (
               <div
                 key={s.id}
