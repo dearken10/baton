@@ -50,7 +50,11 @@ export function addProject(absolutePath: string): Project {
 
 export function listProjects(): Project[] {
   const rows = getDatabase()
-    .prepare('SELECT id, path, name, added_at FROM projects ORDER BY added_at ASC')
+    .prepare(
+      `SELECT id, path, name, added_at
+         FROM projects
+        ORDER BY display_order ASC, added_at ASC`
+    )
     .all() as {
     id: string;
     path: string;
@@ -63,6 +67,30 @@ export function listProjects(): Project[] {
     name: r.name,
     addedAt: r.added_at,
   }));
+}
+
+/** Remove a project. Sessions cascade-delete via the FK. Caller is
+ *  expected to kill any live ptys beforehand via SessionManager. */
+export function removeProject(id: string): { sessionIds: string[] } {
+  const sessionIds = (getDatabase()
+    .prepare('SELECT id FROM sessions WHERE project_id = ?')
+    .all(id) as { id: string }[]).map((r) => r.id);
+  getDatabase().prepare('DELETE FROM projects WHERE id = ?').run(id);
+  emit({ type: 'project.removed', projectId: id });
+  return { sessionIds };
+}
+
+/** Persist a new project ordering. The renderer sends the IDs in the
+ *  order it wants; we just stamp display_order = index. */
+export function reorderProjects(orderedIds: string[]): void {
+  const stmt = getDatabase().prepare(
+    'UPDATE projects SET display_order = ? WHERE id = ?'
+  );
+  const tx = getDatabase().transaction((ids: string[]) => {
+    ids.forEach((id, i) => stmt.run(i, id));
+  });
+  tx(orderedIds);
+  emit({ type: 'project.reordered', orderedIds });
 }
 
 export function getProject(id: string): Project | undefined {

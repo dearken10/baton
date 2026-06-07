@@ -85,6 +85,15 @@ const ProjectAddResponse = z.object({ project: Project });
 const ProjectListResponse = z.object({ projects: z.array(Project) });
 const ProjectPickResponse = z.object({ path: z.string().nullable() });
 
+const ProjectRemoveRequest = z.object({ projectId: ProjectId });
+const ProjectRemoveResponse = z.object({ ok: z.literal(true) });
+
+const ProjectReorderRequest = z.object({ orderedIds: z.array(ProjectId).min(1) });
+const ProjectReorderResponse = z.object({ ok: z.literal(true) });
+
+const SessionReorderRequest = z.object({ orderedIds: z.array(SessionId).min(1) });
+const SessionReorderResponse = z.object({ ok: z.literal(true) });
+
 const SessionListResponse = z.object({ sessions: z.array(Session) });
 
 /** Rolling token usage windows for the plan-usage indicator (F11.3).
@@ -405,6 +414,9 @@ export const ControlVerbs = {
   'project.pickFolder': { request: Empty, response: ProjectPickResponse },
   'project.add':        { request: ProjectAddRequest, response: ProjectAddResponse },
   'project.list':       { request: Empty, response: ProjectListResponse },
+  'project.remove':     { request: ProjectRemoveRequest, response: ProjectRemoveResponse },
+  'project.reorder':    { request: ProjectReorderRequest, response: ProjectReorderResponse },
+  'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
   'session.list':   { request: Empty, response: SessionListResponse },
   'usage.getStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
@@ -463,6 +475,21 @@ const ProjectAddedEvent = EventEnvelope.extend({
   project: Project,
 });
 
+const ProjectRemovedEvent = EventEnvelope.extend({
+  type: z.literal('project.removed'),
+  projectId: ProjectId,
+});
+
+const ProjectReorderedEvent = EventEnvelope.extend({
+  type: z.literal('project.reordered'),
+  orderedIds: z.array(ProjectId),
+});
+
+const SessionReorderedEvent = EventEnvelope.extend({
+  type: z.literal('session.reordered'),
+  orderedIds: z.array(SessionId),
+});
+
 const SessionSpawnedEvent = EventEnvelope.extend({
   type: z.literal('session.spawned'),
   session: Session,
@@ -517,6 +544,9 @@ const SessionRefreshedEvent = EventEnvelope.extend({
 
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
+  ProjectRemovedEvent,
+  ProjectReorderedEvent,
+  SessionReorderedEvent,
   SessionSpawnedEvent,
   SessionStatusChangedEvent,
   SessionSummarizedEvent,

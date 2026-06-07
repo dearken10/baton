@@ -330,7 +330,7 @@ export class SessionManager {
                 started_at, ended_at, tokens_in, tokens_out, last_summary,
                 claude_session_id, skip_permissions
            FROM sessions
-          ORDER BY started_at DESC`
+          ORDER BY display_order ASC, started_at ASC`
       )
       .all() as {
         id: string; project_id: string; backend_id: string;
@@ -844,6 +844,20 @@ export class SessionManager {
 
   list(): Session[] {
     return [...this.live.values()].map((l) => l.meta);
+  }
+
+  /** Re-stamp display_order for the given sessions in order. The
+   *  renderer scopes this per-project, so we don't enforce a single
+   *  cross-project sequence. */
+  reorderSessions(orderedIds: string[]): void {
+    const stmt = getDatabase().prepare(
+      'UPDATE sessions SET display_order = ? WHERE id = ?'
+    );
+    const tx = getDatabase().transaction((ids: string[]) => {
+      ids.forEach((id, i) => stmt.run(i, id));
+    });
+    tx(orderedIds);
+    emit({ type: 'session.reordered', orderedIds });
   }
 
   /**

@@ -16,11 +16,29 @@ function randomHex(n: number): string {
 export function LeftColumn(): JSX.Element {
   const projectsRecord = useAppStore((s) => s.projects);
   const sessionsRecord = useAppStore((s) => s.sessions);
+  const projectOrder = useAppStore((s) => s.projectOrder);
+  const sessionOrder = useAppStore((s) => s.sessionOrder);
   const selectedId = useAppStore((s) => s.selectedSessionId);
   const selectSession = useAppStore((s) => s.selectSession);
 
-  const projects = useMemo(() => Object.values(projectsRecord), [projectsRecord]);
-  const sessions = useMemo(() => Object.values(sessionsRecord), [sessionsRecord]);
+  // Apply display_order to projects + sessions. Items missing from
+  // the order map (e.g. just added) fall to the end, in insertion order.
+  const projects = useMemo(() => {
+    const all = Object.values(projectsRecord);
+    return all.slice().sort((a, b) => {
+      const oa = projectOrder[a.id] ?? Number.MAX_SAFE_INTEGER;
+      const ob = projectOrder[b.id] ?? Number.MAX_SAFE_INTEGER;
+      return oa - ob;
+    });
+  }, [projectsRecord, projectOrder]);
+  const sessions = useMemo(() => {
+    const all = Object.values(sessionsRecord);
+    return all.slice().sort((a, b) => {
+      const oa = sessionOrder[a.id] ?? Number.MAX_SAFE_INTEGER;
+      const ob = sessionOrder[b.id] ?? Number.MAX_SAFE_INTEGER;
+      return oa - ob;
+    });
+  }, [sessionsRecord, sessionOrder]);
   const sessionsByProject = useMemo(() => {
     const map: Record<string, Session[]> = {};
     for (const s of sessions) {
@@ -28,6 +46,52 @@ export function LeftColumn(): JSX.Element {
     }
     return map;
   }, [sessions]);
+
+  /** Generic insert-before reorder. Computes the new full ordering
+   *  from `items` (current display order) by moving `fromId` to sit
+   *  in front of `beforeId`, then asks the backend to persist it. */
+  function reorder<T extends { id: string }>(
+    items: T[],
+    fromId: string,
+    beforeId: string,
+    verb: 'project.reorder' | 'session.reorder',
+  ): void {
+    if (fromId === beforeId) return;
+    const fromIdx = items.findIndex((x) => x.id === fromId);
+    if (fromIdx < 0) return;
+    const arr = items.slice();
+    const [moved] = arr.splice(fromIdx, 1);
+    if (!moved) return;
+    const insertAt = arr.findIndex((x) => x.id === beforeId);
+    if (insertAt < 0) arr.push(moved);
+    else arr.splice(insertAt, 0, moved);
+    const ids = arr.map((x) => x.id);
+    void window.code24.call(verb, { orderedIds: ids }).catch(() => { /* best-effort */ });
+  }
+  const reorderProjects = (fromId: string, beforeId: string): void =>
+    reorder(projects, fromId, beforeId, 'project.reorder');
+  const reorderSessionsForProject = (projectId: string, fromId: string, beforeId: string): void => {
+    const list = sessionsByProject[projectId] ?? [];
+    reorder(list, fromId, beforeId, 'session.reorder');
+  };
+
+  async function removeProjectFromList(p: Project): Promise<void> {
+    const sCount = (sessionsByProject[p.id] ?? []).length;
+    const ok = window.confirm(
+      `Remove project "${p.name}" from code24?\n\n`
+      + `This deletes ${sCount} session row${sCount === 1 ? '' : 's'} from the app.\n`
+      + 'The project directory + any worktree directories on disk are NOT touched.'
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await window.code24.call('project.remove', { projectId: p.id });
+    } catch (err) {
+      alert(`Remove failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   const [busy, setBusy] = useState(false);
   const [worktreeDialogProject, setWorktreeDialogProject] =
@@ -256,6 +320,12 @@ export function LeftColumn(): JSX.Element {
               onResume={resumeSession}
               onRename={renameSession}
               onDelete={deleteSession}
+              onGetInfo={() => window.alert(`${p.name}\n\n${p.path}`)}
+              onRemoveProject={() => void removeProjectFromList(p)}
+              onReorderProjects={reorderProjects}
+              onReorderSessions={(fromId, beforeId) =>
+                reorderSessionsForProject(p.id, fromId, beforeId)
+              }
               busy={busy}
             />
           ))
@@ -272,7 +342,7 @@ export function LeftColumn(): JSX.Element {
   );
 }
 
-function ProjectBlock(props: {
+interface ProjectBlockProps {
   project: Project;
   sessions: Session[];
   selectedId: string | null;
@@ -282,19 +352,59 @@ function ProjectBlock(props: {
   onResume: (id: string) => void;
   onRename: (s: Session) => void;
   onDelete: (s: Session) => void;
+  onGetInfo: () => void;
+  onRemoveProject: () => void;
+  onReorderProjects: (fromId: string, beforeId: string) => void;
+  onReorderSessions: (fromId: string, beforeId: string) => void;
   busy: boolean;
-}): JSX.Element {
-  const { project, sessions, selectedId, onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete, busy } = props;
+}
+
+/** HTML5 drag id markers used so we can tell project drags from
+ *  session drags on drop — text/plain alone wouldn't distinguish. */
+const DRAG_PROJECT = 'application/x-code24-project';
+const DRAG_SESSION = 'application/x-code24-session';
+
+function ProjectBlock(props: ProjectBlockProps): JSX.Element {
+  const {
+    project, sessions, selectedId,
+    onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete,
+    onGetInfo, onRemoveProject, onReorderProjects, onReorderSessions,
+    busy,
+  } = props;
+  const [isDragOver, setDragOver] = useState(false);
+
   return (
-    <div className="project-block">
+    <div
+      className={`project-block${isDragOver ? ' drag-over' : ''}`}
+      draggable={true}
+      onDragStart={(e) => {
+        e.dataTransfer.setData(DRAG_PROJECT, project.id);
+        // text/plain fallback for browsers that ignore the custom MIME.
+        e.dataTransfer.setData('text/plain', project.id);
+        e.dataTransfer.effectAllowed = 'move';
+      }}
+      onDragOver={(e) => {
+        if (!e.dataTransfer.types.includes(DRAG_PROJECT)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        setDragOver(false);
+        const fromId = e.dataTransfer.getData(DRAG_PROJECT);
+        if (!fromId) return;
+        e.preventDefault();
+        onReorderProjects(fromId, project.id);
+      }}
+    >
       <div className="project-head">
         <span className="project-name" title={project.path}>{project.name}</span>
         <SpawnMenu
           onSpawn={onSpawn}
           onSpawnInWorktree={onSpawnInWorktree}
-          onGetInfo={() => {
-            window.alert(`${project.name}\n\n${project.path}`);
-          }}
+          onGetInfo={onGetInfo}
+          onRemoveProject={onRemoveProject}
           busy={busy}
         />
       </div>
@@ -318,6 +428,26 @@ function ProjectBlock(props: {
                 className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}`}
                 onClick={onClick}
                 title={canResume ? 'Click to resume this Claude session' : `session ${s.id}`}
+                draggable={true}
+                onDragStart={(e) => {
+                  e.stopPropagation(); // don't trigger project drag
+                  e.dataTransfer.setData(DRAG_SESSION, s.id);
+                  e.dataTransfer.setData('text/plain', s.id);
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+                onDragOver={(e) => {
+                  if (!e.dataTransfer.types.includes(DRAG_SESSION)) return;
+                  e.stopPropagation();
+                  e.preventDefault();
+                  e.dataTransfer.dropEffect = 'move';
+                }}
+                onDrop={(e) => {
+                  const fromId = e.dataTransfer.getData(DRAG_SESSION);
+                  if (!fromId) return;
+                  e.stopPropagation();
+                  e.preventDefault();
+                  onReorderSessions(fromId, s.id);
+                }}
               >
                 <div className="session-row-main">
                   <span className="branch">{s.branch}</span>
@@ -421,6 +551,7 @@ function SpawnMenu(props: {
   onSpawn: () => void;
   onSpawnInWorktree: () => void;
   onGetInfo: () => void;
+  onRemoveProject: () => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -486,6 +617,17 @@ function SpawnMenu(props: {
             <span className="spawn-menu-title">Get Info</span>
             <span className="spawn-menu-sub">
               Show the project's folder path.
+            </span>
+          </button>
+          <button
+            className="spawn-menu-item danger"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onRemoveProject(); }}
+          >
+            <span className="spawn-menu-title">Remove project</span>
+            <span className="spawn-menu-sub">
+              Drops the project + its session rows from code24. Files
+              on disk are untouched.
             </span>
           </button>
         </div>

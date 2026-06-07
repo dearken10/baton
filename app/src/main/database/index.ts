@@ -118,6 +118,14 @@ function runMigrations(d: Database.Database): void {
     // already migrated
   }
 
+  // display_order on projects + sessions for drag-reorder.
+  try {
+    d.exec('ALTER TABLE projects ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0');
+  } catch { /* already migrated */ }
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0');
+  } catch { /* already migrated */ }
+
   // One-time recount: until v2, tokens_in summed input + cache_creation
   // + cache_read. Cache reads are effectively free and shouldn't count
   // 1:1 toward plan limits, so we wipe + rescan with the new formula.

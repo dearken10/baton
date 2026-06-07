@@ -63,6 +63,10 @@ export interface AppState {
   bootStartedAt: number;
   projects: Record<string, Project>;
   sessions: Record<string, Session>;
+  /** Render order for project / session lists (drag-to-reorder).
+   *  Keyed by id → integer position. Lower = earlier in the list. */
+  projectOrder: Record<string, number>;
+  sessionOrder: Record<string, number>;
   selectedSessionId: string | null;
   /** Per-session editor state. Keyed by session id. */
   editorBySession: Record<string, EditorState>;
@@ -88,19 +92,29 @@ export const useAppStore = create<AppState>()(
     bootStartedAt: Date.now(),
     projects: {},
     sessions: {},
+    projectOrder: {},
+    sessionOrder: {},
     selectedSessionId: null,
     editorBySession: loadPersisted(),
 
     loadProjects: (projects) =>
       set((s) => {
         s.projects = {};
-        for (const p of projects) s.projects[p.id] = p;
+        s.projectOrder = {};
+        projects.forEach((p, i) => {
+          s.projects[p.id] = p;
+          s.projectOrder[p.id] = i;
+        });
       }),
 
     loadSessions: (sessions) =>
       set((s) => {
         s.sessions = {};
-        for (const x of sessions) s.sessions[x.id] = x;
+        s.sessionOrder = {};
+        sessions.forEach((x, i) => {
+          s.sessions[x.id] = x;
+          s.sessionOrder[x.id] = i;
+        });
         // Garbage-collect editor state for sessions that no longer
         // exist (deleted while the app was closed).
         const live = new Set(sessions.map((x) => x.id));
@@ -114,7 +128,31 @@ export const useAppStore = create<AppState>()(
         switch (event.type) {
           case 'project.added':
             s.projects[event.project.id] = event.project;
+            if (!(event.project.id in s.projectOrder)) {
+              s.projectOrder[event.project.id] = Object.keys(s.projects).length;
+            }
             break;
+          case 'project.removed': {
+            delete s.projects[event.projectId];
+            delete s.projectOrder[event.projectId];
+            for (const id of Object.keys(s.sessions)) {
+              if (s.sessions[id]?.projectId === event.projectId) {
+                delete s.sessions[id];
+                if (s.selectedSessionId === id) s.selectedSessionId = null;
+              }
+            }
+            break;
+          }
+          case 'project.reordered': {
+            s.projectOrder = {};
+            event.orderedIds.forEach((id, i) => { s.projectOrder[id] = i; });
+            break;
+          }
+          case 'session.reordered': {
+            s.sessionOrder = {};
+            event.orderedIds.forEach((id, i) => { s.sessionOrder[id] = i; });
+            break;
+          }
           case 'session.spawned':
             s.sessions[event.session.id] = event.session;
             if (!s.selectedSessionId) s.selectedSessionId = event.session.id;

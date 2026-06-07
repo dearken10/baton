@@ -29,7 +29,7 @@ import {
   type RequestOf,
   type ResponseOf,
 } from '../../shared/ipc.js';
-import { addProject, listProjects, getProject } from '../services/projectStore.js';
+import { addProject, listProjects, getProject, removeProject, reorderProjects } from '../services/projectStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readGitStatus } from '../services/worktreeReader.js';
@@ -65,6 +65,24 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'project.add': (req) => ({ project: addProject(req.path) }),
   'project.list': () => ({ projects: listProjects() }),
+  'project.remove': async (req) => {
+    // Kill any live ptys for sessions in this project first so they
+    // don't keep running orphaned after the rows disappear.
+    const mgr = getSessionManager();
+    for (const s of mgr.listAll().filter((x) => x.projectId === req.projectId)) {
+      try { await mgr.delete(s.id, { removeWorktree: false }); } catch { /* best-effort */ }
+    }
+    removeProject(req.projectId);
+    return { ok: true as const };
+  },
+  'project.reorder': (req) => {
+    reorderProjects(req.orderedIds);
+    return { ok: true as const };
+  },
+  'session.reorder': (req) => {
+    getSessionManager().reorderSessions(req.orderedIds);
+    return { ok: true as const };
+  },
 
   'session.list': () => ({ sessions: getSessionManager().listAll() }),
   'usage.getStats': async () => {
