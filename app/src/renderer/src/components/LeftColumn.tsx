@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { Project, Session } from '@shared/ipc.js';
+import { NewWorktreeDialog } from './NewWorktreeDialog.js';
 
 function randomHex(n: number): string {
   const arr = new Uint8Array(Math.ceil(n / 2));
@@ -27,6 +28,9 @@ export function LeftColumn(): JSX.Element {
   }, [sessions]);
 
   const [busy, setBusy] = useState(false);
+  const [worktreeDialogProject, setWorktreeDialogProject] =
+    useState<{ id: string; name: string } | null>(null);
+  const [worktreeDefault, setWorktreeDefault] = useState('');
 
   async function addProject(): Promise<void> {
     setBusy(true);
@@ -68,26 +72,30 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
-  async function spawnInWorktree(projectId: string): Promise<void> {
-    // Pre-fill a "wip-<6 hex>" default so the user can press Enter to
-    // accept, or type a real branch name (e.g. tts/fix-retries) if
-    // they have one in mind. Once the LLM summarizer is wired, we'll
-    // suggest a name based on the user's first prompt (PRD F2.2).
-    const suggestion = `wip-${randomHex(6)}`;
-    const raw = window.prompt(
-      'New worktree branch name (Enter to accept, or type a real branch like tts/fix-retries):',
-      suggestion
-    );
-    if (raw == null) return;
-    const branch = raw.trim() || suggestion;
+  /**
+   * Opens the worktree dialog with a suggested branch name. The
+   * actual spawn happens in createWorktreeFromDialog when the user
+   * confirms. Splitting it this way means the dialog can stay
+   * mounted and animate / take real input rather than being a blocking
+   * window.prompt.
+   */
+  function openWorktreeDialog(project: Project): void {
+    setWorktreeDefault(`wip-${randomHex(6)}`);
+    setWorktreeDialogProject({ id: project.id, name: project.name });
+  }
+
+  async function createWorktreeFromDialog(branch: string): Promise<void> {
+    const target = worktreeDialogProject;
+    if (!target) return;
     setBusy(true);
     try {
       const { session } = await window.code24.call('session.spawn', {
-        projectId,
+        projectId: target.id,
         backendId: 'claude-code',
         newWorktreeBranch: branch,
       });
       selectSession(session.id);
+      setWorktreeDialogProject(null);
     } catch (err) {
       alert(`Worktree spawn failed: ${String(err)}`);
     } finally {
@@ -138,13 +146,20 @@ export function LeftColumn(): JSX.Element {
               selectedId={selectedId}
               onSelect={selectSession}
               onSpawn={() => spawnAgent(p.id)}
-              onSpawnInWorktree={() => spawnInWorktree(p.id)}
+              onSpawnInWorktree={() => openWorktreeDialog(p)}
               onResume={resumeSession}
               busy={busy}
             />
           ))
         )}
       </div>
+      <NewWorktreeDialog
+        project={worktreeDialogProject}
+        defaultBranch={worktreeDefault}
+        onCancel={() => setWorktreeDialogProject(null)}
+        onCreate={(branch) => void createWorktreeFromDialog(branch)}
+        busy={busy}
+      />
     </aside>
   );
 }
