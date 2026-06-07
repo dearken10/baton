@@ -68,6 +68,14 @@ export class ClaudeCodeBackend implements AgentBackend {
             hooks: [{ type: 'command', command: hookCmd('SessionStart') }],
           },
         ],
+        // Fires the instant the user submits a prompt — gives us the
+        // "Claude is now working" signal even for pure-text responses
+        // (no tool calls would mean PreToolUse never fires).
+        UserPromptSubmit: [
+          {
+            hooks: [{ type: 'command', command: hookCmd('UserPromptSubmit') }],
+          },
+        ],
         PreToolUse: [
           {
             matcher: '*',

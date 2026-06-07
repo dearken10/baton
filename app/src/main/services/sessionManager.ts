@@ -447,6 +447,13 @@ export class SessionManager {
           break;
         }
 
+        case 'UserPromptSubmit':
+          // User hit enter on a prompt — Claude is about to (or already
+          // is) generating a response. This is the only signal that
+          // works for pure-text responses, where no PreToolUse fires.
+          this.setStatus(event.sessionId, 'running');
+          break;
+
         case 'PreToolUse':
           // Claude is actively working — only flip status if we're
           // currently idle (i.e. between turns) so we don't churn
