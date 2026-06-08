@@ -10,6 +10,7 @@ import {
   selectActiveFilePath,
   selectPreviewFilePath,
 } from '../store.js';
+import { useTheme } from '../lib/theme.js';
 
 const MARKDOWN_EXTS = new Set(['md', 'markdown', 'mdx']);
 function isMarkdown(absPath: string): boolean {
@@ -173,6 +174,9 @@ export function EditorPane(): JSX.Element {
   const selectTab = useAppStore((s) => s.selectTab);
   const closeFile = useAppStore((s) => s.closeFile);
   const promoteToSticky = useAppStore((s) => s.promoteToSticky);
+  // Monaco's built-in theme ids. 'vs' = light, 'vs-dark' = dark.
+  const theme = useTheme();
+  const monacoTheme = theme === 'light' ? 'vs' : 'vs-dark';
 
   // Union of files open across ALL sessions. Used by the dispose loop
   // so switching sessions doesn't kill the model of a file that's
@@ -594,7 +598,7 @@ export function EditorPane(): JSX.Element {
                   language={languageFor(pathOf(activeFilePath))}
                   original={activeMeta.diffHead ?? ''}
                   modified={activeMeta.diffWorking ?? ''}
-                  theme="vs-dark"
+                  theme={monacoTheme}
                   options={{
                     fontSize: 12.5,
                     readOnly: true,
@@ -682,7 +686,7 @@ export function EditorPane(): JSX.Element {
             when the active file isn't editable. That preserves the
             per-file models for tab switching. */}
         <div className="editor-monaco" style={{ display: editorVisible ? 'flex' : 'none' }}>
-          <MonacoHost onMount={onEditorMount} />
+          <MonacoHost onMount={onEditorMount} theme={monacoTheme} />
         </div>
       </div>
     </>
@@ -692,15 +696,18 @@ export function EditorPane(): JSX.Element {
 /** Monaco's surface is mounted once. The active model is swapped on
  *  tab change. We pass an empty initial value because we immediately
  *  set the model in onMount. */
-function MonacoHost({ onMount }: { onMount: OnMount }): JSX.Element {
-  // useMemo so React doesn't recreate the Editor element each render.
+function MonacoHost({ onMount, theme }: { onMount: OnMount; theme: string }): JSX.Element {
+  // We intentionally key by `theme` so swapping triggers a remount of
+  // the Editor with the new theme baked in; the model is re-attached
+  // by the active-tab effect. Without remounting, @monaco-editor/react
+  // doesn't always honour a theme prop change after mount.
   const editor = useMemo(() => (
     <Editor
       height="100%"
       defaultLanguage="plaintext"
       defaultValue=""
       onMount={onMount}
-      theme="vs-dark"
+      theme={theme}
       options={{
         fontSize: 12.5,
         minimap: { enabled: false },
@@ -712,7 +719,7 @@ function MonacoHost({ onMount }: { onMount: OnMount }): JSX.Element {
       }}
     />
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ), []);
+  ), [theme]);
   return editor;
 }
 

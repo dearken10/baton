@@ -1,4 +1,5 @@
 import { UsageBars } from './UsageBars.js';
+import { ThemeToggle } from './ThemeToggle.js';
 
 interface Props {
   version: string;
@@ -14,6 +15,7 @@ export function Titlebar({ version }: Props): JSX.Element {
       <div className="meta">v{version}</div>
       <div className="spacer" />
       <UsageBars />
+      <ThemeToggle />
     </header>
   );
 }

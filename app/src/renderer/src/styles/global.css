@@ -22,6 +22,22 @@
   --disconnected: #8b9099;
 }
 
+/* Light theme — same token names, brighter values. Applied via
+   data-theme on <html>, set by lib/theme.ts at module load. */
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-1: #f6f7f9;
+  --bg-2: #eef0f4;
+  --bg-3: #e3e6ec;
+  --border: #d6dae1;
+  --border-2: #bcc2cc;
+  --text: #1a1d22;
+  --text-dim: #5b626d;
+  --text-faint: #818892;
+  --accent: #3a6fd8;
+  --accent-2: #c8d5f3;
+}
+
 * { box-sizing: border-box; }
 
 :focus { outline: none; }
@@ -74,6 +90,26 @@ button {
 .titlebar .brand { font-weight: 600; color: var(--text); }
 .titlebar .meta { color: var(--text-faint); font-size: 11px; }
 .titlebar .spacer { flex: 1; }
+.theme-toggle {
+  margin-left: 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+}
+.theme-toggle:hover {
+  color: var(--text);
+  background: var(--bg-2);
+  border-color: var(--border-2);
+}
 .titlebar .pill {
   padding: 2px 8px;
   border-radius: 999px;
@@ -1067,7 +1103,10 @@ button {
   flex: 1;
   min-height: 0;
   padding: 6px;
-  background: #0a0b0d;
+  /* Matches xterm's theme.background, which is also `--bg`. The
+     xterm viewport/screen are intentionally transparent (rules
+     below), so this is what shows through behind the glyphs. */
+  background: var(--bg);
   overflow: hidden;
 }
 .terminal-host .xterm { height: 100%; }

@@ -8,6 +8,29 @@ import '@xterm/xterm/css/xterm.css';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { useAppStore } from '../store.js';
 import { webUrlTabId } from './EditorPane.js';
+import { getTheme, subscribeTheme, type Theme } from '../lib/theme.js';
+
+function xtermThemeFor(t: Theme): {
+  background: string; foreground: string; cursor: string;
+  cursorAccent: string; selectionBackground: string;
+} {
+  if (t === 'light') {
+    return {
+      background: '#ffffff',
+      foreground: '#1a1d22',
+      cursor: '#3a6fd8',
+      cursorAccent: '#ffffff',
+      selectionBackground: 'rgba(58, 111, 216, 0.20)',
+    };
+  }
+  return {
+    background: '#0a0b0d',
+    foreground: '#e6e8eb',
+    cursor: '#5b8def',
+    cursorAccent: '#0a0b0d',
+    selectionBackground: 'rgba(91, 141, 239, 0.35)',
+  };
+}
 
 /** How often to snapshot the visible terminal to disk. */
 const SCROLLBACK_SAVE_MS = 10_000;
@@ -46,13 +69,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       fontFamily: 'ui-monospace, SF Mono, Menlo, monospace',
       fontSize: 13,
       lineHeight: 1.2,
-      theme: {
-        background: '#0a0b0d',
-        foreground: '#e6e8eb',
-        cursor: '#5b8def',
-        cursorAccent: '#0a0b0d',
-        selectionBackground: 'rgba(91, 141, 239, 0.35)',
-      },
+      theme: xtermThemeFor(getTheme()),
       allowProposedApi: true,
       scrollback: 10000,
       // Handles OSC 8 hyperlinks (the kind Claude Code prints in its
@@ -183,8 +200,21 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     };
     window.addEventListener('resize', onWinResize);
 
+    // Live-restyle on theme toggle. xterm v5+ exposes per-property
+    // setters on `term.options` that notify the active renderer
+    // (including WebGL). Replacing `term.options` wholesale doesn't
+    // always propagate to the WebGL canvas, so we mutate in place +
+    // force a redraw for good measure.
+    const offTheme = subscribeTheme((t) => {
+      try {
+        term.options.theme = xtermThemeFor(t);
+        term.refresh(0, term.rows - 1);
+      } catch { /* ignore — terminal may be tearing down */ }
+    });
+
     return () => {
       window.clearInterval(saveInterval);
+      offTheme();
       // Final snapshot on unmount so the very latest state is
       // captured. Synchronous serialise + fire-and-forget IPC.
       saveSnapshot();
