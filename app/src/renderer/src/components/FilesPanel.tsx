@@ -92,11 +92,19 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
     setCtxMenu({ x: e.clientX, y: e.clientY, absPath, isDir });
   }
 
+  // Drop the lazy-load cache only when the worktree actually changes
+  // (session switch) or after one of our own file ops (rename / move /
+  // delete via localNonce). The parent's 3-second polling refresh
+  // (refreshKey) used to wipe it too, which made depth-4+ expansions
+  // collapse the moment the next poll fired — what looked like
+  // "opens momentarily then collapses" on the second click.
+  useEffect(() => {
+    setExtraChildren({});
+  }, [sessionId, localNonce]);
+
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    // A fresh root invalidates any lazily-loaded subtrees — drop them.
-    setExtraChildren({});
     window.baton
       .call('worktree.fileTree', { sessionId })
       .then((res) => { if (!cancelled) setRoot(res.root); })
