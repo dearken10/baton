@@ -23,9 +23,14 @@ export function LeftColumn(): JSX.Element {
   const selectedId = useAppStore((s) => s.selectedSessionId);
   const selectSession = useAppStore((s) => s.selectSession);
 
+  // Active vs. snoozed view. Snoozed projects are kept out of the
+  // main list so the user can focus; counts on the toggle make sure
+  // they aren't forgotten.
+  const [view, setView] = useState<'active' | 'snoozed'>('active');
+
   // Apply display_order to projects + sessions. Items missing from
   // the order map (e.g. just added) fall to the end, in insertion order.
-  const projects = useMemo(() => {
+  const allProjects = useMemo(() => {
     const all = Object.values(projectsRecord);
     return all.slice().sort((a, b) => {
       const oa = projectOrder[a.id] ?? Number.MAX_SAFE_INTEGER;
@@ -33,6 +38,15 @@ export function LeftColumn(): JSX.Element {
       return oa - ob;
     });
   }, [projectsRecord, projectOrder]);
+  const activeProjects = useMemo(
+    () => allProjects.filter((p) => p.snoozedAt == null),
+    [allProjects],
+  );
+  const snoozedProjects = useMemo(
+    () => allProjects.filter((p) => p.snoozedAt != null),
+    [allProjects],
+  );
+  const projects = view === 'active' ? activeProjects : snoozedProjects;
   const sessions = useMemo(() => {
     const all = Object.values(sessionsRecord);
     return all.slice().sort((a, b) => {
@@ -70,12 +84,31 @@ export function LeftColumn(): JSX.Element {
     const ids = arr.map((x) => x.id);
     void window.baton.call(verb, { orderedIds: ids }).catch(() => { /* best-effort */ });
   }
+  // Reorder always operates on the full project list — display_order
+  // is a single global ordering, even though the UI only shows a
+  // filtered subset (active OR snoozed). This keeps snoozed-vs-active
+  // positions from colliding when items move within one bucket.
   const reorderProjects = (fromId: string, beforeId: string): void =>
-    reorder(projects, fromId, beforeId, 'project.reorder');
+    reorder(allProjects, fromId, beforeId, 'project.reorder');
   const reorderSessionsForProject = (projectId: string, fromId: string, beforeId: string): void => {
     const list = sessionsByProject[projectId] ?? [];
     reorder(list, fromId, beforeId, 'session.reorder');
   };
+
+  async function toggleSnoozeProject(p: Project): Promise<void> {
+    const snoozed = p.snoozedAt == null; // flipping
+    setBusy(true);
+    try {
+      await window.baton.call('project.setSnoozed', {
+        projectId: p.id,
+        snoozed,
+      });
+    } catch (err) {
+      alert(`${snoozed ? 'Snooze' : 'Unsnooze'} failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function removeProjectFromList(p: Project): Promise<void> {
     const sCount = (sessionsByProject[p.id] ?? []).length;
@@ -321,31 +354,73 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  const activeCount = activeProjects.length;
+  const snoozedCount = snoozedProjects.length;
+  // Auto-flip back to active when the user unsnoozes the last item in
+  // the snoozed view — otherwise the snoozed tab disappears and they
+  // end up looking at an empty pane.
+  useEffect(() => {
+    if (view === 'snoozed' && snoozedCount === 0) setView('active');
+  }, [view, snoozedCount]);
+
   return (
     <aside className="col col-left">
       <div className="col-head">
-        <span>Projects</span>
+        <span className="col-head-title">
+          <span>Projects</span>
+          {snoozedCount > 0 || view === 'snoozed' ? (
+            <span className="view-toggle" role="tablist" aria-label="Project view">
+              <button
+                role="tab"
+                aria-selected={view === 'active'}
+                onClick={() => setView('active')}
+              >
+                Active <span className="count">{activeCount}</span>
+              </button>
+              <button
+                role="tab"
+                aria-selected={view === 'snoozed'}
+                onClick={() => setView('snoozed')}
+              >
+                Snoozed <span className="count">{snoozedCount}</span>
+              </button>
+            </span>
+          ) : null}
+        </span>
         <div className="col-head-actions">
-          <OrphansBadge />
-          <button
-            className="add"
-            onClick={addProject}
-            disabled={busy}
-            aria-label="Add project"
-            title="Add project"
-          >
-            +
-          </button>
+          {view === 'active' ? (
+            <>
+              <OrphansBadge />
+              <button
+                className="add"
+                onClick={addProject}
+                disabled={busy}
+                aria-label="Add project"
+                title="Add project"
+              >
+                +
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
       <div className="col-body">
         {projects.length === 0 ? (
-          <div className="empty">
-            <p>No projects yet.</p>
-            <p className="dim">
-              Click <strong>+</strong> above to add your first project folder.
-            </p>
-          </div>
+          view === 'active' ? (
+            <div className="empty">
+              <p>No projects yet.</p>
+              <p className="dim">
+                Click <strong>+</strong> above to add your first project folder.
+              </p>
+            </div>
+          ) : (
+            <div className="empty">
+              <p>No snoozed projects.</p>
+              <p className="dim">
+                Snooze a project from its <strong>⋮</strong> menu to move it here.
+              </p>
+            </div>
+          )
         ) : (
           projects.map((p) => (
             <ProjectBlock
@@ -363,6 +438,7 @@ export function LeftColumn(): JSX.Element {
               onNewTerminal={() => void spawnTerminal(p.id)}
               onRenameProject={() => renameProjectInList(p)}
               onRemoveProject={() => void removeProjectFromList(p)}
+              onToggleSnooze={() => void toggleSnoozeProject(p)}
               onReorderProjects={reorderProjects}
               onReorderSessions={(fromId, beforeId) =>
                 reorderSessionsForProject(p.id, fromId, beforeId)
@@ -414,6 +490,7 @@ interface ProjectBlockProps {
   onNewTerminal: () => void;
   onRenameProject: () => void;
   onRemoveProject: () => void;
+  onToggleSnooze: () => void;
   onReorderProjects: (fromId: string, beforeId: string) => void;
   onReorderSessions: (fromId: string, beforeId: string) => void;
   busy: boolean;
@@ -428,14 +505,15 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, sessions, selectedId,
     onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete,
-    onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onReorderProjects, onReorderSessions,
+    onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
     busy,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
+  const isSnoozed = project.snoozedAt != null;
 
   return (
     <div
-      className={`project-block${isDragOver ? ' drag-over' : ''}`}
+      className={`project-block${isDragOver ? ' drag-over' : ''}${isSnoozed ? ' snoozed' : ''}`}
       draggable={true}
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_PROJECT, project.id);
@@ -459,14 +537,19 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
       }}
     >
       <div className="project-head">
-        <span className="project-name" title={project.path}>{project.name}</span>
+        <span className="project-name" title={project.path}>
+          {project.name}
+          {isSnoozed ? <span className="snooze-meta">snoozed</span> : null}
+        </span>
         <SpawnMenu
+          isSnoozed={isSnoozed}
           onSpawn={onSpawn}
           onSpawnInWorktree={onSpawnInWorktree}
           onGetInfo={onGetInfo}
           onNewTerminal={onNewTerminal}
           onRename={onRenameProject}
           onRemoveProject={onRemoveProject}
+          onToggleSnooze={onToggleSnooze}
           busy={busy}
         />
       </div>
@@ -632,12 +715,14 @@ function SessionRowMenu(props: {
 }
 
 function SpawnMenu(props: {
+  isSnoozed: boolean;
   onSpawn: () => void;
   onSpawnInWorktree: () => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRename: () => void;
   onRemoveProject: () => void;
+  onToggleSnooze: () => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -723,6 +808,20 @@ function SpawnMenu(props: {
             <span className="spawn-menu-title">Rename…</span>
             <span className="spawn-menu-sub">
               Change the display name. Folder on disk isn't renamed.
+            </span>
+          </button>
+          <button
+            className="spawn-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onToggleSnooze(); }}
+          >
+            <span className="spawn-menu-title">
+              {props.isSnoozed ? 'Unsnooze' : 'Snooze'}
+            </span>
+            <span className="spawn-menu-sub">
+              {props.isSnoozed
+                ? 'Move back to the Active list.'
+                : 'Hide from the Active list. Sessions are kept.'}
             </span>
           </button>
           <button

@@ -29,7 +29,7 @@ import {
   type RequestOf,
   type ResponseOf,
 } from '../../shared/ipc.js';
-import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects } from '../services/projectStore.js';
+import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed } from '../services/projectStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
@@ -87,6 +87,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'project.rename': (req) => {
     const project = renameProject(req.projectId, req.newName);
+    return { project };
+  },
+  'project.setSnoozed': (req) => {
+    const project = setProjectSnoozed(req.projectId, req.snoozed);
     return { project };
   },
   'session.reorder': (req) => {

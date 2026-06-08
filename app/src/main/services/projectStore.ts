@@ -32,12 +32,13 @@ export function addProject(absolutePath: string, nameOverride?: string): Project
     .run(id, absolutePath, name, addedAt);
 
   const row = getDatabase()
-    .prepare('SELECT id, path, name, added_at FROM projects WHERE id = ?')
+    .prepare('SELECT id, path, name, added_at, snoozed_at FROM projects WHERE id = ?')
     .get(id) as {
     id: string;
     path: string;
     name: string;
     added_at: number;
+    snoozed_at: number | null;
   };
 
   const project: Project = {
@@ -45,6 +46,7 @@ export function addProject(absolutePath: string, nameOverride?: string): Project
     path: row.path,
     name: row.name,
     addedAt: row.added_at,
+    snoozedAt: row.snoozed_at,
   };
 
   emit({ type: 'project.added', project });
@@ -54,7 +56,7 @@ export function addProject(absolutePath: string, nameOverride?: string): Project
 export function listProjects(): Project[] {
   const rows = getDatabase()
     .prepare(
-      `SELECT id, path, name, added_at
+      `SELECT id, path, name, added_at, snoozed_at
          FROM projects
         ORDER BY display_order ASC, added_at ASC`
     )
@@ -63,12 +65,14 @@ export function listProjects(): Project[] {
     path: string;
     name: string;
     added_at: number;
+    snoozed_at: number | null;
   }[];
   return rows.map((r) => ({
     id: r.id,
     path: r.path,
     name: r.name,
     addedAt: r.added_at,
+    snoozedAt: r.snoozed_at,
   }));
 }
 
@@ -161,9 +165,9 @@ export function reorderProjects(orderedIds: string[]): void {
 
 export function getProject(id: string): Project | undefined {
   const row = getDatabase()
-    .prepare('SELECT id, path, name, added_at FROM projects WHERE id = ?')
+    .prepare('SELECT id, path, name, added_at, snoozed_at FROM projects WHERE id = ?')
     .get(id) as
-    | { id: string; path: string; name: string; added_at: number }
+    | { id: string; path: string; name: string; added_at: number; snoozed_at: number | null }
     | undefined;
   if (!row) return undefined;
   return {
@@ -171,5 +175,20 @@ export function getProject(id: string): Project | undefined {
     path: row.path,
     name: row.name,
     addedAt: row.added_at,
+    snoozedAt: row.snoozed_at,
   };
+}
+
+/** Toggle snooze state. `snoozed=true` stamps snoozed_at = now;
+ *  `snoozed=false` clears it. */
+export function setProjectSnoozed(id: string, snoozed: boolean): Project {
+  const value = snoozed ? Date.now() : null;
+  const res = getDatabase()
+    .prepare('UPDATE projects SET snoozed_at = ? WHERE id = ?')
+    .run(value, id);
+  if (res.changes === 0) throw new Error(`Unknown project: ${id}`);
+  const project = getProject(id);
+  if (!project) throw new Error(`Project disappeared after snooze toggle: ${id}`);
+  emit({ type: 'project.snoozeChanged', project });
+  return project;
 }

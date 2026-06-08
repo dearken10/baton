@@ -110,6 +110,13 @@ function runMigrations(d: Database.Database): void {
     d.exec('ALTER TABLE sessions ADD COLUMN display_order INTEGER NOT NULL DEFAULT 0');
   } catch { /* already migrated */ }
 
+  // snoozed_at = wall-clock ms when the user snoozed this project,
+  // or NULL when active. Snoozed projects live in the "Snoozed" view
+  // in the left column (see LeftColumn.tsx).
+  try {
+    d.exec('ALTER TABLE projects ADD COLUMN snoozed_at INTEGER');
+  } catch { /* already migrated */ }
+
 }
 
 export function getDatabase(): Database.Database {

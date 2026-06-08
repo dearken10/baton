@@ -322,6 +322,53 @@ button {
   align-items: center;
   gap: 6px;
 }
+.col-head-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Active / Snoozed segmented control. Mirrors the visual weight of
+   the orphans badge — small, inline, low-contrast until selected. */
+.view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-2);
+}
+.view-toggle button {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-dim);
+  padding: 2px 7px;
+  background: none;
+}
+.view-toggle button[aria-selected="true"] {
+  background: var(--bg-3);
+  color: var(--text);
+}
+.view-toggle button:hover { color: var(--text); }
+.view-toggle .count {
+  margin-left: 4px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Snoozed project blocks render dimmer + with a subtle dashed
+   border so they don't look identical to live projects. */
+.project-block.snoozed .project-name { color: var(--text-dim); }
+.project-block.snoozed { opacity: 0.85; }
+.snooze-meta {
+  margin-left: 6px;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
 .orphans-badge {
   font-size: 10.5px;
   padding: 2px 7px;

@@ -42,6 +42,10 @@ export const Project = z.object({
   path: z.string(),
   name: z.string(),
   addedAt: z.number(),
+  /** Wall-clock ms when the user snoozed this project, or null when
+   *  active. Snoozed projects render in the left column's "Snoozed"
+   *  view instead of the default "Active" list. */
+  snoozedAt: z.number().nullable(),
 });
 export type Project = z.infer<typeof Project>;
 
@@ -113,6 +117,14 @@ const ProjectRenameRequest = z.object({
   newName: z.string().trim().min(1).max(120),
 });
 const ProjectRenameResponse = z.object({ project: Project });
+
+/** Toggle snoozed/active for a project. Snoozed projects stay in the
+ *  DB with their sessions intact — only the left-column view changes. */
+const ProjectSetSnoozedRequest = z.object({
+  projectId: ProjectId,
+  snoozed: z.boolean(),
+});
+const ProjectSetSnoozedResponse = z.object({ project: Project });
 
 const SessionReorderRequest = z.object({ orderedIds: z.array(SessionId).min(1) });
 const SessionReorderResponse = z.object({ ok: z.literal(true) });
@@ -529,6 +541,7 @@ export const ControlVerbs = {
   'project.remove':     { request: ProjectRemoveRequest, response: ProjectRemoveResponse },
   'project.reorder':    { request: ProjectReorderRequest, response: ProjectReorderResponse },
   'project.rename':     { request: ProjectRenameRequest, response: ProjectRenameResponse },
+  'project.setSnoozed': { request: ProjectSetSnoozedRequest, response: ProjectSetSnoozedResponse },
   'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
   'session.list':   { request: Empty, response: SessionListResponse },
@@ -610,6 +623,11 @@ const ProjectRenamedEvent = EventEnvelope.extend({
   project: Project,
 });
 
+const ProjectSnoozeChangedEvent = EventEnvelope.extend({
+  type: z.literal('project.snoozeChanged'),
+  project: Project,
+});
+
 const SessionReorderedEvent = EventEnvelope.extend({
   type: z.literal('session.reordered'),
   orderedIds: z.array(SessionId),
@@ -672,6 +690,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ProjectRemovedEvent,
   ProjectReorderedEvent,
   ProjectRenamedEvent,
+  ProjectSnoozeChangedEvent,
   SessionReorderedEvent,
   SessionSpawnedEvent,
   SessionStatusChangedEvent,
