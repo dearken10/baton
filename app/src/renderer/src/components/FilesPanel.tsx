@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
 import { FileContextMenu } from './FileContextMenu.js';
+import { PromptDialog } from './PromptDialog.js';
 import { buildFileMenuItems } from './fileOps.js';
 import type { FileTreeNodeT } from '@shared/ipc.js';
 
@@ -38,8 +39,25 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   // Bumped after a file op (rename / duplicate / delete) to re-read
   // the tree without waiting for the parent's refreshKey to tick.
   const [localNonce, setLocalNonce] = useState(0);
+  // Rename dialog state — Electron's renderer doesn't support
+  // window.prompt(), so the menu's "Rename…" routes here.
+  const [renameTarget, setRenameTarget] = useState<{ absPath: string; currentName: string } | null>(null);
   const openInEditor = useAppStore((s) => s.openFile);
   const onChanged = useCallback(() => setLocalNonce((n) => n + 1), []);
+  const onRequestRename = useCallback((absPath: string, currentName: string) => {
+    setRenameTarget({ absPath, currentName });
+  }, []);
+  async function submitRename(newName: string): Promise<void> {
+    const t = renameTarget;
+    setRenameTarget(null);
+    if (!t) return;
+    try {
+      await window.baton.call('file.rename', { absPath: t.absPath, newName });
+      onChanged();
+    } catch (err) {
+      alert(`Rename failed: ${String(err)}`);
+    }
+  }
 
   function openContextMenu(e: React.MouseEvent, absPath: string, isDir: boolean): void {
     e.preventDefault();
@@ -99,8 +117,19 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
             isDir: ctxMenu.isDir,
             openFile: openInEditor,
             onChanged,
+            onRequestRename,
           })}
           onClose={() => setCtxMenu(null)}
+        />
+      ) : null}
+      {renameTarget ? (
+        <PromptDialog
+          title="Rename"
+          label="New name"
+          initialValue={renameTarget.currentName}
+          confirmLabel="Rename"
+          onCancel={() => setRenameTarget(null)}
+          onConfirm={(v) => void submitRename(v)}
         />
       ) : null}
     </div>

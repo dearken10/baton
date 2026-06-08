@@ -3,6 +3,7 @@ import { useAppStore } from '../store.js';
 import { diffTabId } from './EditorPane.js';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { FileContextMenu } from './FileContextMenu.js';
+import { PromptDialog } from './PromptDialog.js';
 import { buildFileMenuItems } from './fileOps.js';
 import type { ResponseOf } from '@shared/ipc.js';
 
@@ -34,6 +35,9 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
   const [commitMsg, setCommitMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; absPath: string } | null>(null);
+  // Rename dialog target — same pattern as FilesPanel (window.prompt
+  // doesn't exist in Electron renderers).
+  const [renameTarget, setRenameTarget] = useState<{ absPath: string; currentName: string } | null>(null);
   const openInEditor = useAppStore((s) => s.openFile);
 
   useEffect(() => {
@@ -314,8 +318,27 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
             isDir: false,
             openFile: openInEditor,
             onChanged: refresh,
+            onRequestRename: (absPath, currentName) =>
+              setRenameTarget({ absPath, currentName }),
           })}
           onClose={() => setCtxMenu(null)}
+        />
+      ) : null}
+      {renameTarget ? (
+        <PromptDialog
+          title="Rename"
+          label="New name"
+          initialValue={renameTarget.currentName}
+          confirmLabel="Rename"
+          onCancel={() => setRenameTarget(null)}
+          onConfirm={(v) => {
+            const t = renameTarget;
+            setRenameTarget(null);
+            void window.baton
+              .call('file.rename', { absPath: t.absPath, newName: v })
+              .then(() => refresh())
+              .catch((err) => alert(`Rename failed: ${String(err)}`));
+          }}
         />
       ) : null}
     </div>

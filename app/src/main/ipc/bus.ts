@@ -29,7 +29,7 @@ import {
   type RequestOf,
   type ResponseOf,
 } from '../../shared/ipc.js';
-import { addProject, listProjects, getProject, removeProject, reorderProjects } from '../services/projectStore.js';
+import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects } from '../services/projectStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readGitStatus } from '../services/worktreeReader.js';
@@ -63,7 +63,13 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     if (res.canceled || res.filePaths.length === 0) return { path: null };
     return { path: res.filePaths[0] ?? null };
   },
-  'project.add': (req) => ({ project: addProject(req.path) }),
+  'project.add': (req) => ({ project: addProject(req.path, req.name) }),
+  'project.create': (req) => ({
+    project: createProject({
+      path: req.path,
+      ...(req.initGit !== undefined ? { initGit: req.initGit } : {}),
+    }),
+  }),
   'project.list': () => ({ projects: listProjects() }),
   'project.remove': async (req) => {
     // Kill any live ptys for sessions in this project first so they
@@ -78,6 +84,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'project.reorder': (req) => {
     reorderProjects(req.orderedIds);
     return { ok: true as const };
+  },
+  'project.rename': (req) => {
+    const project = renameProject(req.projectId, req.newName);
+    return { project };
   },
   'session.reorder': (req) => {
     getSessionManager().reorderSessions(req.orderedIds);

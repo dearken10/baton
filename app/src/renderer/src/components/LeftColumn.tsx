@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
+import { PromptDialog } from './PromptDialog.js';
+import { AddProjectDialog } from './AddProjectDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
 import { formatTokens } from '../lib/format.js';
 
@@ -93,34 +95,54 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  // window.prompt() isn't supported in Electron renderers; we open a
+  // small inline PromptDialog instead. State holds the current project
+  // being renamed (null when the dialog is closed).
+  const [renamingProject, setRenamingProject] = useState<Project | null>(null);
+  function renameProjectInList(p: Project): void {
+    setRenamingProject(p);
+  }
+  async function submitProjectRename(newName: string): Promise<void> {
+    const p = renamingProject;
+    setRenamingProject(null);
+    if (!p) return;
+    setBusy(true);
+    try {
+      await window.baton.call('project.rename', { projectId: p.id, newName });
+    } catch (err) {
+      alert(`Rename failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const [busy, setBusy] = useState(false);
   const [worktreeDialogProject, setWorktreeDialogProject] =
     useState<{ id: string; name: string } | null>(null);
   const [worktreeDefault, setWorktreeDefault] = useState('');
 
-  async function addProject(): Promise<void> {
+  const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
+
+  async function onProjectAdded(project: Project): Promise<void> {
+    setShowAddProjectDialog(false);
+    // Default: spawn an agent in the new project and focus it in
+    // the middle pane so the user can start working immediately.
     setBusy(true);
     try {
-      const { path } = await window.baton.call('project.pickFolder', {});
-      if (!path) return;
-      const { project } = await window.baton.call('project.add', { path });
-      // Default: spawn an agent in the new project and focus it in
-      // the middle pane so the user can start working immediately.
-      try {
-        const { session } = await window.baton.call('session.spawn', {
-          projectId: project.id,
-          backendId: 'claude-code',
-        });
-        selectSession(session.id);
-      } catch (spawnErr) {
-        // Project add succeeded — spawn is a best-effort follow-up.
-        console.warn('[baton] auto-spawn after project.add failed:', spawnErr);
-      }
-    } catch (err) {
-      alert(`Add project failed: ${String(err)}`);
+      const { session } = await window.baton.call('session.spawn', {
+        projectId: project.id,
+        backendId: 'claude-code',
+      });
+      selectSession(session.id);
+    } catch (spawnErr) {
+      console.warn('[baton] auto-spawn after project add failed:', spawnErr);
     } finally {
       setBusy(false);
     }
+  }
+
+  function addProject(): void {
+    setShowAddProjectDialog(true);
   }
 
   async function spawnAgent(projectId: string): Promise<void> {
@@ -339,6 +361,7 @@ export function LeftColumn(): JSX.Element {
               onDelete={deleteSession}
               onGetInfo={() => window.alert(`${p.name}\n\n${p.path}`)}
               onNewTerminal={() => void spawnTerminal(p.id)}
+              onRenameProject={() => renameProjectInList(p)}
               onRemoveProject={() => void removeProjectFromList(p)}
               onReorderProjects={reorderProjects}
               onReorderSessions={(fromId, beforeId) =>
@@ -356,6 +379,23 @@ export function LeftColumn(): JSX.Element {
         onCreate={(branch) => void createWorktreeFromDialog(branch)}
         busy={busy}
       />
+      {renamingProject ? (
+        <PromptDialog
+          title={`Rename project`}
+          label="New name"
+          initialValue={renamingProject.name}
+          confirmLabel="Rename"
+          onCancel={() => setRenamingProject(null)}
+          onConfirm={(v) => void submitProjectRename(v)}
+        />
+      ) : null}
+      {showAddProjectDialog ? (
+        <AddProjectDialog
+          busy={busy}
+          onCancel={() => setShowAddProjectDialog(false)}
+          onAdded={(p) => void onProjectAdded(p)}
+        />
+      ) : null}
     </aside>
   );
 }
@@ -372,6 +412,7 @@ interface ProjectBlockProps {
   onDelete: (s: Session) => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
+  onRenameProject: () => void;
   onRemoveProject: () => void;
   onReorderProjects: (fromId: string, beforeId: string) => void;
   onReorderSessions: (fromId: string, beforeId: string) => void;
@@ -387,7 +428,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, sessions, selectedId,
     onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete,
-    onGetInfo, onNewTerminal, onRemoveProject, onReorderProjects, onReorderSessions,
+    onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onReorderProjects, onReorderSessions,
     busy,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -424,6 +465,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           onSpawnInWorktree={onSpawnInWorktree}
           onGetInfo={onGetInfo}
           onNewTerminal={onNewTerminal}
+          onRename={onRenameProject}
           onRemoveProject={onRemoveProject}
           busy={busy}
         />
@@ -594,6 +636,7 @@ function SpawnMenu(props: {
   onSpawnInWorktree: () => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
+  onRename: () => void;
   onRemoveProject: () => void;
   busy: boolean;
 }): JSX.Element {
@@ -670,6 +713,16 @@ function SpawnMenu(props: {
             <span className="spawn-menu-title">Get Info</span>
             <span className="spawn-menu-sub">
               Show the project's folder path.
+            </span>
+          </button>
+          <button
+            className="spawn-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onRename(); }}
+          >
+            <span className="spawn-menu-title">Rename…</span>
+            <span className="spawn-menu-sub">
+              Change the display name. Folder on disk isn't renamed.
             </span>
           </button>
           <button

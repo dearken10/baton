@@ -22,14 +22,17 @@ export interface MenuItem {
 /** Items for "any file or directory" — used in Files (tree leaves +
  *  directories) and Git (always files). `isDir` toggles the "Open in
  *  browser" item off for directories. `onChanged` is the parent's
- *  refresh hook — called whenever something on disk moved. */
+ *  refresh hook — called whenever something on disk moved.
+ *  `onRequestRename` opens the parent's rename PromptDialog (Electron
+ *  renderers don't support window.prompt, so we can't do it here). */
 export function buildFileMenuItems(opts: {
   absPath: string;
   isDir: boolean;
   openFile: OpenFile;
   onChanged: () => void;
+  onRequestRename: (absPath: string, currentName: string) => void;
 }): MenuItem[] {
-  const { absPath, isDir, openFile, onChanged } = opts;
+  const { absPath, isDir, openFile, onChanged, onRequestRename } = opts;
   const items: MenuItem[] = [];
 
   if (!isDir && isHtmlPath(absPath)) {
@@ -75,18 +78,7 @@ export function buildFileMenuItems(opts: {
     label: 'Rename…',
     onClick: () => {
       const oldName = absPath.split('/').pop() ?? '';
-      const next = window.prompt(`Rename "${oldName}" to:`, oldName);
-      if (next == null) return;
-      const trimmed = next.trim();
-      if (!trimmed || trimmed === oldName) return;
-      void (async () => {
-        try {
-          await window.baton.call('file.rename', { absPath, newName: trimmed });
-          onChanged();
-        } catch (err) {
-          alert(`Rename failed: ${String(err)}`);
-        }
-      })();
+      onRequestRename(absPath, oldName);
     },
   });
 

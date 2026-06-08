@@ -80,8 +80,25 @@ const AppMetaResponse = z.object({
   platform: z.string(),
 });
 
-const ProjectAddRequest = z.object({ path: z.string().min(1) });
+const ProjectAddRequest = z.object({
+  path: z.string().min(1),
+  /** Optional display-name override. Defaults to basename(path). */
+  name: z.string().trim().min(1).max(120).optional(),
+});
 const ProjectAddResponse = z.object({ project: Project });
+
+/** Create a fresh folder at `path` (with `~` expanded to the user's
+ *  home), optionally `git init` it, and register it as a project.
+ *  Refuses if the target folder already exists (renderer should switch
+ *  the user to "Add existing"). The parent of `path` is mkdir-p'd. */
+const ProjectCreateRequest = z.object({
+  /** Absolute path or `~`-prefixed path of the project folder to
+   *  create — e.g. `~/baton/my-project` or `/Users/x/code/my-project`. */
+  path: z.string().trim().min(1),
+  initGit: z.boolean().optional(),
+});
+const ProjectCreateResponse = z.object({ project: Project });
+
 const ProjectListResponse = z.object({ projects: z.array(Project) });
 const ProjectPickResponse = z.object({ path: z.string().nullable() });
 
@@ -90,6 +107,12 @@ const ProjectRemoveResponse = z.object({ ok: z.literal(true) });
 
 const ProjectReorderRequest = z.object({ orderedIds: z.array(ProjectId).min(1) });
 const ProjectReorderResponse = z.object({ ok: z.literal(true) });
+
+const ProjectRenameRequest = z.object({
+  projectId: ProjectId,
+  newName: z.string().trim().min(1).max(120),
+});
+const ProjectRenameResponse = z.object({ project: Project });
 
 const SessionReorderRequest = z.object({ orderedIds: z.array(SessionId).min(1) });
 const SessionReorderResponse = z.object({ ok: z.literal(true) });
@@ -487,9 +510,11 @@ export const ControlVerbs = {
 
   'project.pickFolder': { request: Empty, response: ProjectPickResponse },
   'project.add':        { request: ProjectAddRequest, response: ProjectAddResponse },
+  'project.create':     { request: ProjectCreateRequest, response: ProjectCreateResponse },
   'project.list':       { request: Empty, response: ProjectListResponse },
   'project.remove':     { request: ProjectRemoveRequest, response: ProjectRemoveResponse },
   'project.reorder':    { request: ProjectReorderRequest, response: ProjectReorderResponse },
+  'project.rename':     { request: ProjectRenameRequest, response: ProjectRenameResponse },
   'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
   'session.list':   { request: Empty, response: SessionListResponse },
@@ -565,6 +590,11 @@ const ProjectReorderedEvent = EventEnvelope.extend({
   orderedIds: z.array(ProjectId),
 });
 
+const ProjectRenamedEvent = EventEnvelope.extend({
+  type: z.literal('project.renamed'),
+  project: Project,
+});
+
 const SessionReorderedEvent = EventEnvelope.extend({
   type: z.literal('session.reordered'),
   orderedIds: z.array(SessionId),
@@ -626,6 +656,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   ProjectRemovedEvent,
   ProjectReorderedEvent,
+  ProjectRenamedEvent,
   SessionReorderedEvent,
   SessionSpawnedEvent,
   SessionStatusChangedEvent,
