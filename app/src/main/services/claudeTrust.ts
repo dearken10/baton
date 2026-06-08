@@ -73,7 +73,7 @@ export function trustDirectoryForClaude(cwd: string): void {
 
   try {
     // Atomic-ish write via a temp file in the same dir.
-    const tmp = CLAUDE_JSON + '.code24.tmp';
+    const tmp = CLAUDE_JSON + '.baton.tmp';
     fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
     fs.renameSync(tmp, CLAUDE_JSON);
   } catch {

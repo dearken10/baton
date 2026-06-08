@@ -1,4 +1,4 @@
-# code24 — Positioning
+# baton — Positioning
 
 ## 1. ICP — fleshed out
 
@@ -42,13 +42,13 @@
 ## 3. Positioning statement
 
 **Variant A (chosen).**
-> For senior developers who run **multiple Claude Code agents in parallel** (across multiple projects, or many branches in one), **code24** is a **parallel-agent supervisor** giving you one radar of every agent's status, cost, and task — plus an in-app diff/editor/git pane to review and intervene without leaving — **unlike cmux** (terminal-only, no editor) **or Conductor** (one workspace at a time).
+> For senior developers who run **multiple Claude Code agents in parallel** (across multiple projects, or many branches in one), **baton** is a **parallel-agent supervisor** giving you one radar of every agent's status, cost, and task — plus an in-app diff/editor/git pane to review and intervene without leaving — **unlike cmux** (terminal-only, no editor) **or Conductor** (one workspace at a time).
 
 **Variant B.**
-> For indie hackers and senior engineers shipping multiple projects with Claude Code, code24 is a Mission Control for AI agents that ends the alt-tab loop — unlike VS Code, which has no notion of "the other agent in the other window."
+> For indie hackers and senior engineers shipping multiple projects with Claude Code, baton is a Mission Control for AI agents that ends the alt-tab loop — unlike VS Code, which has no notion of "the other agent in the other window."
 
 **Variant C.**
-> For developers who delegate work to many AI coding sessions, code24 is a multi-agent IDE that supervises every agent across every project — unlike Cursor, which assumes one agent, one window, one task at a time.
+> For developers who delegate work to many AI coding sessions, baton is a multi-agent IDE that supervises every agent across every project — unlike Cursor, which assumes one agent, one window, one task at a time.
 
 **Pick: A.** Names the category, the wedge, and disqualifies the two real competitors by their actual shortfall. B is tweet-good but vague on category. C is too close to "Cursor competitor" — exactly the framing we won't take.
 
@@ -64,7 +64,7 @@ Rejected: *multi-agent IDE* (drags us into the Cursor/Zed editor fight we lose),
 
 ## 5. Competitive narrative
 
-| Capability | **code24** | cmux | Conductor | Crystal/Nimbalyst | VS Code + CC CLI | Cursor | Windsurf |
+| Capability | **baton** | cmux | Conductor | Crystal/Nimbalyst | VS Code + CC CLI | Cursor | Windsurf |
 |---|---|---|---|---|---|---|---|
 | Multi-project at once | Yes | Yes | Partial | One | Yes (N windows) | One | One |
 | Cross-project agent radar | **Yes** | Single-project | No | No | No | No | No |
@@ -76,17 +76,17 @@ Rejected: *multi-agent IDE* (drags us into the Cursor/Zed editor fight we lose),
 | Free / paid | TBD freemium | Free | Paid | Free→deprecated | Free | Paid | Paid |
 | OSS / closed | TBD | OSS | Closed | Mixed | Mixed | Closed | Closed |
 
-**vs cmux.** Pick code24 to review diffs, edit, and run git ops without leaving — and for LLM summaries, not just badges. Pick cmux if you live in the terminal and don't mind VS Code beside it.
+**vs cmux.** Pick baton to review diffs, edit, and run git ops without leaving — and for LLM summaries, not just badges. Pick cmux if you live in the terminal and don't mind VS Code beside it.
 
-**vs Conductor.** Pick code24 for *multiple projects* concurrently and cost visibility. Pick Conductor if you live in one repo and want polished Mac UX.
+**vs Conductor.** Pick baton for *multiple projects* concurrently and cost visibility. Pick Conductor if you live in one repo and want polished Mac UX.
 
-**vs Crystal / Nimbalyst.** Crystal is deprecated. Pick code24 for what Crystal was, with lessons learned (panels-from-day-1, main-process notifications, cost visibility, cross-project radar). Pick Nimbalyst if your workflow is AI-editing markdown/mockups, not supervising code agents.
+**vs Crystal / Nimbalyst.** Crystal is deprecated. Pick baton for what Crystal was, with lessons learned (panels-from-day-1, main-process notifications, cost visibility, cross-project radar). Pick Nimbalyst if your workflow is AI-editing markdown/mockups, not supervising code agents.
 
-**vs VS Code + CC CLI.** Pick code24 the moment you have ≥3 agents. Stay with the status quo if you only run one.
+**vs VS Code + CC CLI.** Pick baton the moment you have ≥3 agents. Stay with the status quo if you only run one.
 
-**vs Cursor / Windsurf.** Not competitors — *upstream*. Use code24 alongside Cursor: code24 manages the fleet, Cursor for deep single-file co-piloting.
+**vs Cursor / Windsurf.** Not competitors — *upstream*. Use baton alongside Cursor: baton manages the fleet, Cursor for deep single-file co-piloting.
 
-**When NOT to pick code24.** Windows/Linux; one agent at a time; need full IDE (LSP, debugger); security policy forbids cloud summarizer.
+**When NOT to pick baton.** Windows/Linux; one agent at a time; need full IDE (LSP, debugger); security policy forbids cloud summarizer.
 
 ## 6. Top 3 messages (value props)
 
@@ -107,11 +107,11 @@ File tree, Monaco editor, side-by-side diff, basic git, and inline-comment-to-ag
 
 ## 7. Launch hook (HN / Twitter)
 
-**Draft 1.** *Show HN: code24 — Mission Control for your parallel Claude Code agents.*
+**Draft 1.** *Show HN: baton — Mission Control for your parallel Claude Code agents.*
 
-**Draft 2.** *Show HN: code24 — stop alt-tabbing through six VS Code windows to babysit AI agents.*
+**Draft 2.** *Show HN: baton — stop alt-tabbing through six VS Code windows to babysit AI agents.*
 
-**Draft 3.** *Show HN: code24 — one radar for every AI coding agent across every project.*
+**Draft 3.** *Show HN: baton — one radar for every AI coding agent across every project.*
 
 **Pick: Draft 3.** Concrete (radar, every project), specific (AI coding agent), no metaphor that needs explaining. Draft 1's "Mission Control" doesn't say what the product *is*. Draft 2 is the most HN-voice but leads with pain, not product — risk is people upvote, scroll past, don't try it.
 
@@ -127,9 +127,9 @@ Lead with **#2** on the landing page; **#5** in press/podcast quotes.
 
 ## 9. Naming review
 
-**code24 — pros.** Short, four characters. Implies "24-hour coding" (agents work while you sleep). Numerals stand out among *Cursor / Cline / Aider / Codex*.
+**baton — pros.** Short, four characters. Implies "24-hour coding" (agents work while you sleep). Numerals stand out among *Cursor / Cline / Aider / Codex*.
 
-**code24 — cons.** Pronunciation ambiguous ("twenty-four-code" vs "two-four"). SEO collides with random repos and "Section 24 code" legal results. Digit-leading breaks package/import conventions. "24" carries off-brand associations (TV show, McLaren, Kobe). `code24.com` likely parked; `code24.ai` realistic. Mistype risk: `24-code`, `code24`, `twentyfourcode`.
+**baton — cons.** Pronunciation ambiguous ("twenty-four-code" vs "two-four"). SEO collides with random repos and "Section 24 code" legal results. Digit-leading breaks package/import conventions. "24" carries off-brand associations (TV show, McLaren, Kobe). `baton.com` likely parked; `baton.ai` realistic. Mistype risk: `24-code`, `baton`, `twentyfourcode`.
 
 **Alternatives.**
 
@@ -138,7 +138,7 @@ Lead with **#2** on the landing page; **#5** in press/podcast quotes.
 3. **Foreman** — names the role exactly. Mild collision with the Procfile tool. Strong vibe, slightly blue-collar in a good way.
 4. **AgentRadar / CodeRadar** — uses our own central metaphor. Memorable; modifier needed because "Radar" is over-claimed.
 
-**Recommendation.** Ship the beta as **code24** — renaming mid-build costs more than the cons warrant. Before public launch, pressure-test **Helm** and **Foreman** with 20 ICP interviews. If neither lands, keep code24 and own the pronunciation ("twenty-four code, like 24/7"). Categories beat names.
+**Recommendation.** Ship the beta as **baton** — renaming mid-build costs more than the cons warrant. Before public launch, pressure-test **Helm** and **Foreman** with 20 ICP interviews. If neither lands, keep baton and own the pronunciation ("twenty-four code, like 24/7"). Categories beat names.
 
 ## 10. Pricing posture
 

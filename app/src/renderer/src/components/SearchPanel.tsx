@@ -11,7 +11,7 @@ type SearchResponse = ResponseOf<'worktree.search'>;
 type Match = SearchResponse['matches'][number];
 
 const DEBOUNCE_MS = 250;
-const LS_KEY = 'code24:search:opts';
+const LS_KEY = 'baton:search:opts';
 
 interface PersistedOpts {
   caseSensitive: boolean;
@@ -71,7 +71,7 @@ export function SearchPanel({ sessionId, worktreePath }: Props): JSX.Element {
     const myReq = ++reqIdRef.current;
     setBusy(true);
     try {
-      const res = await window.code24.call('worktree.search', {
+      const res = await window.baton.call('worktree.search', {
         sessionId,
         query,
         caseSensitive: opts.caseSensitive,

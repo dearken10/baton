@@ -66,7 +66,7 @@ export function LeftColumn(): JSX.Element {
     if (insertAt < 0) arr.push(moved);
     else arr.splice(insertAt, 0, moved);
     const ids = arr.map((x) => x.id);
-    void window.code24.call(verb, { orderedIds: ids }).catch(() => { /* best-effort */ });
+    void window.baton.call(verb, { orderedIds: ids }).catch(() => { /* best-effort */ });
   }
   const reorderProjects = (fromId: string, beforeId: string): void =>
     reorder(projects, fromId, beforeId, 'project.reorder');
@@ -78,14 +78,14 @@ export function LeftColumn(): JSX.Element {
   async function removeProjectFromList(p: Project): Promise<void> {
     const sCount = (sessionsByProject[p.id] ?? []).length;
     const ok = window.confirm(
-      `Remove project "${p.name}" from code24?\n\n`
+      `Remove project "${p.name}" from baton?\n\n`
       + `This deletes ${sCount} session row${sCount === 1 ? '' : 's'} from the app.\n`
       + 'The project directory + any worktree directories on disk are NOT touched.'
     );
     if (!ok) return;
     setBusy(true);
     try {
-      await window.code24.call('project.remove', { projectId: p.id });
+      await window.baton.call('project.remove', { projectId: p.id });
     } catch (err) {
       alert(`Remove failed: ${String(err)}`);
     } finally {
@@ -101,20 +101,20 @@ export function LeftColumn(): JSX.Element {
   async function addProject(): Promise<void> {
     setBusy(true);
     try {
-      const { path } = await window.code24.call('project.pickFolder', {});
+      const { path } = await window.baton.call('project.pickFolder', {});
       if (!path) return;
-      const { project } = await window.code24.call('project.add', { path });
+      const { project } = await window.baton.call('project.add', { path });
       // Default: spawn an agent in the new project and focus it in
       // the middle pane so the user can start working immediately.
       try {
-        const { session } = await window.code24.call('session.spawn', {
+        const { session } = await window.baton.call('session.spawn', {
           projectId: project.id,
           backendId: 'claude-code',
         });
         selectSession(session.id);
       } catch (spawnErr) {
         // Project add succeeded — spawn is a best-effort follow-up.
-        console.warn('[code24] auto-spawn after project.add failed:', spawnErr);
+        console.warn('[baton] auto-spawn after project.add failed:', spawnErr);
       }
     } catch (err) {
       alert(`Add project failed: ${String(err)}`);
@@ -126,7 +126,7 @@ export function LeftColumn(): JSX.Element {
   async function spawnAgent(projectId: string): Promise<void> {
     setBusy(true);
     try {
-      const { session } = await window.code24.call('session.spawn', {
+      const { session } = await window.baton.call('session.spawn', {
         projectId,
         backendId: 'claude-code',
       });
@@ -143,7 +143,7 @@ export function LeftColumn(): JSX.Element {
   async function spawnTerminal(projectId: string): Promise<void> {
     setBusy(true);
     try {
-      const { session } = await window.code24.call('session.spawn', {
+      const { session } = await window.baton.call('session.spawn', {
         projectId,
         backendId: 'shell',
       });
@@ -172,7 +172,7 @@ export function LeftColumn(): JSX.Element {
     if (!target) return;
     setBusy(true);
     try {
-      const { session } = await window.code24.call('session.spawn', {
+      const { session } = await window.baton.call('session.spawn', {
         projectId: target.id,
         backendId: 'claude-code',
         newWorktreeBranch: branch,
@@ -189,7 +189,7 @@ export function LeftColumn(): JSX.Element {
   async function resumeSession(sessionId: string): Promise<void> {
     setBusy(true);
     try {
-      const { session } = await window.code24.call('session.resume', { sessionId });
+      const { session } = await window.baton.call('session.resume', { sessionId });
       selectSession(session.id);
     } catch (err) {
       const msg = String(err);
@@ -209,7 +209,7 @@ export function LeftColumn(): JSX.Element {
         );
         if (!ok) return;
         try {
-          const { session } = await window.code24.call('session.respawn', { sessionId });
+          const { session } = await window.baton.call('session.respawn', { sessionId });
           selectSession(session.id);
         } catch (respErr) {
           alert(`Spawn failed: ${String(respErr)}`);
@@ -239,7 +239,7 @@ export function LeftColumn(): JSX.Element {
       const ok = window.confirm(
         [
           'This session is still running and Claude has files open in the worktree.',
-          'To rename, code24 will stop the session first (you can resume it after).',
+          'To rename, baton will stop the session first (you can resume it after).',
           '',
           'Continue?',
         ].join('\n')
@@ -256,12 +256,12 @@ export function LeftColumn(): JSX.Element {
     setBusy(true);
     try {
       if (isLive) {
-        await window.code24.call('session.kill', { sessionId: s.id });
+        await window.baton.call('session.kill', { sessionId: s.id });
         // Wait for the exit handler to flip the row to done/errored and
         // free file handles before we move the worktree dir.
         await new Promise((r) => setTimeout(r, 800));
       }
-      await window.code24.call('session.rename', {
+      await window.baton.call('session.rename', {
         sessionId: s.id,
         newBranchName: branch,
       });
@@ -291,7 +291,7 @@ export function LeftColumn(): JSX.Element {
     if (!window.confirm(lines)) return;
     setBusy(true);
     try {
-      await window.code24.call('session.delete', { sessionId: s.id });
+      await window.baton.call('session.delete', { sessionId: s.id });
     } catch (err) {
       alert(`Delete failed: ${String(err)}`);
     } finally {
@@ -380,8 +380,8 @@ interface ProjectBlockProps {
 
 /** HTML5 drag id markers used so we can tell project drags from
  *  session drags on drop — text/plain alone wouldn't distinguish. */
-const DRAG_PROJECT = 'application/x-code24-project';
-const DRAG_SESSION = 'application/x-code24-session';
+const DRAG_PROJECT = 'application/x-baton-project';
+const DRAG_SESSION = 'application/x-baton-session';
 
 function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
@@ -679,7 +679,7 @@ function SpawnMenu(props: {
           >
             <span className="spawn-menu-title">Remove project</span>
             <span className="spawn-menu-sub">
-              Drops the project + its session rows from code24. Files
+              Drops the project + its session rows from baton. Files
               on disk are untouched.
             </span>
           </button>

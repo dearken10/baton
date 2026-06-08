@@ -1,4 +1,4 @@
-# code24
+# baton
 
 A desktop supervisor for many parallel AI coding agents (Claude Code,
 Codex) across multiple projects. macOS, Electron. Pre-build — this repo

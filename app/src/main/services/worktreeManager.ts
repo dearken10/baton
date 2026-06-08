@@ -2,8 +2,8 @@
  * WorktreeManager — creates and tears down git worktrees for
  * worktree-per-agent sessions (PRD F2.2 / F7.2).
  *
- * Worktrees live at `<projectRoot>/.code24/worktrees/<branchSlug>/`,
- * inside the user's project — same pattern as Crystal. The `.code24/`
+ * Worktrees live at `<projectRoot>/.baton/worktrees/<branchSlug>/`,
+ * inside the user's project — same pattern as Crystal. The `.baton/`
  * directory is gitignored on first create so the project never sees
  * any of our state as untracked files, and the same dir is reserved
  * for future per-project app state (caches, session metadata, etc.).
@@ -17,9 +17,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import simpleGit from 'simple-git';
 
-const CODE24_DIR_NAME = '.code24';
+const BATON_DIR_NAME = '.baton';
 const WORKTREES_SUBDIR = 'worktrees';
-const GITIGNORE_MARKER = '# code24: per-project app state (worktrees, caches, …)';
+const GITIGNORE_MARKER = '# baton: per-project app state (worktrees, caches, …)';
 
 /** Slugify a branch name into a filesystem-safe directory name. */
 function slugify(s: string): string {
@@ -70,7 +70,7 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
   const branchSlug = slugify(branch);
   const wtDir = path.join(
     args.projectRoot,
-    CODE24_DIR_NAME,
+    BATON_DIR_NAME,
     WORKTREES_SUBDIR,
     branchSlug
   );
@@ -86,7 +86,7 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
       );
     }
 
-    // Make sure .code24-worktrees/ is gitignored BEFORE we create the
+    // Make sure .baton-worktrees/ is gitignored BEFORE we create the
     // worktree inside it — otherwise `git status` in the project root
     // shows the worktree as untracked, which users will accidentally
     // commit. Best-effort; failure is logged but not fatal.
@@ -95,7 +95,7 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(
-        `[code24] could not update .gitignore in ${args.projectRoot}:`,
+        `[baton] could not update .gitignore in ${args.projectRoot}:`,
         err
       );
     }
@@ -121,11 +121,11 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
 }
 
 /**
- * Append `.code24/` to the project's `.gitignore` if it isn't already
+ * Append `.baton/` to the project's `.gitignore` if it isn't already
  * excluded. Idempotent — re-running on a project that already has the
  * entry is a no-op. Creates a `.gitignore` if one doesn't exist.
  *
- * We exclude the WHOLE `.code24/` dir (not just `.code24/worktrees/`)
+ * We exclude the WHOLE `.baton/` dir (not just `.baton/worktrees/`)
  * because the same dir is reserved for other per-project app state.
  */
 function ensureGitignored(projectRoot: string): void {
@@ -135,15 +135,15 @@ function ensureGitignored(projectRoot: string): void {
     content = fs.readFileSync(gitignorePath, 'utf-8');
     const lines = content.split(/\r?\n/).map((l) => l.trim());
     const isExcluded = lines.some((line) =>
-      line === `${CODE24_DIR_NAME}/` ||
-      line === CODE24_DIR_NAME ||
-      line === `/${CODE24_DIR_NAME}/` ||
-      line === `/${CODE24_DIR_NAME}`
+      line === `${BATON_DIR_NAME}/` ||
+      line === BATON_DIR_NAME ||
+      line === `/${BATON_DIR_NAME}/` ||
+      line === `/${BATON_DIR_NAME}`
     );
     if (isExcluded) return; // already excluded
   }
   const sep = content.length === 0 || content.endsWith('\n') ? '' : '\n';
-  const block = `${sep}\n${GITIGNORE_MARKER}\n${CODE24_DIR_NAME}/\n`;
+  const block = `${sep}\n${GITIGNORE_MARKER}\n${BATON_DIR_NAME}/\n`;
   fs.writeFileSync(gitignorePath, content + block);
 }
 
@@ -270,7 +270,7 @@ export async function listWorktrees(projectRoot: string): Promise<WorktreeListEn
   }
   if (cur) out.push({ path: cur.path ?? '', branch: cur.branch ?? null, head: cur.head ?? null });
   // Drop the main worktree (the project root itself); we only care
-  // about children rooted in `.code24/worktrees/`.
+  // about children rooted in `.baton/worktrees/`.
   return out.filter((w) => w.path !== projectRoot);
 }
 

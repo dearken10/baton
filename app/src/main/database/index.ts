@@ -1,7 +1,7 @@
 /**
  * SQLite owned by the main process.
  *
- * Per PRD F12.3: SQLite owns everything mutable. ~/.code24/config.json
+ * Per PRD F12.3: SQLite owns everything mutable. ~/.baton/config.json
  * holds bootstrap values only (loaded BEFORE this opens).
  *
  * Per Architect §6: better-sqlite3 with WAL + synchronous=NORMAL.
@@ -70,9 +70,9 @@ CREATE TABLE IF NOT EXISTS settings (
 
 export function initDatabase(): Database.Database {
   if (db) return db;
-  const dir = join(app.getPath('home'), '.code24');
+  const dir = join(app.getPath('home'), '.baton');
   mkdirSync(dir, { recursive: true });
-  db = new Database(join(dir, 'code24.db'));
+  db = new Database(join(dir, 'baton.db'));
   db.exec(SCHEMA);
   runMigrations(db);
   return db;

@@ -1,4 +1,4 @@
-# Team synthesis — code24 PRD v2 input
+# Team synthesis — baton PRD v2 input
 
 Round-1 inputs from PM, PMM, Designer, Researcher, Data Scientist,
 Engineering Architect are all in. This doc:
@@ -65,7 +65,7 @@ each, but they're your calls.
 | F7.5 combined diff | Multi-file diff view | Keep | Defer to v1.1 | **Defer** — Monaco DiffEditor solo is enough for v1 |
 | F11.3 daily/weekly cost rollup | Aggregate spend footer | Keep | Defer to v1.1 | **Keep** — cheap; cost visibility is part of the wedge per PMM |
 | F11.4 per-session cost cap | Soft cap with HITL prompt | **Cut** (PM Cut 2) | Defer to v1.1 | **Defer** — agree; non-trivial interaction with F3.8 |
-| F10.2 external Unix socket | CLI/external tooling can drive code24 | (not addressed) | Defer to v1.1 | **Defer** — no external consumers exist yet |
+| F10.2 external Unix socket | CLI/external tooling can drive baton | (not addressed) | Defer to v1.1 | **Defer** — no external consumers exist yet |
 
 - **Also consider PM's cuts** that Architect didn't comment on:
   - **F5.4 ripgrep search** — PM cuts (wedge is supervision not navigation). **My rec: cut** for v1.
@@ -73,13 +73,13 @@ each, but they're your calls.
   - **Second AgentBackend implementation** — PM keeps trait, cuts implementation. **My rec: agree** — Codex is v2.
 - **Your call:** any "keep" instead of my "defer"?
 
-### D5. Naming — keep code24, or pressure-test Helm / Foreman?
+### D5. Naming — keep baton, or pressure-test Helm / Foreman?
 
-- PMM honest about code24 cons: pronunciation ambiguity, digit-leading breaks conventions, SEO collision, off-brand associations.
-- Recommends keeping code24 through beta, pressure-testing **Helm** and **Foreman** in 20 ICP interviews before public launch.
+- PMM honest about baton cons: pronunciation ambiguity, digit-leading breaks conventions, SEO collision, off-brand associations.
+- Recommends keeping baton through beta, pressure-testing **Helm** and **Foreman** in 20 ICP interviews before public launch.
 - Helm has hard Kubernetes-Helm collision. Foreman has mild Procfile collision but stronger vibe.
-- **My recommendation: agree with PMM — keep code24 through beta, run the name test in Researcher's interview Week 1–2.** Add a single question to the interview script.
-- **Your call:** lock code24 / lock another / defer.
+- **My recommendation: agree with PMM — keep baton through beta, run the name test in Researcher's interview Week 1–2.** Add a single question to the interview script.
+- **Your call:** lock baton / lock another / defer.
 
 ---
 
@@ -194,7 +194,7 @@ your call in the last column when you reply.
 
 | # | Proposal | Source | My rec | Your call |
 |---|---|---|---|---|
-| N-14 | **"Baseline week" mode** — measure user's alt-tab cadence in their existing workflow before code24 takes over | polling-rate baseline | **Defer** — research-side trick, complex to ship cleanly; revisit | |
+| N-14 | **"Baseline week" mode** — measure user's alt-tab cadence in their existing workflow before baton takes over | polling-rate baseline | **Defer** — research-side trick, complex to ship cleanly; revisit | |
 | N-15 | **`git.commits_authored_by_agent` event** — measure "shipped" not just "active" | outcome metric | **Accept** — count-only, per privacy guarantee; stronger outcome metric than WAAH | |
 | N-16 | **`tfa feedback` CLI verb** — devs thumbs from terminal | summary thumbs | **Accept** — better signal/noise than in-product UI; almost free | |
 

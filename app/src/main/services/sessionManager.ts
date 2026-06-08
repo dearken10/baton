@@ -64,9 +64,9 @@ const RECENT_PTY_CAP = 1_000_000;
 
 /** Default idle threshold for auto-pause. Per-project override (F11.4)
  *  comes later; for now a single global value. Override at runtime
- *  with CODE24_IDLE_PAUSE_AFTER_SEC for testing (e.g. 30 = 30 sec). */
+ *  with BATON_IDLE_PAUSE_AFTER_SEC for testing (e.g. 30 = 30 sec). */
 const IDLE_PAUSE_AFTER_MS = (() => {
-  const raw = process.env['CODE24_IDLE_PAUSE_AFTER_SEC'];
+  const raw = process.env['BATON_IDLE_PAUSE_AFTER_SEC'];
   if (raw) {
     const n = Number(raw);
     if (Number.isFinite(n) && n > 0) return n * 1000;
@@ -85,8 +85,8 @@ const IDLE_SWEEP_INTERVAL_MS = (() => {
  * Claude organises its transcript files under
  * `~/.claude/projects/<sanitised-cwd>/<session_id>.jsonl`. Verified
  * empirically against real dirs: both `/` and `.` collapse to `-`,
- * so `/Users/x/proj/.code24/worktrees/wip-a` becomes
- * `-Users-x-proj--code24-worktrees-wip-a` (note the double dash from
+ * so `/Users/x/proj/.baton/worktrees/wip-a` becomes
+ * `-Users-x-proj--baton-worktrees-wip-a` (note the double dash from
  * `/.`).
  *
  * Why we check: Claude only writes the transcript on the first user
@@ -303,7 +303,7 @@ export class SessionManager {
           // clear the dead id and mark the row done so the renderer
           // shows a recoverable "Session ended" placeholder.
           // eslint-disable-next-line no-console
-          console.warn(`[code24] auto-respawn of ${r.id} failed:`, err);
+          console.warn(`[baton] auto-respawn of ${r.id} failed:`, err);
           try {
             getDatabase()
               .prepare(
@@ -333,7 +333,7 @@ export class SessionManager {
         // was deleted, --resume rejects the id, etc.). Don't let one
         // bad row stop the rest.
         // eslint-disable-next-line no-console
-        console.warn(`[code24] auto-resume of ${r.id} failed:`, err);
+        console.warn(`[baton] auto-resume of ${r.id} failed:`, err);
       }
     }
   }
@@ -388,7 +388,7 @@ export class SessionManager {
     /** Either the project root (shared workspace) OR a worktree
      *  path. Set via `newWorktreeBranch` below for the worktree path. */
     cwd: string;
-    /** When set, reuse this code24 session row (the user clicked
+    /** When set, reuse this baton session row (the user clicked
      *  "Resume" on an ended row) instead of inserting a fresh one. */
     reuseSessionId?: string;
     /** When set, spawn Claude with `--resume <id>`. */
@@ -578,7 +578,7 @@ export class SessionManager {
   }
 
   /**
-   * Resume an ended session: re-uses the original code24 session id
+   * Resume an ended session: re-uses the original baton session id
    * and passes the captured Claude session id to `claude --resume`.
    * The user's prior conversation history is restored by Claude itself.
    */
@@ -630,7 +630,7 @@ export class SessionManager {
 
   /**
    * Start a fresh Claude session inside an existing ended session's
-   * cwd, reusing the code24 session id (so its place in the left
+   * cwd, reusing the baton session id (so its place in the left
    * column stays put). No `--resume` — prior conversation history is
    * not reloaded. Used when there's nothing to resume (no transcript)
    * but the user still wants to pick up work in the same worktree.
@@ -848,7 +848,7 @@ export class SessionManager {
       }
 
       // Auto-detect "this is a worktree session" — the worktree path
-      // sits inside the project's .code24/worktrees/. If the caller
+      // sits inside the project's .baton/worktrees/. If the caller
       // explicitly set removeWorktree, honor that; otherwise default
       // to true for worktree sessions, false for project-root sessions.
       const project = getProject(row.project_id);
@@ -872,7 +872,7 @@ export class SessionManager {
       getDatabase().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
       // Best-effort: clean up the per-session scrollback file (F8.8).
       try {
-        fs.unlinkSync(path.join(os.homedir(), '.code24', 'scrollback', `${sessionId}.bin`));
+        fs.unlinkSync(path.join(os.homedir(), '.baton', 'scrollback', `${sessionId}.bin`));
       } catch { /* already gone */ }
       emit({ type: 'session.deleted', sessionId });
 

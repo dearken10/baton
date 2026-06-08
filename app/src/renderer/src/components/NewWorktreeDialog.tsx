@@ -110,7 +110,7 @@ export function NewWorktreeDialog({
           <div className="dialog-preview">
             <span className="dialog-preview-label">worktree at</span>
             <code className="mono">
-              {`<project>/.code24/worktrees/`}{slug || '<branch-name>'}/
+              {`<project>/.baton/worktrees/`}{slug || '<branch-name>'}/
             </code>
           </div>
         </div>

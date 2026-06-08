@@ -30,19 +30,19 @@ export class HookServer {
 
   /** Path to the unix socket main listens on. */
   sockPath(): string {
-    return path.join(app.getPath('home'), '.code24', 'hooks.sock');
+    return path.join(app.getPath('home'), '.baton', 'hooks.sock');
   }
 
   /** Path of the hook-forwarder.js script on disk. */
   forwarderPath(): string {
-    return path.join(app.getPath('home'), '.code24', 'hook-forwarder.js');
+    return path.join(app.getPath('home'), '.baton', 'hook-forwarder.js');
   }
 
   /** Write the forwarder script and start listening. Safe to call multiple times. */
   async start(handler: HookHandler): Promise<void> {
     this.handler = handler;
 
-    const dir = path.join(app.getPath('home'), '.code24');
+    const dir = path.join(app.getPath('home'), '.baton');
     fs.mkdirSync(dir, { recursive: true });
 
     // Write (or rewrite) the forwarder script and make it executable.

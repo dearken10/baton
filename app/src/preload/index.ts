@@ -51,6 +51,6 @@ const api = {
   },
 };
 
-contextBridge.exposeInMainWorld('code24', api);
+contextBridge.exposeInMainWorld('baton', api);
 
-export type Code24Api = typeof api;
+export type BatonApi = typeof api;

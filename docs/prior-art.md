@@ -1,4 +1,4 @@
-# Prior art for code24
+# Prior art for baton
 
 Synthesized from source-code research of four projects in the multi-agent
 coding-supervisor space. Citations point to files I verified — copy them

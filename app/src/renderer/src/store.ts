@@ -28,7 +28,7 @@ export interface EditorState {
  *  so selectors don't return a fresh `[]` per call. */
 const EMPTY_OPEN_FILES: readonly string[] = Object.freeze([]);
 
-const LS_KEY = 'code24:editor-by-session';
+const LS_KEY = 'baton:editor-by-session';
 
 function loadPersisted(): Record<string, EditorState> {
   try {

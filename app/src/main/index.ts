@@ -104,33 +104,33 @@ function createWindow(): void {
     setTimeout(() => {
       void getSessionManager()
         .autoResumeRecent()
-        .catch((err) => console.warn('[code24] autoResumeRecent failed:', err));
+        .catch((err) => console.warn('[baton] autoResumeRecent failed:', err));
     }, 800);
   });
   void reconciledSessionIds; // kept for diagnostics; no longer scopes auto-resume
 
-  // CODE24_TEST=1 → after first render, auto-add the project at
-  // CODE24_TEST_PATH (default = repo root) and spawn a Claude Code
+  // BATON_TEST=1 → after first render, auto-add the project at
+  // BATON_TEST_PATH (default = repo root) and spawn a Claude Code
   // session in it. Used to verify the full flow end-to-end without
   // a human at the keyboard. Strictly dev-only.
-  if (process.env['CODE24_TEST'] === '1') {
-    const target = process.env['CODE24_TEST_PATH'] ?? process.cwd();
-    const sessions = Number(process.env['CODE24_TEST_SESSIONS'] ?? '1');
+  if (process.env['BATON_TEST'] === '1') {
+    const target = process.env['BATON_TEST_PATH'] ?? process.cwd();
+    const sessions = Number(process.env['BATON_TEST_SESSIONS'] ?? '1');
     mainWindow.webContents.once('did-finish-load', () => {
       setTimeout(async () => {
         try {
           const p = addProject(target);
-          console.log(`[CODE24_TEST] addProject ok: id=${p.id} path=${p.path}`);
+          console.log(`[BATON_TEST] addProject ok: id=${p.id} path=${p.path}`);
           for (let i = 0; i < sessions; i++) {
             const s = await getSessionManager().spawn({
               projectId: p.id,
               backendId: 'claude-code',
               cwd: p.path,
             });
-            console.log(`[CODE24_TEST] spawn ${i + 1}/${sessions} ok: session=${s.id}`);
+            console.log(`[BATON_TEST] spawn ${i + 1}/${sessions} ok: session=${s.id}`);
           }
         } catch (err) {
-          console.error('[CODE24_TEST] failed:', err);
+          console.error('[BATON_TEST] failed:', err);
         }
       }, 1500);
     });
@@ -169,7 +169,7 @@ function createWindow(): void {
     // the Launch Services database matches the input criteria" and
     // we don't want that as an unhandled promise rejection.
     void shell.openExternal(details.url).catch((err) => {
-      console.warn('[code24] openExternal failed:', details.url, err);
+      console.warn('[baton] openExternal failed:', details.url, err);
     });
     return { action: 'deny' };
   });
@@ -199,7 +199,7 @@ async function waitForUrl(url: string, maxMs = 6000): Promise<void> {
 }
 
 app.whenReady().then(() => {
-  electronApp.setAppUserModelId('com.code24.app');
+  electronApp.setAppUserModelId('com.baton.app');
 
   app.on('browser-window-created', (_event, window) => {
     optimizer.watchWindowShortcuts(window);

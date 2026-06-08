@@ -81,7 +81,7 @@ function maybeNotify(event: AppEvent, sessionId: string): void {
     event.type === 'session.status_changed' && event.to === 'errored'
       ? 'session errored'
       : 'needs your input';
-  const title = `code24 · ${ctx.projectName}`;
+  const title = `baton · ${ctx.projectName}`;
   const body = `${ctx.branch} — ${reason}`;
 
   const n = new Notification({ title, body, silent: false });

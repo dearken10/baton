@@ -1,4 +1,4 @@
-# code24 — Measurement Plan
+# baton — Measurement Plan
 
 Owner: Data Science. Status: v0 proposal. Refines PRD §8.
 
@@ -144,9 +144,9 @@ Opt-in only. Sample sizes assume α=0.05, power=0.8, two-sided, baselines from N
 
 **Never collected:** code content, diff content, prompt content, summary text, terminal output, command strings (HITL stores tool *class*: `bash` / `write` / `network` — never the command body), file paths or branch names (paths hashed; branches bucketed `main` / `feature` / `worktree`), email or system identity.
 
-**IDs.** `install_id` = local UUID in `~/.code24/install_id`. `user_id` is the same value, never linked to any account. Delete the file → next launch is a new install.
+**IDs.** `install_id` = local UUID in `~/.baton/install_id`. `user_id` is the same value, never linked to any account. Delete the file → next launch is a new install.
 
-**Storage.** Local JSONL buffer (`~/.code24/telemetry.jsonl`, 200 MB ring) → HTTPS batch every 5 min → 90 days raw, then aggregated.
+**Storage.** Local JSONL buffer (`~/.baton/telemetry.jsonl`, 200 MB ring) → HTTPS batch every 5 min → 90 days raw, then aggregated.
 
 **Deletion.** Settings → "Delete my telemetry" tombstones `install_id` server-side within 7 days.
 

@@ -115,7 +115,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     // frame — replaying queued frames would write those bytes twice.
     let liveReady = false;
     const queuedFrames: Uint8Array[] = [];
-    void window.code24
+    void window.baton
       .call('scrollback.load', { sessionId })
       .then(({ data }) => {
         if (data) term.write(data);
@@ -142,19 +142,19 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     // Forward user input (keystrokes, paste) to the pty.
     const dataSub = term.onData((data) => {
       const encoded = btoa(unescape(encodeURIComponent(data)));
-      void window.code24.call('pty.write', { sessionId, data: encoded });
+      void window.baton.call('pty.write', { sessionId, data: encoded });
     });
 
     // Resize the pty when the terminal is resized.
     const resizeSub = term.onResize(({ cols, rows }) => {
-      void window.code24.call('pty.resize', { sessionId, cols, rows });
+      void window.baton.call('pty.resize', { sessionId, cols, rows });
     });
 
     // Subscribe to pty data for this session only.
     // IMPORTANT: pass a Uint8Array (raw bytes), not a string. xterm.write
     // treats a string as UTF-16 — multi-byte UTF-8 box-drawing chars
     // would render as garbage. A Uint8Array is correctly decoded as UTF-8.
-    const offData = window.code24.onPtyData((frame) => {
+    const offData = window.baton.onPtyData((frame) => {
       if (frame.sessionId !== sessionId) return;
       const binary = atob(frame.data);
       const bytes = new Uint8Array(binary.length);
@@ -172,7 +172,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     const saveSnapshot = (): void => {
       try {
         const data = serialize.serialize();
-        void window.code24.call('scrollback.save', { sessionId, data });
+        void window.baton.call('scrollback.save', { sessionId, data });
       } catch { /* best-effort */ }
     };
     const saveInterval = window.setInterval(saveSnapshot, SCROLLBACK_SAVE_MS);
@@ -233,7 +233,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     if (paths.length === 0) return;
     const text = paths.map(shellQuotePath).join(' ') + ' ';
     const encoded = btoa(unescape(encodeURIComponent(text)));
-    void window.code24.call('pty.write', { sessionId, data: encoded });
+    void window.baton.call('pty.write', { sessionId, data: encoded });
   }
 
   return (

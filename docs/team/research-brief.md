@@ -1,4 +1,4 @@
-# code24 — Research Brief: Assumption Audit
+# baton — Research Brief: Assumption Audit
 
 Author: User Researcher · Date: 2026-06-06
 
@@ -140,7 +140,7 @@ ICP candidate: confirmed runs multiple AI agents in parallel.
 14. Who else runs agents like you do? Whose workflow have you copied?
 15. Wave-a-wand: one thing about your current setup that would change?
 
-Anti-leading rules: no "would you use code24," no "do you wish you had X," no "would you pay for Y." Past behavior or dollar spend only.
+Anti-leading rules: no "would you use baton," no "do you wish you had X," no "would you pay for Y." Past behavior or dollar spend only.
 
 ---
 
@@ -157,7 +157,7 @@ Anti-leading rules: no "would you use code24," no "do you wish you had X," no "w
 9. **shideneyu (Rmux creator, Show HN May 2026)** — built adjacent tool; ideal "why did you build your own?" interview.
 10. **andrew.ooo (Rmux reviewer)** — reviews multiplexers for agents.
 
-Approach: lightweight email/DM, $150 incentive (market rate for senior devs), lead with their published material, no code24 pitch in first message.
+Approach: lightweight email/DM, $150 incentive (market rate for senior devs), lead with their published material, no baton pitch in first message.
 
 ---
 

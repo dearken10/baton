@@ -4,14 +4,14 @@
  * Per PRD F1.4: each project may define a setup hook that prepares a
  * new worktree (install deps, copy .env, etc.) before the agent
  * starts. v1 supports a shell script at one of:
- *   <projectRoot>/.code24/setup.sh
- *   <projectRoot>/code24-setup.sh
+ *   <projectRoot>/.baton/setup.sh
+ *   <projectRoot>/baton-setup.sh
  * picked in that order. setup.json (declarative) is deferred.
  *
  * The script runs with `cwd = worktreePath` and the following env:
- *   CODE24_PROJECT_ROOT  — absolute path to the project root
- *   CODE24_WORKTREE_PATH — absolute path to the new worktree
- *   CODE24_BRANCH        — the worktree branch name
+ *   BATON_PROJECT_ROOT  — absolute path to the project root
+ *   BATON_WORKTREE_PATH — absolute path to the new worktree
+ *   BATON_BRANCH        — the worktree branch name
  *
  * Output (stdout + stderr) is captured and returned to the caller —
  * SessionManager passes errors up to the renderer so the user sees
@@ -32,7 +32,7 @@ export interface SetupScriptResult {
   stderr: string;
 }
 
-const CANDIDATE_PATHS = ['.code24/setup.sh', 'code24-setup.sh'] as const;
+const CANDIDATE_PATHS = ['.baton/setup.sh', 'baton-setup.sh'] as const;
 
 /** Maximum bytes of captured stdout/stderr — protects against a runaway
  *  script flooding the main process with output. */
@@ -73,9 +73,9 @@ export async function runSetupScript(args: {
       cwd: args.worktreePath,
       env: {
         ...process.env,
-        CODE24_PROJECT_ROOT: args.projectRoot,
-        CODE24_WORKTREE_PATH: args.worktreePath,
-        CODE24_BRANCH: args.branch,
+        BATON_PROJECT_ROOT: args.projectRoot,
+        BATON_WORKTREE_PATH: args.worktreePath,
+        BATON_BRANCH: args.branch,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -104,7 +104,7 @@ export async function runSetupScript(args: {
         scriptPath,
         exitCode: null,
         stdout,
-        stderr: stderr + `\n[code24] failed to start setup script: ${err.message}`,
+        stderr: stderr + `\n[baton] failed to start setup script: ${err.message}`,
       });
     });
     proc.on('exit', (code) => {
@@ -115,7 +115,7 @@ export async function runSetupScript(args: {
         exitCode: killed ? null : code,
         stdout,
         stderr: killed
-          ? stderr + `\n[code24] setup script timed out after ${TIMEOUT_MS / 1000}s — killed.`
+          ? stderr + `\n[baton] setup script timed out after ${TIMEOUT_MS / 1000}s — killed.`
           : stderr,
       });
     });

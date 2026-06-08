@@ -154,7 +154,7 @@ const SessionToggleYoloRequest = z.object({ sessionId: SessionId });
 const SessionToggleYoloResponse = z.object({ session: Session });
 
 /** Start a fresh Claude session inside an existing (ended) session's
- *  cwd, reusing the same code24 session id. No `--resume` — the prior
+ *  cwd, reusing the same baton session id. No `--resume` — the prior
  *  conversation history isn't reloaded. Used when the user wants to
  *  pick a worktree back up without an existing transcript. */
 const SessionRespawnRequest = z.object({ sessionId: SessionId });
@@ -654,10 +654,10 @@ export type PtyDataFrame = z.infer<typeof PtyDataFrame>;
  * ──────────────────────────────────────────────────────────────── */
 
 export const Channels = {
-  control: 'code24:control',
-  ptyData: 'code24:pty.data',
-  events:  'code24:events',
+  control: 'baton:control',
+  ptyData: 'baton:pty.data',
+  events:  'baton:events',
   /** Main → renderer: "user clicked a desktop notification for this
    *  session, please select it in the UI." Carries `{ sessionId }`. */
-  selectSession: 'code24:select-session',
+  selectSession: 'baton:select-session',
 } as const;

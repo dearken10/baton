@@ -9,7 +9,7 @@ import type { Session } from '@shared/ipc.js';
 const TOP_PCT_MIN = 18;
 const TOP_PCT_MAX = 82;
 const TOP_PCT_DEFAULT = 50;
-const TOP_PCT_LS_KEY = 'code24:middle:topPct';
+const TOP_PCT_LS_KEY = 'baton:middle:topPct';
 
 function loadTopPct(): number {
   try {
@@ -65,7 +65,7 @@ export function MiddleColumn(): JSX.Element {
   async function respawnHere(sessionId: string): Promise<void> {
     setRespawnBusy(true);
     try {
-      const { session } = await window.code24.call('session.respawn', { sessionId });
+      const { session } = await window.baton.call('session.respawn', { sessionId });
       selectSession(session.id);
     } catch (err) {
       alert(`Start session failed: ${String(err)}`);
@@ -76,7 +76,7 @@ export function MiddleColumn(): JSX.Element {
   async function resumeHere(sessionId: string): Promise<void> {
     setRespawnBusy(true);
     try {
-      const { session } = await window.code24.call('session.resume', { sessionId });
+      const { session } = await window.baton.call('session.resume', { sessionId });
       selectSession(session.id);
     } catch (err) {
       alert(`Resume failed: ${String(err)}`);
@@ -129,7 +129,7 @@ export function MiddleColumn(): JSX.Element {
     if (!window.confirm(lines.join('\n'))) return;
     setSkipPermBusy(true);
     try {
-      const { session } = await window.code24.call('session.toggleYolo', {
+      const { session } = await window.baton.call('session.toggleYolo', {
         sessionId: s.id,
       });
       selectSession(session.id);

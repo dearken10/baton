@@ -18,8 +18,8 @@ export const HOOK_FORWARDER_SCRIPT = String.raw`#!/usr/bin/env node
 'use strict';
 
 const net = require('node:net');
-const sockPath = process.env.CODE24_HOOK_SOCK;
-const sessionId = process.env.CODE24_SESSION_ID;
+const sockPath = process.env.BATON_HOOK_SOCK;
+const sessionId = process.env.BATON_SESSION_ID;
 const eventName = process.argv[2] || 'unknown';
 
 // If we can't reach main, fall back to empty allow — never freeze Claude.

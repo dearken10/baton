@@ -528,10 +528,10 @@ function tryResolveWorktreePath(sessionId: string): string | null {
   return row?.worktree_path ?? null;
 }
 
-/** Per-session scrollback file path. Lives under ~/.code24/scrollback/
+/** Per-session scrollback file path. Lives under ~/.baton/scrollback/
  *  alongside the other per-project app state. */
 function scrollbackPath(sessionId: string): string {
-  return path.join(app.getPath('home'), '.code24', 'scrollback', `${sessionId}.bin`);
+  return path.join(app.getPath('home'), '.baton', 'scrollback', `${sessionId}.bin`);
 }
 
 /** Comma-separated glob list → trimmed string[] (drops empties). */

@@ -2,7 +2,7 @@
  * Event bus — emits AppEvents to renderer and persists to SQLite.
  *
  * Per PRD F10.3/F10.4: events have `seq` + `bootId`; single bus, no
- * per-component listeners. Renderer subscribes via `window.code24.onEvent`.
+ * per-component listeners. Renderer subscribes via `window.baton.onEvent`.
  */
 
 import { BrowserWindow } from 'electron';

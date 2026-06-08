@@ -13,8 +13,8 @@ const RIGHT_MIN = 200;
 const RIGHT_MAX = 600;
 const LEFT_DEFAULT = 320;
 const RIGHT_DEFAULT = 380;
-const LEFT_LS_KEY = 'code24:layout:leftWidth';
-const RIGHT_LS_KEY = 'code24:layout:rightWidth';
+const LEFT_LS_KEY = 'baton:layout:leftWidth';
+const RIGHT_LS_KEY = 'baton:layout:rightWidth';
 
 function loadWidth(key: string, fallback: number, min: number, max: number): number {
   try {
@@ -63,17 +63,17 @@ export function App(): JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (!window.code24) {
+    if (!window.baton) {
       setPreloadError(
-        'window.code24 is undefined — preload script failed to load.'
+        'window.baton is undefined — preload script failed to load.'
       );
       return;
     }
 
     void Promise.allSettled([
-      window.code24.call('app.meta', {}),
-      window.code24.call('project.list', {}),
-      window.code24.call('session.list', {}),
+      window.baton.call('app.meta', {}),
+      window.baton.call('project.list', {}),
+      window.baton.call('session.list', {}),
     ]).then((results) => {
       const [m, p, s] = results;
       if (m.status === 'fulfilled') {
@@ -84,10 +84,10 @@ export function App(): JSX.Element {
     });
 
     // Single subscription to the event stream (PRD F10.4).
-    const offEvents = window.code24.onEvent(ingestEvent);
+    const offEvents = window.baton.onEvent(ingestEvent);
     // Main asks us to focus a specific session when the user clicks a
     // desktop notification (PRD F9).
-    const offSelect = window.code24.onSelectSession(({ sessionId }) =>
+    const offSelect = window.baton.onSelectSession(({ sessionId }) =>
       selectSession(sessionId)
     );
     return () => {
@@ -99,8 +99,8 @@ export function App(): JSX.Element {
   // Tell main which session is in focus so the notifier can suppress
   // pop-ups for the session the user is already looking at.
   useEffect(() => {
-    if (!window.code24) return;
-    void window.code24
+    if (!window.baton) return;
+    void window.baton
       .call('app.setSelectedSession', { sessionId: selectedSessionId })
       .catch(() => { /* notifier failure must never break the UI */ });
   }, [selectedSessionId]);
@@ -109,7 +109,7 @@ export function App(): JSX.Element {
     return (
       <div className="app">
         <div className="boot-error">
-          <h1>code24 — boot error</h1>
+          <h1>baton — boot error</h1>
           <pre>{preloadError}</pre>
         </div>
       </div>

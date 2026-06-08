@@ -1,4 +1,4 @@
-# PM Additions — code24 PRD v2
+# PM Additions — baton PRD v2
 
 ## Contents
 1. Detailed use cases
@@ -13,25 +13,25 @@
 ## 1. Detailed use cases
 
 ### UC-1. The 9:47am triage (four-agent morning)
-Solo founder. Last night: three agents on `web-app` (auth, billing, e2e flake) + one on `llm-docker` (TTS retry). Opens laptop at a cafe; code24 restores (F2.4, NF4). Cold start <3s. Radar: 2 amber, 1 green, 1 blue, 1 red. `Cmd+Shift+U` → oldest amber (`billing-webhooks` asking `Allow curl to stripe.com?`); approve HITL (F3.8). Second amber wants to edit `package.json`; read summary (F3.3), open diff (F7.3), deny with inline comment "use existing zod" (F7.4). Green = e2e flake → combined diff (F7.5), commit (F7.6). Red = TTS retry errored on `pnpm install`; fix `setup.json` (F1.4), Restart (F2.3). ~4 min. **Without code24:** four VS Code windows, alt-tab, miss the errored one; at noon discover 2.5hrs of useless token burn.
+Solo founder. Last night: three agents on `web-app` (auth, billing, e2e flake) + one on `llm-docker` (TTS retry). Opens laptop at a cafe; baton restores (F2.4, NF4). Cold start <3s. Radar: 2 amber, 1 green, 1 blue, 1 red. `Cmd+Shift+U` → oldest amber (`billing-webhooks` asking `Allow curl to stripe.com?`); approve HITL (F3.8). Second amber wants to edit `package.json`; read summary (F3.3), open diff (F7.3), deny with inline comment "use existing zod" (F7.4). Green = e2e flake → combined diff (F7.5), commit (F7.6). Red = TTS retry errored on `pnpm install`; fix `setup.json` (F1.4), Restart (F2.3). ~4 min. **Without baton:** four VS Code windows, alt-tab, miss the errored one; at noon discover 2.5hrs of useless token burn.
 
 ### UC-2. On-call interrupt
-Mid-prompt in `infra · main` ("wire up Datadog APM"). PagerDuty fires. Right-click `infra` → New agent → branch `hotfix/5xx`, prompt "tail prod logs, find 5xx, do not deploy" (F5.3). Worktree LLM-named `prod-5xx-investigation` (F2.2). Setup script runs <8s, streamed (F1.4). Original agent untouched on its worktree (F2.5, F7.2 `withLock`). After 90s, summary: "Found 5xx from `worker-3` OOM". Kills the APM agent (F2.3). **Without code24:** juggle two VS Code windows on the same repo (stash to wrong branch) or pause the original work.
+Mid-prompt in `infra · main` ("wire up Datadog APM"). PagerDuty fires. Right-click `infra` → New agent → branch `hotfix/5xx`, prompt "tail prod logs, find 5xx, do not deploy" (F5.3). Worktree LLM-named `prod-5xx-investigation` (F2.2). Setup script runs <8s, streamed (F1.4). Original agent untouched on its worktree (F2.5, F7.2 `withLock`). After 90s, summary: "Found 5xx from `worker-3` OOM". Kills the APM agent (F2.3). **Without baton:** juggle two VS Code windows on the same repo (stash to wrong branch) or pause the original work.
 
 ### UC-3. Code review on an overnight PR
-Yesterday: agent prompted "implement passkeys for /login". Morning: chip green, "11 files, awaiting review." Click chip → Conversation (F6.4) + editor. Combined diff (F7.5). On `webauthn.ts:88` agent invented `parseAttestation`; select lines, inline-comment "use `decodeAttestation` in lib/webauthn-utils" (F7.4) — structured, not prose. Agent resumes, summary "Replacing inline parseAttestation with lib helper". Spend $2.40 / $6.12 daily (F11.2). Commits (F7.6). **Without code24:** VS Code, checkout worktree, paste prose comments into terminal and hope the agent maps to the right line.
+Yesterday: agent prompted "implement passkeys for /login". Morning: chip green, "11 files, awaiting review." Click chip → Conversation (F6.4) + editor. Combined diff (F7.5). On `webauthn.ts:88` agent invented `parseAttestation`; select lines, inline-comment "use `decodeAttestation` in lib/webauthn-utils" (F7.4) — structured, not prose. Agent resumes, summary "Replacing inline parseAttestation with lib helper". Spend $2.40 / $6.12 daily (F11.2). Commits (F7.6). **Without baton:** VS Code, checkout worktree, paste prose comments into terminal and hope the agent maps to the right line.
 
 ### UC-4. Exploration spike (parallel hypotheses)
-Bun vs. tuned-Node for the queue layer. New agent `spike/bun-rewrite`, "port worker.ts to Bun, keep API". Immediately another `spike/node-perf`, "tune Node worker for 2x". Two chips, same project, both blue. After lunch: Bun chip amber ("Allow editing package.json to add bun runtime?") → deny. Node chip green, +180 -42, benchmarks in conversation. Keeps Node. **Without code24:** sequential runs, or two clones in two VS Code windows with worktree confusion.
+Bun vs. tuned-Node for the queue layer. New agent `spike/bun-rewrite`, "port worker.ts to Bun, keep API". Immediately another `spike/node-perf`, "tune Node worker for 2x". Two chips, same project, both blue. After lunch: Bun chip amber ("Allow editing package.json to add bun runtime?") → deny. Node chip green, +180 -42, benchmarks in conversation. Keeps Node. **Without baton:** sequential runs, or two clones in two VS Code windows with worktree confusion.
 
 ### UC-5. Long-tail flake debugging
-Two-week-old CI flake. New agent: "Reproduce `checkout.spec.ts` flake, fix it. 4 hours, $5 budget." Soft cap (F11.4). Summary: "Reproduced 3/47". User works elsewhere. 3hrs later chip amber: "Suspect race in cart-state. Add `waitFor` or fix `useCart`?" Picks "fix the race". 20 min later: green. 1-line fix + test. $1.87 of $5. **Without code24:** watch terminal 3 hours, or find at EOD that the agent stalled on a permission prompt at hour 1.
+Two-week-old CI flake. New agent: "Reproduce `checkout.spec.ts` flake, fix it. 4 hours, $5 budget." Soft cap (F11.4). Summary: "Reproduced 3/47". User works elsewhere. 3hrs later chip amber: "Suspect race in cart-state. Add `waitFor` or fix `useCart`?" Picks "fix the race". 20 min later: green. 1-line fix + test. $1.87 of $5. **Without baton:** watch terminal 3 hours, or find at EOD that the agent stalled on a permission prompt at hour 1.
 
 ### UC-6. Forced restart recovery
-Three agents running. macOS forces a 2am restart. App relaunches; restore reads `~/.code24/events.jsonl` + hook session map (F2.4 temp-then-commit). Resumable agents become "paused — resume?" (not auto). Non-resumable show "session lost — last summary: …" with `Re-spawn with last prompt`. Worktrees on disk; new agents attach. No git state lost. **Without code24:** three terminal tabs `[Process completed]`, no record of what each was doing.
+Three agents running. macOS forces a 2am restart. App relaunches; restore reads `~/.baton/events.jsonl` + hook session map (F2.4 temp-then-commit). Resumable agents become "paused — resume?" (not auto). Non-resumable show "session lost — last summary: …" with `Re-spawn with last prompt`. Worktrees on disk; new agents attach. No git state lost. **Without baton:** three terminal tabs `[Process completed]`, no record of what each was doing.
 
 ### UC-7. "Where are we on billing?" mid-standup
-In Zoom standup. Earlier: `web-app · feat/billing-overhaul`. Dock badge `0`. Cmd+Tab to code24. Summary: "Migrating Stripe webhook handlers, 6 of 11, no errors". Elapsed `00:22:11`, spend `$1.43`. Answers "two-thirds through Stripe, no blockers". **Without code24:** alt-tab, scroll terminal, lose 30s of meeting.
+In Zoom standup. Earlier: `web-app · feat/billing-overhaul`. Dock badge `0`. Cmd+Tab to baton. Summary: "Migrating Stripe webhook handlers, 6 of 11, no errors". Elapsed `00:22:11`, spend `$1.43`. Answers "two-thirds through Stripe, no blockers". **Without baton:** alt-tab, scroll terminal, lose 30s of meeting.
 
 ---
 
@@ -64,7 +64,7 @@ In Zoom standup. Earlier: `web-app · feat/billing-overhaul`. Dock badge `0`. Cm
 
 ### F10.x — Event stream
 - **US-10.2a.** Consumer reconnects within 4096-event replay with last `seq`: receives missed events in order before live resume.
-- **US-10.2b.** Reconnect with `seq` older than window: server emits `{type:"replay_overflow", from_seq, to_seq}`; consumer reloads from `~/.code24/events.jsonl`.
+- **US-10.2b.** Reconnect with `seq` older than window: server emits `{type:"replay_overflow", from_seq, to_seq}`; consumer reloads from `~/.baton/events.jsonl`.
 - **US-10.2c.** Consumer reconnects with stale `boot_id`: receives `{type:"boot_changed"}`, resyncs from `seq=0`.
 - **US-10.3a.** 1000 events fire in one tick on a single UI subscription: renderer batches into one Zustand update ≤16ms.
 
@@ -122,7 +122,7 @@ In Zoom standup. Earlier: `web-app · feat/billing-overhaul`. Dock badge `0`. Cm
 - Symlinked dup: dedupe via `fs.realpath`. Folder deleted on disk: red "project missing"; tree expand doesn't crash. Setup needs `SSH_AUTH_SOCK`: declare required vars in `setup.json`; warn at add. Binary stdout: lossy UTF-8 decode. Disk full mid-worktree create: F7.2 tolerant remove cleans partial.
 
 ### Agent session
-- Crash mid-tool-call (PreToolUse without PostToolUse/Stop): watchdog on pty exit → errored, notification, pending HITL → timeout. SIGSTOP mid-stream: buffer keeps receiving; no resume corruption. Same project in two code24 windows: `~/.code24/lock`; second window read-only. Two agents same branch: `withLock` serializes; second offered fresh branch. Restart with pending HITL: card cancels (`session_restart`); no zombie hook.
+- Crash mid-tool-call (PreToolUse without PostToolUse/Stop): watchdog on pty exit → errored, notification, pending HITL → timeout. SIGSTOP mid-stream: buffer keeps receiving; no resume corruption. Same project in two baton windows: `~/.baton/lock`; second window read-only. Two agents same branch: `withLock` serializes; second offered fresh branch. Restart with pending HITL: card cancels (`session_restart`); no zombie hook.
 
 ### Status surfacing
 - Status flap (10×/s PreToolUse): display ≥300ms hysteresis. Summary LLM fails 5× in row: pause 60s, fall back to last hook verb. Time-in-status across midnight: keeps counting.
@@ -159,7 +159,7 @@ In Zoom standup. Earlier: `web-app · feat/billing-overhaul`. Dock badge `0`. Cm
 ## 5. Scope cuts
 
 ### Cut 1. Drop F5.4 ripgrep search.
-Wedge is supervision, not navigation. Users have ripgrep in the shell. A results pane is its own feature. Cmd+K palette handles file-name jump; defer full-text until we see users editing *in* code24 rather than escaping to VS Code.
+Wedge is supervision, not navigation. Users have ripgrep in the shell. A results pane is its own feature. Cmd+K palette handles file-name jump; defer full-text until we see users editing *in* baton rather than escaping to VS Code.
 
 ### Cut 2. Drop F11.4 per-session soft cap; keep F11.1–F11.3.
 Visibility (chip + title bar + daily rollup) is the high-leverage piece. A cap adds a second HITL surface that interacts non-obviously with F3.8. Add once we see real spend patterns.
@@ -183,6 +183,6 @@ Two layouts double the test matrix for F6.4, F6.5, and resizing. Split is the op
 - **[+ NEW] "Why did the chip change?" log.** Right-click → "Show transitions" → modal of every state change + timestamp + trigger. Trust-building.
 - **[+ NEW] Deny-with-reason.** HITL card: Approve / Deny / **Deny with reason** → structured `<denial reason="...">`. Saves the deny-then-explain round-trip (UC-1, UC-3).
 - **[+ NEW] Snapshot before destructive approval.** On approve of `rm -rf`, `git reset --hard`, etc., take a `git stash create` ref first. One-click "undo" on chip for ≤10 min.
-- **[+ NEW] Worktree disk-usage indicator.** Per-project header shows total of `~/.code24/worktrees/<project>`. Action: clean up worktrees `done` >7 days.
+- **[+ NEW] Worktree disk-usage indicator.** Per-project header shows total of `~/.baton/worktrees/<project>`. Action: clean up worktrees `done` >7 days.
 - **[+ NEW] Settings split: per-project vs global.** Setup scripts, caps, summarizer cadence = per-project. Notifications, theme, model = global. Make explicit in UI.
 - **[+ NEW] HITL keyboard row.** On focused HITL card: `A` approve, `D` deny, `R` reason-deny, `Esc` defer. Power flow for the four-agent morning triage.

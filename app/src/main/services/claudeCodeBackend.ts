@@ -67,7 +67,7 @@ export class ClaudeCodeBackend implements AgentBackend {
     // model, MCPs, plugins, etc. all still apply.
     const settingsPath = path.join(
       os.tmpdir(),
-      `code24-claude-${opts.sessionId}.settings.json`
+      `baton-claude-${opts.sessionId}.settings.json`
     );
     const hookCmd = (event: string): string =>
       // `node` is guaranteed available because Claude itself is a Node app.
@@ -116,8 +116,8 @@ export class ClaudeCodeBackend implements AgentBackend {
       ...process.env,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
-      CODE24_HOOK_SOCK: hooks.sockPath(),
-      CODE24_SESSION_ID: opts.sessionId,
+      BATON_HOOK_SOCK: hooks.sockPath(),
+      BATON_SESSION_ID: opts.sessionId,
       ...(opts.env ?? {}),
     } as Record<string, string>;
 

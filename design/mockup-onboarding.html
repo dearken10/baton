@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>code24 · Onboarding</title>
+<title>baton · Onboarding</title>
 <style>
   :root {
     --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
@@ -458,7 +458,7 @@
 <div class="app" aria-hidden="true">
   <div class="titlebar">
     <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
-    <div class="title">code24</div>
+    <div class="title">baton</div>
     <div class="spacer"></div>
     <div class="pill variant">Layout: split</div>
     <div class="pill">First launch</div>
@@ -475,7 +475,7 @@
     <div class="modal-head">
       <div class="brand-row">
         <div class="brand">c24</div>
-        <div class="brand-name">code24</div>
+        <div class="brand-name">baton</div>
         <div class="brand-tag">setup</div>
       </div>
       <div class="stepper" role="group" aria-label="Onboarding progress">
@@ -502,7 +502,7 @@
           <button class="target-card" id="card-remote" role="radio" aria-checked="false" onclick="selectTarget('remote')">
             <div class="icon">🛰</div>
             <h3>Remote SSH server</h3>
-            <p>Claude Code runs on a dev box; code24 streams pty over SSH via a small remote daemon. Good for big monorepos or shared dev environments.</p>
+            <p>Claude Code runs on a dev box; baton streams pty over SSH via a small remote daemon. Good for big monorepos or shared dev environments.</p>
           </button>
         </div>
 
@@ -612,7 +612,7 @@
             <label>Clone into</label>
             <div class="path-pick" tabindex="0" onclick="pickDest()">
               <span class="icon">📁</span>
-              <span class="chosen mono">~/code24/</span><span class="placeholder">&lt;repo-name&gt;</span>
+              <span class="chosen mono">~/baton/</span><span class="placeholder">&lt;repo-name&gt;</span>
             </div>
           </div>
           <div class="row">
@@ -713,7 +713,7 @@
 
   function goNext() {
     if (step < 3) { step++; updateStep(); }
-    else { alert('Setup finished. Welcome to code24.'); }
+    else { alert('Setup finished. Welcome to baton.'); }
   }
   function goBack() {
     if (step > 1) { step--; updateStep(); }

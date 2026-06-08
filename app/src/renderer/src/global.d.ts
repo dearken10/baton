@@ -1,10 +1,10 @@
 /// <reference types="vite/client" />
 
-import type { Code24Api } from '../../preload/index.js';
+import type { BatonApi } from '../../preload/index.js';
 
 declare global {
   interface Window {
-    code24: Code24Api;
+    baton: BatonApi;
   }
 }
 

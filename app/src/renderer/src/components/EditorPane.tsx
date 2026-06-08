@@ -248,7 +248,7 @@ export function EditorPane(): JSX.Element {
           // the raw HTML stashed in `baseline`. No Monaco model.
           if (isBrowserTab(p)) {
             const realPath = pathOf(p);
-            const res = await window.code24.call('file.read', { absPath: realPath });
+            const res = await window.baton.call('file.read', { absPath: realPath });
             if (cancelled) return;
             if (res.binary || res.tooLarge) {
               updateMeta(p, {
@@ -279,7 +279,7 @@ export function EditorPane(): JSX.Element {
           // DiffEditor — we fetch HEAD + working sides from git.
           if (isDiffTab(p)) {
             const realPath = pathOf(p);
-            const res = await window.code24.call('file.readGitDiff', { absPath: realPath });
+            const res = await window.baton.call('file.readGitDiff', { absPath: realPath });
             if (cancelled) return;
             updateMeta(p, {
               status: 'diff',
@@ -301,7 +301,7 @@ export function EditorPane(): JSX.Element {
           // Images bypass the text-read path entirely: we fetch them
           // as base64 and render with <img> (PRD F6.2).
           if (isImage(p)) {
-            const res = await window.code24.call('file.readBinary', { absPath: p });
+            const res = await window.baton.call('file.readBinary', { absPath: p });
             if (cancelled) return;
             if (res.tooLarge) {
               updateMeta(p, {
@@ -329,7 +329,7 @@ export function EditorPane(): JSX.Element {
             return;
           }
 
-          const res = await window.code24.call('file.read', { absPath: p });
+          const res = await window.baton.call('file.read', { absPath: p });
           if (cancelled) return;
           if (res.binary || res.tooLarge) {
             updateMeta(p, {
@@ -458,7 +458,7 @@ export function EditorPane(): JSX.Element {
     setSaveBusy(true);
     try {
       const content = model.getValue();
-      const res = await window.code24.call('file.write', {
+      const res = await window.baton.call('file.write', {
         absPath: activeFilePath,
         content,
         knownMtimeMs: meta.mtimeMs,
@@ -468,7 +468,7 @@ export function EditorPane(): JSX.Element {
           'The file changed on disk after you opened it. Overwrite?'
         );
         if (!ok) return;
-        const forced = await window.code24.call('file.write', {
+        const forced = await window.baton.call('file.write', {
           absPath: activeFilePath,
           content,
           knownMtimeMs: meta.mtimeMs,
@@ -643,12 +643,12 @@ export function EditorPane(): JSX.Element {
           ) : activeMeta.status === 'tooLarge' ? (
               <div className="empty">
                 <p className="dim">
-                  File is {Math.round(activeMeta.size / 1024)} KB — too large to edit in code24.
+                  File is {Math.round(activeMeta.size / 1024)} KB — too large to edit in baton.
                 </p>
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => void window.code24.call('shell.openPath', { absPath: activeFilePath })}
+                  onClick={() => void window.baton.call('shell.openPath', { absPath: activeFilePath })}
                 >
                   Open externally
                 </button>
@@ -659,7 +659,7 @@ export function EditorPane(): JSX.Element {
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => void window.code24.call('shell.openPath', { absPath: activeFilePath })}
+                  onClick={() => void window.baton.call('shell.openPath', { absPath: activeFilePath })}
                 >
                   Open externally
                 </button>
@@ -881,7 +881,7 @@ function OpenInMenu({ absPath }: { absPath: string }): JSX.Element {
     setOpen(false);
     setBusy(true);
     try {
-      const res = await window.code24.call('editor.openIn', { editor, absPath });
+      const res = await window.baton.call('editor.openIn', { editor, absPath });
       if (!res.ok) {
         alert(
           `Could not open in ${editor}: ${res.error ?? 'unknown error'}\n\n` +

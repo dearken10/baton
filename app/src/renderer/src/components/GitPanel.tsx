@@ -39,7 +39,7 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    window.code24
+    window.baton
       .call('worktree.gitStatus', { sessionId })
       .then((r) => { if (!cancelled) setReport(r); })
       .catch((err) => { if (!cancelled) setError(String(err)); });
@@ -60,9 +60,9 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
     setBusy(true);
     try {
       if (file.state === 'staged') {
-        await window.code24.call('git.unstage', { sessionId, paths: [file.path] });
+        await window.baton.call('git.unstage', { sessionId, paths: [file.path] });
       } else {
-        await window.code24.call('git.stage',   { sessionId, paths: [file.path] });
+        await window.baton.call('git.stage',   { sessionId, paths: [file.path] });
       }
       refresh();
     } catch (err) {
@@ -80,7 +80,7 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
     if (paths.length === 0) return;
     setBusy(true);
     try {
-      await window.code24.call('git.stage', { sessionId, paths });
+      await window.baton.call('git.stage', { sessionId, paths });
       refresh();
     } catch (err) {
       alert(`Stage failed: ${String(err)}`);
@@ -93,7 +93,7 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
     if (busy) return;
     setBusy(true);
     try {
-      const res = await window.code24.call('git.push', { sessionId });
+      const res = await window.baton.call('git.push', { sessionId });
       if (!res.ok) {
         alert(`git push failed:\n\n${res.output}`);
       }
@@ -109,7 +109,7 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
     if (busy) return;
     setBusy(true);
     try {
-      const res = await window.code24.call('git.pull', { sessionId });
+      const res = await window.baton.call('git.pull', { sessionId });
       if (!res.ok) {
         alert(`git pull failed:\n\n${res.output}`);
       }
@@ -125,7 +125,7 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
     if (busy || !commitMsg.trim()) return;
     setBusy(true);
     try {
-      const res = await window.code24.call('git.commit', {
+      const res = await window.baton.call('git.commit', {
         sessionId, message: commitMsg.trim(),
       });
       setCommitMsg('');

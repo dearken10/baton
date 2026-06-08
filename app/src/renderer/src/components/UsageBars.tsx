@@ -28,7 +28,7 @@ export function UsageBars(): JSX.Element {
   const refresh = useCallback(async (): Promise<void> => {
     setRefreshing(true);
     try {
-      const s = await window.code24.call('usage.getStats', {});
+      const s = await window.baton.call('usage.getStats', {});
       setStats(s);
     } catch { /* leave previous reading */ }
     finally { setRefreshing(false); }

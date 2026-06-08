@@ -10,7 +10,7 @@ export function Titlebar({ version }: Props): JSX.Element {
   // still appear on the session chip in the left column (PRD F11.1).
   return (
     <header className="titlebar">
-      <div className="brand">code24</div>
+      <div className="brand">baton</div>
       <div className="meta">v{version}</div>
       <div className="spacer" />
       <UsageBars />

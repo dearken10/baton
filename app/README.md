@@ -1,4 +1,4 @@
-# code24 — Electron app
+# baton — Electron app
 
 W1 scaffold of the v0 plan (PRD §12). Foundation only — no agents,
 no terminal, no Monaco yet. Ships:
@@ -6,7 +6,7 @@ no terminal, no Monaco yet. Ships:
 - Electron main process + sandboxed renderer (NF6).
 - Single typed IPC bus with Zod schemas (F10.1) + a placeholder for
   the separate `pty.data` channel (F10.2).
-- SQLite database (better-sqlite3, WAL) at `~/.code24/code24.db`.
+- SQLite database (better-sqlite3, WAL) at `~/.baton/baton.db`.
 - React + Zustand renderer with the 3-column split layout from
   `design/mockup-split.html`.
 

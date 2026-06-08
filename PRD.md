@@ -1,11 +1,11 @@
-# PRD: code24
+# PRD: baton
 
 **Version:** v2.1 · 2026-06-06 · post-Reviewer-pass.
 
 A multi-project, multi-agent coding workspace that lets one developer
 supervise many AI coding sessions at once without alt-tabbing.
 
-**Codename:** code24 (24-hour coding — the agents work, you supervise).
+**Codename:** baton (24-hour coding — the agents work, you supervise).
 **Category:** parallel-agent supervisor.
 **Platform:** macOS, Electron. v1 macOS-only; cross-platform v2.
 
@@ -19,7 +19,7 @@ broadened so single-project users aren't penalized; Nimbalyst-style
 5h/7d Claude-plan-usage indicator replaces daily-cost rollup; daily
 aggregate budget circuit breaker added; per-session cost cap deferred
 to v1.1; F5.4 ripgrep cut; PDF viewer cut; renamed `24code` →
-`code24`, `~/.tfa/` → `~/.code24/`.
+`baton`, `~/.tfa/` → `~/.baton/`.
 
 **Primary ICP:** senior or staff engineers and indie technical founders
 (6–15 YoE) who work on multiple projects simultaneously, run **4+ Claude
@@ -131,7 +131,7 @@ project on different branches.
   workspace).
 - **F1.3** Project shows: name, root path, current main branch, list of
   agents attached, **worktree disk-usage indicator** (sum of
-  `~/.code24/worktrees/<project>` with "Clean up worktrees done > 7 days"
+  `~/.baton/worktrees/<project>` with "Clean up worktrees done > 7 days"
   action).
 - **F1.4** **Per-project setup script** (`setup.sh` or `setup.json` with
   `copyFiles` + `runCommands`), runs after `git worktree add` and before
@@ -217,7 +217,7 @@ project on different branches.
   configured) **Claude plan 5h-window usage %**.
 - **F3.4** Clicking a chip focuses that session in the main area. Chips
   are addressable by **stable UUID**, not by index — deep links survive
-  relaunch (`code24://session/<uuid>`). *(Source: cmux #5486.)*
+  relaunch (`baton://session/<uuid>`). *(Source: cmux #5486.)*
 - **F3.5** Native macOS notification (from the **main process**, not
   the renderer) fires on transitions to `needs-input`, `done`,
   `errored`. Dock badge count tracks unread. Notification click →
@@ -255,7 +255,7 @@ project on different branches.
   `D` (deny), `R` (deny-with-reason), `Esc` (defer). Power flow for the
   morning triage.
 - **F3.14** All HITL decisions are append-only-logged to a JSONL audit
-  file (`~/.code24/workstream.jsonl`).
+  file (`~/.baton/workstream.jsonl`).
 
 ### LLM-generated summary — hybrid, gated on Week-3 dogfood
 
@@ -379,7 +379,7 @@ project on different branches.
 - **F8.8** **Scrollback persistence.** Two stores per session:
   (a) **structured event log** (every hook event, every status
   transition) → SQLite, durable. (b) **Raw xterm scrollback** →
-  per-session file `~/.code24/scrollback/<session_id>.bin`, capped
+  per-session file `~/.baton/scrollback/<session_id>.bin`, capped
   at **5 MB ring buffer**, replayed on focus via
   `addon-serialize`. Last 10 k visible lines guaranteed across
   restarts. *(Source: Architect §10.)*
@@ -410,7 +410,7 @@ project on different branches.
   events. *(Source: Architect's review.)*
 - **F10.3** **Reconnectable event stream** with `seq` + `boot_id` +
   bounded in-memory replay (4096 events) + JSONL audit log on disk
-  (`~/.code24/events.jsonl`, rotated at 100 MB, last 2 segments kept).
+  (`~/.baton/events.jsonl`, rotated at 100 MB, last 2 segments kept).
   Renderer reconnect with last `seq` replays missed events; mismatched
   `boot_id` → `RESET` + snapshot. *(Source: cmux `docs/events.md`.)*
 - **F10.4** Engine emits granular typed events; UI subscribes once via
@@ -460,7 +460,7 @@ F2.8 Demo mode).
   Code will actually run:
   - **Local Mac** (default).
   - **Remote SSH** — Claude Code runs on a remote server; pty
-    streamed over SSH via a small code24 remote daemon (see §F14).
+    streamed over SSH via a small baton remote daemon (see §F14).
     Form: `host`, `user`, `port` (22), auth method (SSH key file
     picker / ssh-agent / password). **Test Connection** button
     runs `ssh -o BatchMode=yes -o ConnectTimeout=5` and reports
@@ -491,7 +491,7 @@ F2.8 Demo mode).
     added via F1.1.
   - **Clone from git** — URL field (`git@github.com:user/repo.git`
     or `https://github.com/user/repo`), destination folder picker
-    (default `~/code24/<repo-name>`), branch (default upstream
+    (default `~/baton/<repo-name>`), branch (default upstream
     HEAD). Uses user's existing git credentials (matches F7.1).
     Clone progress streamed; failures surface inline with the
     underlying git error.
@@ -512,13 +512,13 @@ F2.8 Demo mode).
 ### Remote execution (F14.x)
 
 When the user picks Remote SSH in onboarding (F13.2), Claude Code
-runs on the remote host, not locally. code24 stays on the Mac and
+runs on the remote host, not locally. baton stays on the Mac and
 streams the agent's pty + hooks over the SSH connection. This is a
 v1 feature; cmux's `cmuxd-remote` Go daemon is the architectural
 precedent.
 
-- **F14.1** **code24-remote daemon.** A small Node binary
-  (`@code24/remote-daemon`) installed on the remote host. Bundled
+- **F14.1** **baton-remote daemon.** A small Node binary
+  (`@baton/remote-daemon`) installed on the remote host. Bundled
   for `darwin-x64`, `darwin-arm64`, `linux-x64`, `linux-arm64`.
   Responsibilities:
   - Spawn / pause / kill Claude Code pty subprocess (same as local
@@ -527,9 +527,9 @@ precedent.
   - Run `setup.sh` / `setup.json` on the remote worktree.
   - Watch FS via `chokidar` and emit invalidation events.
   - Forward hook events from Claude Code back over the stream.
-  - **Auto-install on first connection** if missing: code24 SCPs the
-    binary to `~/.code24/remote-daemon` and runs it under a small
-    bootstrap script (`bash -c '$HOME/.code24/remote-daemon serve'`).
+  - **Auto-install on first connection** if missing: baton SCPs the
+    binary to `~/.baton/remote-daemon` and runs it under a small
+    bootstrap script (`bash -c '$HOME/.baton/remote-daemon serve'`).
 - **F14.2** **Stream protocol.** One SSH connection per remote host;
   multiplexed over OpenSSH ControlMaster (no per-session reconnect).
   On top: a length-prefixed framed protocol (same IPC verbs as
@@ -539,14 +539,14 @@ precedent.
     control verbs.
   - `fs.read` / `fs.write` / `fs.watch.event` for editor + diff
     panes.
-- **F14.3** **Reconnect.** If SSH drops, code24 reconnects with
+- **F14.3** **Reconnect.** If SSH drops, baton reconnects with
   exponential backoff (`2s → 30s, max 5 min`); event stream resumes
   via F10.3's `seq` + `boot_id` mechanism. Sessions on the remote
   daemon persist across disconnect (detached subprocesses); on
   reconnect, daemon replays buffered events.
 - **F14.4** **Worktree path resolution.** Worktrees are created on
-  the **remote** (`~/.code24/worktrees/<project>/<wt-name>`); local
-  code24 sees them via `fs.read`. The file tree / editor / diff
+  the **remote** (`~/.baton/worktrees/<project>/<wt-name>`); local
+  baton sees them via `fs.read`. The file tree / editor / diff
   panes operate on remote paths transparently. "Open in VS Code"
   (F6.6) uses VS Code Remote-SSH to attach to the same host.
 - **F14.5** **Secrets.** SSH keys never leave the Mac. `claude` API
@@ -559,8 +559,8 @@ precedent.
   - `pty.data` throughput ≥ 5 MB/s sustained.
   - First-paint of remote session: ≤ 6 s (vs. ≤ 3 s local).
 - **F14.7** **Graceful local fallback.** If remote daemon refuses
-  to install (no `~/.code24` write access, no `node` on remote,
-  hardened-shell-only login), code24 surfaces a clear error in the
+  to install (no `~/.baton` write access, no `node` on remote,
+  hardened-shell-only login), baton surfaces a clear error in the
   onboarding flow and reverts to Local-only for this connection
   profile.
 - **F14.8** **Disconnect UX.** When SSH drops mid-session: chip
@@ -577,7 +577,7 @@ precedent.
   context menu. Global settings live in a full-pane modal.
 - **F12.3** Settings storage: **SQLite owns** everything mutable
   (per-project caps, telemetry opt-in, summarizer toggles).
-  `~/.code24/config.json` holds **only bootstrap values** needed
+  `~/.baton/config.json` holds **only bootstrap values** needed
   before SQLite opens (theme, last-window-bounds). Two stores,
   clear boundary.
 - **F12.4** **Telemetry inspector** (`Settings → Privacy → View what
@@ -626,7 +626,7 @@ precedent.
   inside business logic. No unhandled promise rejections in the
   renderer or main process. Errors surface to a user-readable
   notification + the in-app log viewer (`Help → Logs`).
-- **NF9. Logging.** App logs at `~/.code24/logs/` (rotated daily,
+- **NF9. Logging.** App logs at `~/.baton/logs/` (rotated daily,
   kept 7 days). Levels: `error / warn / info / debug`. User-facing
   log viewer (`Help → Logs`) with copy-to-clipboard for bug reports.
   Secret-redaction (`KEY|TOKEN|SECRET|PASSWORD=...` lines) applied
@@ -656,7 +656,7 @@ Each criterion is testable.
   generated.
 - F2.3 ops serialized per session: rapid `pause; resume; pause; kill`
   execute in order; no orphan pty.
-- F2.4 restore observable via `code24 restore --dry-run`. What gets
+- F2.4 restore observable via `baton restore --dry-run`. What gets
   restored: project list, session metadata (worktree path, branch,
   status enum), prompt log, last summary, intent label, open file
   tabs. **Not** restored: in-flight HITL requests (cancelled to
@@ -674,8 +674,8 @@ Each criterion is testable.
 - F3.3 chip renders project, branch, badge, tool-name line, summary
   line, time-in-status, spend, **and** Claude-plan 5h-window usage %
   when F12.5 is configured.
-- F3.4 deep link `code24://session/<uuid>` survives relaunch;
-  `code24://` protocol handler registered with macOS Launch Services
+- F3.4 deep link `baton://session/<uuid>` survives relaunch;
+  `baton://` protocol handler registered with macOS Launch Services
   on first run.
 - F3.5 notification from main process (architectural lint); click
   focuses app + correct chip.
@@ -845,7 +845,7 @@ of $20. Spawn anyway?" with explicit confirm.
 
 **US-1.5a** *Given* a project's `setup.sh` was previously trusted
 (SHA256 stored), *when* the file's contents change before the next
-agent spawn, *then* code24 re-prompts with a diff preview and
+agent spawn, *then* baton re-prompts with a diff preview and
 refuses to spawn until the user re-trusts.
 
 **US-7.3a** *Given* the user clicks a chip whose agent has touched
@@ -984,7 +984,7 @@ cost. Stored locally + sent on opt-in.
 │  ┌─────┴──────┐  ┌─────┴──────┐  ┌─────┴──────┐  ┌────────┴─────────┐  │
 │  │ AgentBack  │  │ pty / node │  │ FS watcher │  │ Event bus +      │  │
 │  │ ends:      │  │ -pty       │  │ (chokidar) │  │ JSONL replay log │  │
-│  │ Claude /   │  │ + xterm    │  │ + dedup    │  │ ~/.code24/       │  │
+│  │ Claude /   │  │ + xterm    │  │ + dedup    │  │ ~/.baton/       │  │
 │  │ MockAgent  │  │ writer     │  │ job queue  │  │   events.jsonl   │  │
 │  └────────────┘  └────────────┘  └────────────┘  └──────────────────┘  │
 │                                                                        │
@@ -1014,7 +1014,7 @@ REMOTE MODE (F14 — v1, post-v0):
 ┌─────────────────────────────────────────┐    ┌────────────────────────┐
 │ Local Mac (Electron main)               │    │ Remote host (Linux/Mac)│
 │  ┌─────────────────────────────────┐    │    │ ┌────────────────────┐ │
-│  │ RemoteTransport                  │   ssh ─┼─┤ @code24/           │ │
+│  │ RemoteTransport                  │   ssh ─┼─┤ @baton/           │ │
 │  │ - SSH ControlMaster              │  ◄────►│ │ remote-daemon      │ │
 │  │ - length-prefixed framed wire    │    │    │ │ - node-pty         │ │
 │  │ - pty.data + control verbs       │    │    │ │ - chokidar         │ │
@@ -1112,7 +1112,7 @@ summary + HITL paths without Claude credentials).
 | 3 | Hook contract drift between Claude Code versions | Pin minimum CLI version; version-detect on spawn; nightly integration test | W2 |
 | 4 | node-pty + Electron upgrade hell | Pin Electron + electron-rebuild; `portable-pty` napi escape hatch researched (not built) | W4 |
 | 5 | `setup.sh` running malicious user code | First-run trust + hash (F1.5); `--dry-run` (F1.6); log-redact | W3 before F1.4 ships |
-| 6 | Remote-daemon attack surface (F14) — code24 ships binary to user's server | Signed binary, SHA256 verified after SCP, bootstrap script visible to user, no root required, daemon runs as the SSH user only | end of v1 W5 |
+| 6 | Remote-daemon attack surface (F14) — baton ships binary to user's server | Signed binary, SHA256 verified after SCP, bootstrap script visible to user, no root required, daemon runs as the SSH user only | end of v1 W5 |
 | 7 | SSH stream backpressure on noisy agents (1 MB/s × N agents over a 100 Mbps link) | Per-session pty.data rate cap; coalesce frames into 16 ms windows on the daemon side; "Remote bandwidth saturated" banner | v1 W6 |
 
 ---
@@ -1136,7 +1136,7 @@ v1.1-deferral footers in §5.
   scrollback persistence (F8.8)? If scrollback, the agent can't
   see its own past output of, say, `echo $STRIPE_KEY` — usually
   desirable but breaks some workflows.
-- **`code24://` protocol handler.** Registered in v0 (Architect open
+- **`baton://` protocol handler.** Registered in v0 (Architect open
   Q #6) — W3 demoable requires it for "click notification → focus
   chip" flow. Confirm it's on the W3 schedule.
 - **W3 dogfood scope.** F4.7 gate happens after W4 ship — but if
@@ -1162,7 +1162,7 @@ worktree-per-agent.)*
 - Command palette (Cmd+K) — spec'd later, not v1.
 - Snapshot-before-destructive HITL approval (`git stash create`-backed
   one-click undo).
-- "Baseline week" mode for measuring pre-code24 alt-tab cadence.
+- "Baseline week" mode for measuring pre-baton alt-tab cadence.
 - Worktree-per-agent vs shared-worktree toggle — v1 default per-agent
   with opt-out only; full toggle is v1.1.
 
@@ -1222,7 +1222,7 @@ Everything else is under `docs/` or `design/`.
 For a first engineer joining cold.
 
 - **Agent / agent session** — a single Claude Code (or future
-  Codex / Gemini) process spawned by code24 in a worktree, attached
+  Codex / Gemini) process spawned by baton in a worktree, attached
   to one project. Lives until killed or the session ends.
 - **Agent Backend (`AgentBackend`)** — the TS interface every agent
   CLI plugs into. v1 ships `ClaudeCodeBackend` and `MockAgentBackend`
@@ -1235,7 +1235,7 @@ For a first engineer joining cold.
   loop without Claude credentials.
 - **Hook (Claude Code hook)** — script Claude Code invokes at
   lifecycle moments (`SessionStart`, `PreToolUse`, `Notification`,
-  `Stop`, `SessionEnd`). code24 installs hooks that emit IPC events
+  `Stop`, `SessionEnd`). baton installs hooks that emit IPC events
   to drive status (F3.2) and HITL approvals (F3.11).
 - **Hybrid intent line** — the chip's per-session text. Shows the
   tool name from the last `PreToolUse` hook (always-accurate fallback)

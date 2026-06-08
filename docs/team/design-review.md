@@ -1,4 +1,4 @@
-# Design Review: code24
+# Design Review: baton
 
 Reviewed: `mockup.html`, `mockup-tabbed.html`, `mockup-split.html`, `mockup.md`,
 plus PRD F-sections and `prior-art.md`.

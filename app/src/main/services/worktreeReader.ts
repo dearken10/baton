@@ -19,7 +19,7 @@ import { readCurrentBranch } from './gitReader.js';
 const SKIP_DIRS = new Set([
   '.git',
   'node_modules',
-  '.code24',
+  '.baton',
   'dist',
   'build',
   'out',

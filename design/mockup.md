@@ -1,4 +1,4 @@
-# Design Mockup: code24
+# Design Mockup: baton
 
 ASCII wireframes for the main views. Targets a 1440×900 macOS window.
 
@@ -6,7 +6,7 @@ ASCII wireframes for the main views. Targets a 1440×900 macOS window.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────────────────────────┐
-│ code24                                                          ⌘K  ⚙  ☰ 3 unread       │
+│ baton                                                          ⌘K  ⚙  ☰ 3 unread       │
 ├───────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ AGENT RADAR                                                                                       │
 │ ┌───────────────────────────┐ ┌───────────────────────────┐ ┌───────────────────────────┐         │
@@ -106,7 +106,7 @@ Colors (light theme):
 │  (●) New:       tts/fix-retries-v2                     │
 │                                                        │
 │  Worktree                                              │
-│  Auto-create at ~/.code24/worktrees/llm-docker/tts-fix-v2 │
+│  Auto-create at ~/.baton/worktrees/llm-docker/tts-fix-v2 │
 │                                                        │
 │  Initial prompt (optional)                             │
 │  ┌──────────────────────────────────────────────────┐  │
@@ -122,7 +122,7 @@ Colors (light theme):
 
 ```
 ┌──────────────────────────────────────────┐
-│ code24                          │
+│ baton                          │
 │ web-app · feat/auth needs your input     │
 │                                          │
 │ "Allow `rm -rf node_modules`?"           │
@@ -136,7 +136,7 @@ Colors (light theme):
 ```
 ┌────────────────────────────────────────────────────────────────┐
 │                                                                │
-│                   Welcome to code24                   │
+│                   Welcome to baton                   │
 │                                                                │
 │           One window. Every project. Every agent.              │
 │                                                                │

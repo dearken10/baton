@@ -1,4 +1,4 @@
-# code24 Architecture Review
+# baton Architecture Review
 
 Author: Engineering Architect
 Date: 2026-06-06
@@ -43,12 +43,12 @@ NF2 reality at 10 agents: 10×45 MB + 280 MB shell + ~150 MB per Claude subproce
 
 **FS access.** Renderer never touches FS. All IO via `fs.*` IPC verbs scoped to the registered project roots (F1.1). Reads/writes outside the allowlist: reject in main. Renderer: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true` — non-negotiable.
 
-**Network egress.** Only main makes outbound HTTPS — `api.anthropic.com`, GitHub, update server. Renderer CSP: `connect-src 'self'`. All LLM calls logged to `~/.code24/network.jsonl` with token/cost. Summarizer enforces F4.3's 5s floor + hard fuse 20 req/min/session.
+**Network egress.** Only main makes outbound HTTPS — `api.anthropic.com`, GitHub, update server. Renderer CSP: `connect-src 'self'`. All LLM calls logged to `~/.baton/network.jsonl` with token/cost. Summarizer enforces F4.3's 5s floor + hard fuse 20 req/min/session.
 
 **Secrets.**
 - **Claude API key:** macOS Keychain via `keytar`. Injected into Claude Code subprocess env at spawn. Never reaches renderer.
 - **GitHub token:** **do not handle in v1.** Use the user's existing git credential helper.
-- **`setup.sh` secrets:** users will paste `.env` exports. We must (a) redact lines matching `(KEY|TOKEN|SECRET|PASSWORD)=` before writing to `~/.code24/events.jsonl`, (b) refuse to cache setup.sh content in SQLite, (c) document the risk.
+- **`setup.sh` secrets:** users will paste `.env` exports. We must (a) redact lines matching `(KEY|TOKEN|SECRET|PASSWORD)=` before writing to `~/.baton/events.jsonl`, (b) refuse to cache setup.sh content in SQLite, (c) document the risk.
 
 **IPC permission model.** Single bus (F10.1), Zod schema per verb compiled in CI. **A compromised renderer can call any verb** — no per-origin separation. Mitigation: every privileged verb is statically dispatched, no `eval`, no path concatenation from renderer input. Renderer is the threat boundary.
 

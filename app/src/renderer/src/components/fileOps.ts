@@ -51,7 +51,7 @@ export function buildFileMenuItems(opts: {
   items.push({
     label: 'Reveal in Finder',
     onClick: () => {
-      void window.code24.call('file.revealInFinder', { absPath }).catch((err) => {
+      void window.baton.call('file.revealInFinder', { absPath }).catch((err) => {
         alert(`Reveal failed: ${String(err)}`);
       });
     },
@@ -62,7 +62,7 @@ export function buildFileMenuItems(opts: {
     onClick: () => {
       void (async () => {
         try {
-          await window.code24.call('file.copy', { absPath });
+          await window.baton.call('file.copy', { absPath });
           onChanged();
         } catch (err) {
           alert(`Duplicate failed: ${String(err)}`);
@@ -81,7 +81,7 @@ export function buildFileMenuItems(opts: {
       if (!trimmed || trimmed === oldName) return;
       void (async () => {
         try {
-          await window.code24.call('file.rename', { absPath, newName: trimmed });
+          await window.baton.call('file.rename', { absPath, newName: trimmed });
           onChanged();
         } catch (err) {
           alert(`Rename failed: ${String(err)}`);
@@ -103,7 +103,7 @@ export function buildFileMenuItems(opts: {
       if (!ok) return;
       void (async () => {
         try {
-          await window.code24.call('file.delete', { absPath });
+          await window.baton.call('file.delete', { absPath });
           onChanged();
         } catch (err) {
           alert(`Delete failed: ${String(err)}`);

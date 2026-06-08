@@ -21,7 +21,7 @@ export function OrphansBadge(): JSX.Element | null {
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
-      const res = await window.code24.call('worktree.listOrphans', {});
+      const res = await window.baton.call('worktree.listOrphans', {});
       setOrphans(res.orphans);
     } catch {
       // best-effort — empty list is fine
@@ -49,7 +49,7 @@ export function OrphansBadge(): JSX.Element | null {
     if (!ok) return;
     setBusy(true);
     try {
-      await window.code24.call('worktree.removeOrphan', {
+      await window.baton.call('worktree.removeOrphan', {
         projectId: o.projectId,
         path: o.path,
       });
@@ -78,7 +78,7 @@ export function OrphansBadge(): JSX.Element | null {
           <div className="dialog" onClick={(e) => e.stopPropagation()}>
             <h3>Orphaned worktrees</h3>
             <p className="dim">
-              Directories git still knows about but no code24 session row
+              Directories git still knows about but no baton session row
               matches. Usually left behind by a crash or a forced quit.
             </p>
             <ul className="orphans-list">

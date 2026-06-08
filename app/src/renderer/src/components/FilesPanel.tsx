@@ -28,7 +28,7 @@ interface Props {
 /** MIME used for dragging a single file path out of Files/Git into the
  *  terminal host. Value is mirrored in GitPanel and TerminalPane —
  *  keep them in sync if you rename it. */
-export const DRAG_FILE_PATH = 'application/x-code24-filepath';
+export const DRAG_FILE_PATH = 'application/x-baton-filepath';
 
 export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.Element {
   const [root, setRoot] = useState<FileTreeNodeT | null>(null);
@@ -49,7 +49,7 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    window.code24
+    window.baton
       .call('worktree.fileTree', { sessionId })
       .then((res) => { if (!cancelled) setRoot(res.root); })
       .catch((err) => { if (!cancelled) setError(String(err)); });
