@@ -32,7 +32,7 @@ import {
 import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects } from '../services/projectStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
-import { readFileTree, readGitStatus } from '../services/worktreeReader.js';
+import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
 import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getDatabase } from '../database/index.js';
@@ -156,6 +156,11 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const root = await readFileTree(worktreePath);
     return { root };
   },
+  'worktree.readDir': async (req) => {
+    const worktreePath = tryResolveWorktreePath(req.sessionId);
+    if (!worktreePath) return { children: [], truncated: false };
+    return await readSubdir(worktreePath, req.relPath);
+  },
   'worktree.gitStatus': async (req) => {
     const worktreePath = tryResolveWorktreePath(req.sessionId);
     if (!worktreePath) {
@@ -175,6 +180,15 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     for (const p of projects) {
       const entries = await listWorktrees(p.path);
       for (const e of entries) {
+        // Any path with a `/.git/` segment is git bookkeeping
+        // (submodule gitdirs, etc.) — never a real worktree, even
+        // when `git worktree list` reports it. The classic case is a
+        // submodule project whose worktree-list response points to
+        //   <parent>/.git/modules/<submodule>
+        // and would otherwise tempt the user to click Remove (which
+        // would `git worktree remove --force` the submodule's gitdir
+        // and break the parent repo's submodule tracking).
+        if (e.path.includes(`${path.sep}.git${path.sep}`)) continue;
         // The "main" worktree is already filtered out by listWorktrees.
         // Anything not tracked by a session row is an orphan.
         if (!known.has(e.path)) {

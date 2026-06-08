@@ -39,6 +39,12 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   // Bumped after a file op (rename / duplicate / delete) to re-read
   // the tree without waiting for the parent's refreshKey to tick.
   const [localNonce, setLocalNonce] = useState(0);
+  // Lazy-loaded children keyed by repo-relative path. Populated when
+  // the user expands a directory whose contents weren't included in the
+  // initial fileTree response (i.e. anything past the depth cap, or
+  // anything with `truncated` after a refresh).
+  const [extraChildren, setExtraChildren] = useState<Record<string, FileTreeNodeT[]>>({});
+  const [loadingPaths, setLoadingPaths] = useState<Set<string>>(new Set());
   // Rename dialog state — Electron's renderer doesn't support
   // window.prompt(), so the menu's "Rename…" routes here.
   const [renameTarget, setRenameTarget] = useState<{ absPath: string; currentName: string } | null>(null);
@@ -47,6 +53,28 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   const onRequestRename = useCallback((absPath: string, currentName: string) => {
     setRenameTarget({ absPath, currentName });
   }, []);
+
+  const loadChildren = useCallback(async (relPath: string): Promise<void> => {
+    setLoadingPaths((prev) => {
+      if (prev.has(relPath)) return prev;
+      const next = new Set(prev);
+      next.add(relPath);
+      return next;
+    });
+    try {
+      const res = await window.baton.call('worktree.readDir', { sessionId, relPath });
+      setExtraChildren((prev) => ({ ...prev, [relPath]: res.children }));
+    } catch {
+      // Best-effort. Leave extraChildren un-set so a retry click can
+      // try again. If we cached an error, the tree would be stuck.
+    } finally {
+      setLoadingPaths((prev) => {
+        const next = new Set(prev);
+        next.delete(relPath);
+        return next;
+      });
+    }
+  }, [sessionId]);
   async function submitRename(newName: string): Promise<void> {
     const t = renameTarget;
     setRenameTarget(null);
@@ -67,6 +95,8 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   useEffect(() => {
     let cancelled = false;
     setError(null);
+    // A fresh root invalidates any lazily-loaded subtrees — drop them.
+    setExtraChildren({});
     window.baton
       .call('worktree.fileTree', { sessionId })
       .then((res) => { if (!cancelled) setRoot(res.root); })
@@ -74,12 +104,20 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
     return () => { cancelled = true; };
   }, [sessionId, refreshKey, localNonce]);
 
-  function toggle(p: string): void {
+  function toggle(node: FileTreeNodeT): void {
+    const p = node.path;
     setOpenPaths((prev) => {
       const next = new Set(prev);
       if (next.has(p)) next.delete(p); else next.add(p);
       return next;
     });
+    // If the user is OPENING a dir whose children we don't have yet,
+    // fetch them. children===undefined = depth cap stopped us; we
+    // detect by checking both the eager tree and our extra cache.
+    const eager = node.children;
+    const cached = extraChildren[p];
+    const needs = (eager === undefined || node.truncated) && cached === undefined;
+    if (needs) void loadChildren(p);
   }
 
   function openFilePreview(relPath: string): void {
@@ -102,6 +140,8 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
         node={root}
         depth={0}
         openPaths={openPaths}
+        extraChildren={extraChildren}
+        loadingPaths={loadingPaths}
         onToggle={toggle}
         onPreview={openFilePreview}
         onPin={openFileSticky}
@@ -140,18 +180,28 @@ interface NodeProps {
   node: FileTreeNodeT;
   depth: number;
   openPaths: Set<string>;
-  onToggle: (path: string) => void;
+  extraChildren: Record<string, FileTreeNodeT[]>;
+  loadingPaths: Set<string>;
+  onToggle: (node: FileTreeNodeT) => void;
   onPreview: (path: string) => void;
   onPin: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, absPath: string, isDir: boolean) => void;
   worktreePath: string;
 }
 
-function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin, onContextMenu, worktreePath }: NodeProps): JSX.Element {
+function TreeNode({
+  node, depth, openPaths, extraChildren, loadingPaths,
+  onToggle, onPreview, onPin, onContextMenu, worktreePath,
+}: NodeProps): JSX.Element {
   const isOpen = openPaths.has(node.path);
   const indent = depth * 12;
   if (node.type === 'dir') {
-    const children = node.children ?? [];
+    // Children come from either the eager fileTree fetch or the lazy
+    // readDir cache. Lazy wins so a refreshed subtree replaces stale
+    // eager data.
+    const cached = extraChildren[node.path];
+    const children: FileTreeNodeT[] | undefined = cached ?? node.children;
+    const isLoading = loadingPaths.has(node.path);
     // The worktree root is `node.path === ''` — skip the menu there
     // so users can't rename/delete the project root from inside.
     const isRoot = node.path === '';
@@ -162,22 +212,31 @@ function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin, onContex
           type="button"
           className="tree-row"
           style={{ paddingLeft: 8 + indent }}
-          onClick={() => onToggle(node.path)}
+          onClick={() => onToggle(node)}
           onContextMenu={isRoot ? undefined : (e) => onContextMenu(e, absDir, true)}
         >
           <span className="tree-caret">{isOpen ? '▾' : '▸'}</span>
           <span className="tree-icon">📁</span>
           <span className="tree-name">{node.name || '/'}</span>
-          {node.truncated ? <span className="tree-trunc">…</span> : null}
+          {node.truncated && cached === undefined ? <span className="tree-trunc">…</span> : null}
         </button>
         {isOpen ? (
           <div>
-            {children.map((c) => (
+            {isLoading && children === undefined ? (
+              <div className="tree-row dim" style={{ paddingLeft: 8 + (depth + 1) * 12 }}>
+                <span className="tree-caret" />
+                <span className="tree-icon" />
+                <span className="tree-name">Loading…</span>
+              </div>
+            ) : null}
+            {(children ?? []).map((c) => (
               <TreeNode
                 key={c.path}
                 node={c}
                 depth={depth + 1}
                 openPaths={openPaths}
+                extraChildren={extraChildren}
+                loadingPaths={loadingPaths}
                 onToggle={onToggle}
                 onPreview={onPreview}
                 onPin={onPin}

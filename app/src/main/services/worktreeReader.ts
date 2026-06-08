@@ -56,6 +56,49 @@ export async function readFileTree(root: string): Promise<FileTreeNode> {
   return node;
 }
 
+/** Read one level of children for an existing directory inside the
+ *  worktree. Used by the renderer to lazily load nodes the initial
+ *  fileTree call left at the depth cap. `relPath` is `/`-separated and
+ *  relative to the worktree root; empty means the root itself. */
+export async function readSubdir(
+  root: string,
+  relPath: string,
+): Promise<{ children: FileTreeNode[]; truncated: boolean }> {
+  const safeRel = relPath.replace(/^\/+|\/+$/g, '');
+  // Reject path traversal — `..` segments could escape the worktree.
+  if (safeRel.split('/').some((seg) => seg === '..')) {
+    return { children: [], truncated: false };
+  }
+  const absDir = safeRel === '' ? root : path.join(root, safeRel);
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(absDir, { withFileTypes: true });
+  } catch {
+    return { children: [], truncated: false };
+  }
+  entries.sort((a, b) => {
+    const ad = a.isDirectory() ? 0 : 1;
+    const bd = b.isDirectory() ? 0 : 1;
+    if (ad !== bd) return ad - bd;
+    return a.name.localeCompare(b.name);
+  });
+  const limited = entries.slice(0, MAX_ENTRIES_PER_DIR);
+  const truncated = entries.length > MAX_ENTRIES_PER_DIR;
+  const children: FileTreeNode[] = [];
+  for (const entry of limited) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    const childRel = safeRel === '' ? entry.name : `${safeRel}/${entry.name}`;
+    if (entry.isDirectory()) {
+      // children left undefined → renderer treats this as "click to
+      // load." Cheap probe so the toggle caret renders correctly.
+      children.push({ name: entry.name, path: childRel, type: 'dir' });
+    } else if (entry.isFile() || entry.isSymbolicLink()) {
+      children.push({ name: entry.name, path: childRel, type: 'file' });
+    }
+  }
+  return { children, truncated };
+}
+
 async function walk(absDir: string, node: FileTreeNode, depth: number): Promise<void> {
   if (depth >= MAX_DEPTH) { node.truncated = true; delete node.children; return; }
   let entries: fs.Dirent[];

@@ -226,6 +226,20 @@ const FileTreeNode: z.ZodType<FileTreeNodeT> = z.lazy(() =>
 const WorktreeFileTreeRequest = z.object({ sessionId: SessionId });
 const WorktreeFileTreeResponse = z.object({ root: FileTreeNode });
 
+/** Lazy-load one level of children for a worktree subdir. Used by the
+ *  Files panel when the user expands a node whose contents weren't
+ *  scanned in the initial fileTree call (depth-cap leaves). */
+const WorktreeReadDirRequest = z.object({
+  sessionId: SessionId,
+  /** Path relative to the worktree root. Empty = root itself. */
+  relPath: z.string(),
+});
+const WorktreeReadDirResponse = z.object({
+  children: z.array(FileTreeNode),
+  /** True if entries beyond MAX_ENTRIES_PER_DIR were dropped. */
+  truncated: z.boolean(),
+});
+
 const GitStatusFile = z.object({
   path: z.string(),
   state: z.union([
@@ -528,6 +542,7 @@ export const ControlVerbs = {
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
 
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
+  'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },
   'worktree.gitStatus':    { request: WorktreeGitStatusRequest,   response: WorktreeGitStatusResponse },
   'worktree.listOrphans':  { request: WorktreeListOrphansRequest, response: WorktreeListOrphansResponse },
   'worktree.removeOrphan': { request: WorktreeRemoveOrphanRequest, response: WorktreeRemoveOrphanResponse },
