@@ -419,6 +419,32 @@ export function EditorPane(): JSX.Element {
     if (model) ed.setModel(model);
   }, [activeFilePath, metaMap[activeFilePath ?? '']?.status]);
 
+  // Consume a pending "go to line N" set by the Search panel. We
+  // wait until the target file's model is in place — that's when
+  // revealLineInCenter can compute a layout.
+  const pendingGoto = useAppStore((s) => s.pendingGoto);
+  const consumePendingGoto = useAppStore((s) => s.consumePendingGoto);
+  useEffect(() => {
+    if (!pendingGoto) return;
+    if (pendingGoto.absPath !== activeFilePath) return;
+    if (metaMap[activeFilePath]?.status !== 'ready') return;
+    const ed = editorRef.current;
+    const model = modelsRef.current.get(pendingGoto.absPath);
+    if (!ed || !model) return;
+    try {
+      ed.setModel(model);
+      const pos = { lineNumber: pendingGoto.line, column: Math.max(1, pendingGoto.col) };
+      ed.revealLineInCenter(pos.lineNumber);
+      ed.setPosition(pos);
+      ed.focus();
+    } catch { /* best-effort */ }
+    consumePendingGoto(pendingGoto.nonce);
+    // activeMeta isn't a stable dep — we lock onto its status by reading
+    // it inline above, and re-run when the goto target or active tab
+    // shifts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingGoto?.nonce, activeFilePath, metaMap[activeFilePath ?? '']?.status]);
+
   const activeMeta: FileMeta =
     (activeFilePath ? metaMap[activeFilePath] : undefined) ?? EMPTY_META;
 

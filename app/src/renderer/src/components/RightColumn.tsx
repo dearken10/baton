@@ -2,8 +2,9 @@ import { useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
 import { FilesPanel } from './FilesPanel.js';
 import { GitPanel } from './GitPanel.js';
+import { SearchPanel } from './SearchPanel.js';
 
-type Tab = 'files' | 'git';
+type Tab = 'files' | 'search' | 'git';
 
 const REFRESH_MS = 3000;
 
@@ -33,6 +34,12 @@ export function RightColumn(): JSX.Element {
           📁 Files
         </button>
         <button
+          className={`right-tab ${tab === 'search' ? 'active' : ''}`}
+          onClick={() => setTab('search')}
+        >
+          🔍 Search
+        </button>
+        <button
           className={`right-tab ${tab === 'git' ? 'active' : ''}`}
           onClick={() => setTab('git')}
         >
@@ -49,6 +56,11 @@ export function RightColumn(): JSX.Element {
             sessionId={selected.id}
             worktreePath={selected.worktreePath}
             refreshKey={tick}
+          />
+        ) : tab === 'search' ? (
+          <SearchPanel
+            sessionId={selected.id}
+            worktreePath={selected.worktreePath}
           />
         ) : (
           <GitPanel

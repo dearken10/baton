@@ -15,7 +15,7 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import * as fsp from 'node:fs/promises';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { promisify } from 'node:util';
 import simpleGit from 'simple-git';
 import { z } from 'zod';
@@ -226,6 +226,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     await removeWorktree(project.path, req.path);
     return { ok: true as const };
   },
+  'worktree.search': async (req) => {
+    const cwd = resolveWorktreePath(req.sessionId);
+    return await runGitGrep(cwd, req);
+  },
   'shell.openPath': async (req) => {
     // openPath returns a string — empty on success, error message on
     // failure. We surface it as a boolean for the renderer.
@@ -409,6 +413,50 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return { ok: true, mtimeMs: stat.mtimeMs, stale: false };
   },
 
+  'file.copy': async (req) => {
+    const dest = req.destAbsPath ?? await pickSiblingCopyName(req.absPath);
+    // recursive so directories work the same way as files. errorOnExist
+    // keeps us from clobbering an existing target — the caller can
+    // pass an explicit destAbsPath if they want overwrite semantics.
+    await fsp.cp(req.absPath, dest, {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+    });
+    return { destAbsPath: dest };
+  },
+  'file.rename': async (req) => {
+    if (req.newName.includes('/') || req.newName.includes('\\') || req.newName === '..' || req.newName === '.') {
+      throw new Error('Invalid name — basename must not contain slashes or be . / ..');
+    }
+    const dir = path.dirname(req.absPath);
+    const newAbs = path.join(dir, req.newName);
+    if (newAbs === req.absPath) return { newAbsPath: newAbs };
+    // Refuse to clobber an existing file with the new name. The
+    // renderer surfaces this as an alert and the user can choose
+    // another name.
+    try {
+      await fsp.access(newAbs);
+      throw new Error(`"${req.newName}" already exists in this folder.`);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    await fsp.rename(req.absPath, newAbs);
+    return { newAbsPath: newAbs };
+  },
+  'file.delete': async (req) => {
+    // shell.trashItem moves to the OS trash — recoverable from Finder.
+    // We deliberately do NOT use rm -rf here: the renderer asks for
+    // confirmation, but accidental clicks happen and OS-trash is
+    // strictly safer.
+    await shell.trashItem(req.absPath);
+    return { ok: true };
+  },
+  'file.revealInFinder': (req) => {
+    shell.showItemInFolder(req.absPath);
+    return { ok: true };
+  },
+
   'scrollback.save': async (req) => {
     try {
       const file = scrollbackPath(req.sessionId);
@@ -484,6 +532,120 @@ function tryResolveWorktreePath(sessionId: string): string | null {
  *  alongside the other per-project app state. */
 function scrollbackPath(sessionId: string): string {
   return path.join(app.getPath('home'), '.code24', 'scrollback', `${sessionId}.bin`);
+}
+
+/** Comma-separated glob list → trimmed string[] (drops empties). */
+function splitGlobs(s: string): string[] {
+  return s.split(',').map((x) => x.trim()).filter((x) => x.length > 0);
+}
+
+/** Run `git grep` with the given options and return matches in the
+ *  shape WorktreeSearchResponse wants. Uses --line-number --column
+ *  --null so we can split on NUL and not get tripped up by colons in
+ *  paths or content. Stops at maxMatches; sets `truncated` to true if
+ *  it did. */
+async function runGitGrep(
+  cwd: string,
+  req: RequestOf<'worktree.search'>,
+): Promise<ResponseOf<'worktree.search'>> {
+  const maxMatches = req.maxMatches ?? 2000;
+  const args = [
+    'grep',
+    '--no-color',
+    '--line-number',
+    '--column',
+    '--null',         // NUL between fields → safe split
+    '--full-name',    // paths relative to repo root
+    '-I',             // skip binaries
+    '--untracked',    // honour .gitignore but include untracked files
+  ];
+  if (!req.caseSensitive) args.push('--ignore-case');
+  if (req.wholeWord)      args.push('--word-regexp');
+  if (req.regex) args.push('--extended-regexp');
+  else           args.push('--fixed-strings');
+  // Patterns terminated with `--` so anything in includeGlob isn't
+  // mistaken for a flag.
+  args.push('-e', req.query, '--');
+  const includes = splitGlobs(req.includeGlob);
+  const excludes = splitGlobs(req.excludeGlob);
+  for (const g of includes) args.push(g);
+  for (const g of excludes) args.push(`:!${g}`);
+
+  let stdout = '';
+  let stderr = '';
+  let exitCode: number | null = null;
+  try {
+    const child = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
+      const proc: ChildProcessWithoutNullStreams = spawn('git', args, {
+        cwd,
+        env: process.env,
+      });
+      let out = '';
+      let err = '';
+      proc.stdout.setEncoding('utf-8');
+      proc.stderr.setEncoding('utf-8');
+      proc.stdout.on('data', (d: string) => { out += d; });
+      proc.stderr.on('data', (d: string) => { err += d; });
+      proc.on('error', (e) => resolve({ stdout: out, stderr: String(e), code: 1 }));
+      proc.on('close', (code) => resolve({ stdout: out, stderr: err, code }));
+    });
+    stdout = child.stdout;
+    stderr = child.stderr;
+    exitCode = child.code;
+  } catch (err) {
+    return { matches: [], truncated: false, error: String(err) };
+  }
+
+  // git grep exits 0 = matches, 1 = no matches, 128 = error
+  if (exitCode === 1) return { matches: [], truncated: false, error: null };
+  if (exitCode !== 0) {
+    return { matches: [], truncated: false, error: stderr.trim() || `git grep exited ${exitCode}` };
+  }
+
+  const matches: ResponseOf<'worktree.search'>['matches'] = [];
+  let truncated = false;
+  const lines = stdout.split('\n');
+  for (const raw of lines) {
+    if (raw.length === 0) continue;
+    // `file\0line\0col\0text` with --null
+    const parts = raw.split('\0');
+    if (parts.length < 4) continue;
+    const file = parts[0];
+    const line = Number(parts[1]);
+    const col  = Number(parts[2]);
+    const text = parts.slice(3).join('\0');
+    if (!Number.isFinite(line) || !Number.isFinite(col)) continue;
+    matches.push({
+      file,
+      line,
+      col,
+      lineText: text,
+      // Rough match length: we don't know the matched extent from
+      // --column alone, so for highlighting the renderer re-runs the
+      // pattern against `lineText` starting at `col-1`. We send the
+      // query length as a best-effort default for fixed-string mode.
+      matchLen: req.regex ? 0 : req.query.length,
+    });
+    if (matches.length >= maxMatches) { truncated = true; break; }
+  }
+  return { matches, truncated, error: null };
+}
+
+/** Pick a non-conflicting destination name for `file.copy` when the
+ *  caller didn't supply one. Tries "<stem> copy<ext>" first, then
+ *  numbered suffixes. Mirrors macOS Finder's duplicate behaviour. */
+async function pickSiblingCopyName(srcAbs: string): Promise<string> {
+  const dir = path.dirname(srcAbs);
+  const base = path.basename(srcAbs);
+  const dot = base.lastIndexOf('.');
+  const stem = dot > 0 ? base.slice(0, dot) : base;
+  const ext = dot > 0 ? base.slice(dot) : '';
+  for (let i = 1; i < 1000; i++) {
+    const suffix = i === 1 ? ' copy' : ` copy ${i}`;
+    const candidate = path.join(dir, `${stem}${suffix}${ext}`);
+    try { await fsp.access(candidate); } catch { return candidate; }
+  }
+  throw new Error('Could not find a non-conflicting copy name within 1000 attempts.');
 }
 
 /** Walk up from `absPath` to find a directory containing `.git`.

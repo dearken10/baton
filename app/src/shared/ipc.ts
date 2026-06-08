@@ -328,6 +328,67 @@ const FileReadBinaryResponse = z.object({
   tooLarge: z.boolean(),
 });
 
+/** Basic file system operations triggered from the Files / Git context
+ *  menus. All paths must be absolute; main is the only side that talks
+ *  to fs. Delete uses the OS trash (shell.trashItem) — not rm -rf —
+ *  so an accidental click is recoverable from Finder. */
+const FileCopyRequest = z.object({
+  absPath: z.string().min(1),
+  /** Explicit destination. When omitted main generates a sibling
+   *  like "<stem> copy<ext>" (and "<stem> copy 2<ext>" if taken). */
+  destAbsPath: z.string().min(1).optional(),
+});
+const FileCopyResponse = z.object({ destAbsPath: z.string() });
+
+const FileRenameRequest = z.object({
+  absPath: z.string().min(1),
+  /** New basename — must not contain path separators. */
+  newName: z.string().min(1),
+});
+const FileRenameResponse = z.object({ newAbsPath: z.string() });
+
+const FileDeleteRequest = z.object({ absPath: z.string().min(1) });
+const FileDeleteResponse = z.object({ ok: z.literal(true) });
+
+const FileRevealInFinderRequest = z.object({ absPath: z.string().min(1) });
+const FileRevealInFinderResponse = z.object({ ok: z.literal(true) });
+
+/** Full-text search across a session's worktree. Backed by `git grep`
+ *  in main — searches tracked + untracked-but-not-ignored files. */
+const WorktreeSearchRequest = z.object({
+  sessionId: SessionId,
+  query: z.string().min(1),
+  caseSensitive: z.boolean(),
+  wholeWord: z.boolean(),
+  regex: z.boolean(),
+  /** Comma-separated git pathspec globs (e.g. "*.ts, src/**"). Empty
+   *  means "everything". */
+  includeGlob: z.string(),
+  /** Comma-separated git pathspec globs to NEGATE (added as `:!<g>`). */
+  excludeGlob: z.string(),
+  /** Cap total matches across all files. Default 2 000. */
+  maxMatches: z.number().int().positive().optional(),
+});
+const WorktreeSearchMatch = z.object({
+  /** Repo-relative path. */
+  file: z.string(),
+  line: z.number().int().positive(),
+  /** 1-based column of the first character of the match. */
+  col: z.number().int().positive(),
+  /** Whole line text (untrimmed). */
+  lineText: z.string(),
+  /** Byte length of the match within `lineText` starting at `col-1`. */
+  matchLen: z.number().int().nonnegative(),
+});
+const WorktreeSearchResponse = z.object({
+  matches: z.array(WorktreeSearchMatch),
+  /** True if we hit maxMatches and stopped reading further results. */
+  truncated: z.boolean(),
+  /** Non-null when git grep refused (bad regex, etc). Renderer shows
+   *  this verbatim in the panel. */
+  error: z.string().nullable(),
+});
+
 /** Orphan = a git worktree on disk that doesn't match any session row.
  *  Surfaced read-only here; deletion happens via worktree.removeOrphan. */
 const OrphanWorktree = z.object({
@@ -445,6 +506,7 @@ export const ControlVerbs = {
   'worktree.gitStatus':    { request: WorktreeGitStatusRequest,   response: WorktreeGitStatusResponse },
   'worktree.listOrphans':  { request: WorktreeListOrphansRequest, response: WorktreeListOrphansResponse },
   'worktree.removeOrphan': { request: WorktreeRemoveOrphanRequest, response: WorktreeRemoveOrphanResponse },
+  'worktree.search':       { request: WorktreeSearchRequest,      response: WorktreeSearchResponse },
   'git.stage':             { request: GitStageRequest,             response: GitStageResponse },
   'git.unstage':           { request: GitUnstageRequest,           response: GitUnstageResponse },
   'git.commit':            { request: GitCommitRequest,            response: GitCommitResponse },
@@ -457,6 +519,10 @@ export const ControlVerbs = {
   'file.readBinary':       { request: FileReadBinaryRequest,      response: FileReadBinaryResponse },
   'file.readGitDiff':      { request: FileReadGitDiffRequest,     response: FileReadGitDiffResponse },
   'file.write':            { request: FileWriteRequest,           response: FileWriteResponse },
+  'file.copy':             { request: FileCopyRequest,            response: FileCopyResponse },
+  'file.rename':           { request: FileRenameRequest,          response: FileRenameResponse },
+  'file.delete':           { request: FileDeleteRequest,          response: FileDeleteResponse },
+  'file.revealInFinder':   { request: FileRevealInFinderRequest,  response: FileRevealInFinderResponse },
 
   'pty.write':  { request: PtyWriteRequest, response: Empty },
   'pty.resize': { request: PtyResizeRequest, response: Empty },

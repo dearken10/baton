@@ -70,6 +70,11 @@ export interface AppState {
   selectedSessionId: string | null;
   /** Per-session editor state. Keyed by session id. */
   editorBySession: Record<string, EditorState>;
+  /** One-shot "after the next openFile finishes loading, reveal line N
+   *  in the editor." Consumed (and cleared) by EditorPane once the
+   *  matching tab's model is ready. Nonce ensures repeat clicks on the
+   *  SAME (path,line) still trigger a reveal. */
+  pendingGoto: { absPath: string; line: number; col: number; nonce: number } | null;
 
   loadProjects(projects: Project[]): void;
   loadSessions(sessions: Session[]): void;
@@ -77,8 +82,11 @@ export interface AppState {
   selectSession(sessionId: string | null): void;
   /** Open a file in the active session's editor.
    *   - 'preview' (default): single-click — replaces any preview tab.
-   *   - 'sticky': pinned — opens fresh OR promotes preview to sticky. */
-  openFile(absPath: string, kind?: 'preview' | 'sticky'): void;
+   *   - 'sticky': pinned — opens fresh OR promotes preview to sticky.
+   *   - `goto`: also reveal that line in Monaco once the file's loaded. */
+  openFile(absPath: string, kind?: 'preview' | 'sticky', goto?: { line: number; col: number }): void;
+  /** EditorPane calls this once it has revealed `pendingGoto`. */
+  consumePendingGoto(nonce: number): void;
   /** Promote a preview tab to sticky (called on first edit, F6.5). */
   promoteToSticky(absPath: string): void;
   /** Close one tab in the active session (defaults to its active tab). */
@@ -96,6 +104,7 @@ export const useAppStore = create<AppState>()(
     sessionOrder: {},
     selectedSessionId: null,
     editorBySession: loadPersisted(),
+    pendingGoto: null,
 
     loadProjects: (projects) =>
       set((s) => {
@@ -211,8 +220,16 @@ export const useAppStore = create<AppState>()(
         s.selectedSessionId = sessionId;
       }),
 
-    openFile: (absPath, kind = 'preview') =>
+    openFile: (absPath, kind = 'preview', goto) =>
       set((s) => {
+        if (goto) {
+          s.pendingGoto = {
+            absPath,
+            line: goto.line,
+            col: goto.col,
+            nonce: (s.pendingGoto?.nonce ?? 0) + 1,
+          };
+        }
         const sid = s.selectedSessionId;
         if (!sid) return;
         if (!s.editorBySession[sid]) {
@@ -295,6 +312,11 @@ export const useAppStore = create<AppState>()(
         const slot = s.editorBySession[sid];
         if (!slot) return;
         if (slot.openFiles.includes(absPath)) slot.activeFilePath = absPath;
+      }),
+
+    consumePendingGoto: (nonce) =>
+      set((s) => {
+        if (s.pendingGoto?.nonce === nonce) s.pendingGoto = null;
       }),
   }))
 );

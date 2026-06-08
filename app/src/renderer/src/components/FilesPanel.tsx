@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
 import { FileContextMenu } from './FileContextMenu.js';
-import { browserTabId } from './EditorPane.js';
+import { buildFileMenuItems } from './fileOps.js';
 import type { FileTreeNodeT } from '@shared/ipc.js';
 
 const HTML_EXTS = new Set(['html', 'htm']);
@@ -34,15 +34,16 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   const [root, setRoot] = useState<FileTreeNodeT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set(['']));
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; absPath: string } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; absPath: string; isDir: boolean } | null>(null);
+  // Bumped after a file op (rename / duplicate / delete) to re-read
+  // the tree without waiting for the parent's refreshKey to tick.
+  const [localNonce, setLocalNonce] = useState(0);
   const openInEditor = useAppStore((s) => s.openFile);
+  const onChanged = useCallback(() => setLocalNonce((n) => n + 1), []);
 
-  function openContextMenu(e: React.MouseEvent, absPath: string): void {
+  function openContextMenu(e: React.MouseEvent, absPath: string, isDir: boolean): void {
     e.preventDefault();
-    setCtxMenu({ x: e.clientX, y: e.clientY, absPath });
-  }
-  function openHtmlInBrowser(absPath: string): void {
-    openInEditor(browserTabId(absPath), 'sticky');
+    setCtxMenu({ x: e.clientX, y: e.clientY, absPath, isDir });
   }
 
   useEffect(() => {
@@ -53,7 +54,7 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
       .then((res) => { if (!cancelled) setRoot(res.root); })
       .catch((err) => { if (!cancelled) setError(String(err)); });
     return () => { cancelled = true; };
-  }, [sessionId, refreshKey]);
+  }, [sessionId, refreshKey, localNonce]);
 
   function toggle(p: string): void {
     setOpenPaths((prev) => {
@@ -93,14 +94,12 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
         <FileContextMenu
           x={ctxMenu.x}
           y={ctxMenu.y}
-          items={
-            isHtmlPath(ctxMenu.absPath)
-              ? [{
-                  label: 'Open in browser',
-                  onClick: () => openHtmlInBrowser(ctxMenu.absPath),
-                }]
-              : []
-          }
+          items={buildFileMenuItems({
+            absPath: ctxMenu.absPath,
+            isDir: ctxMenu.isDir,
+            openFile: openInEditor,
+            onChanged,
+          })}
           onClose={() => setCtxMenu(null)}
         />
       ) : null}
@@ -115,7 +114,7 @@ interface NodeProps {
   onToggle: (path: string) => void;
   onPreview: (path: string) => void;
   onPin: (path: string) => void;
-  onContextMenu: (e: React.MouseEvent, absPath: string) => void;
+  onContextMenu: (e: React.MouseEvent, absPath: string, isDir: boolean) => void;
   worktreePath: string;
 }
 
@@ -124,6 +123,10 @@ function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin, onContex
   const indent = depth * 12;
   if (node.type === 'dir') {
     const children = node.children ?? [];
+    // The worktree root is `node.path === ''` — skip the menu there
+    // so users can't rename/delete the project root from inside.
+    const isRoot = node.path === '';
+    const absDir = isRoot ? worktreePath : `${worktreePath}/${node.path}`;
     return (
       <div>
         <button
@@ -131,6 +134,7 @@ function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin, onContex
           className="tree-row"
           style={{ paddingLeft: 8 + indent }}
           onClick={() => onToggle(node.path)}
+          onContextMenu={isRoot ? undefined : (e) => onContextMenu(e, absDir, true)}
         >
           <span className="tree-caret">{isOpen ? '▾' : '▸'}</span>
           <span className="tree-icon">📁</span>
@@ -165,7 +169,7 @@ function TreeNode({ node, depth, openPaths, onToggle, onPreview, onPin, onContex
       style={{ paddingLeft: 8 + indent }}
       onClick={() => onPreview(node.path)}
       onDoubleClick={() => onPin(node.path)}
-      onContextMenu={(e) => onContextMenu(e, abs)}
+      onContextMenu={(e) => onContextMenu(e, abs, false)}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_FILE_PATH, abs);

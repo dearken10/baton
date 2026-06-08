@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
-import { diffTabId, browserTabId } from './EditorPane.js';
-import { DRAG_FILE_PATH, isHtmlPath } from './FilesPanel.js';
+import { diffTabId } from './EditorPane.js';
+import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { FileContextMenu } from './FileContextMenu.js';
+import { buildFileMenuItems } from './fileOps.js';
 import type { ResponseOf } from '@shared/ipc.js';
 
 interface Props {
@@ -308,14 +309,12 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
         <FileContextMenu
           x={ctxMenu.x}
           y={ctxMenu.y}
-          items={
-            isHtmlPath(ctxMenu.absPath)
-              ? [{
-                  label: 'Open in browser',
-                  onClick: () => openInEditor(browserTabId(ctxMenu.absPath), 'sticky'),
-                }]
-              : []
-          }
+          items={buildFileMenuItems({
+            absPath: ctxMenu.absPath,
+            isDir: false,
+            openFile: openInEditor,
+            onChanged: refresh,
+          })}
           onClose={() => setCtxMenu(null)}
         />
       ) : null}
