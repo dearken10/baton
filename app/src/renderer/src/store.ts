@@ -176,11 +176,26 @@ export const useAppStore = create<AppState>()(
             break;
           case 'session.status_changed': {
             const sess = s.sessions[event.sessionId];
+            // Mirror of the main-process status-trace log. Visible in
+            // DevTools so you can correlate "what main sent" with
+            // "what the renderer applied" when chasing stuck chips.
+            // eslint-disable-next-line no-console
+            console.debug(
+              `[status-trace] RENDERER_STATUS sid=${event.sessionId.slice(0, 8)} ` +
+              `from=${event.from} to=${event.to} seq=${event.seq} ` +
+              `ageMs=${Date.now() - event.ts} applied=${sess ? 'yes' : 'no-such-session'}`
+            );
             if (sess) sess.status = event.to as SessionStatus;
             break;
           }
           case 'session.summarized': {
             const sess = s.sessions[event.sessionId];
+            // eslint-disable-next-line no-console
+            console.debug(
+              `[status-trace] RENDERER_SUMMARY sid=${event.sessionId.slice(0, 8)} ` +
+              `summary="${event.summary.slice(0, 40)}" seq=${event.seq} ` +
+              `ageMs=${Date.now() - event.ts} applied=${sess ? 'yes' : 'no-such-session'}`
+            );
             if (sess) sess.lastSummary = event.summary;
             break;
           }

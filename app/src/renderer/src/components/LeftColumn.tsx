@@ -327,6 +327,21 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  async function toggleSnoozeSession(s: Session): Promise<void> {
+    const snoozed = s.snoozedAt == null; // flipping
+    setBusy(true);
+    try {
+      await window.baton.call('session.setSnoozed', {
+        sessionId: s.id,
+        snoozed,
+      });
+    } catch (err) {
+      alert(`${snoozed ? 'Snooze' : 'Unsnooze'} failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteSession(s: Session): Promise<void> {
     const project = projectsRecord[s.projectId];
     const isWorktreeSession =
@@ -434,6 +449,7 @@ export function LeftColumn(): JSX.Element {
               onResume={resumeSession}
               onRename={renameSession}
               onDelete={deleteSession}
+              onToggleSessionSnooze={toggleSnoozeSession}
               onGetInfo={() => window.alert(`${p.name}\n\n${p.path}`)}
               onNewTerminal={() => void spawnTerminal(p.id)}
               onRenameProject={() => renameProjectInList(p)}
@@ -486,6 +502,7 @@ interface ProjectBlockProps {
   onResume: (id: string) => void;
   onRename: (s: Session) => void;
   onDelete: (s: Session) => void;
+  onToggleSessionSnooze: (s: Session) => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRenameProject: () => void;
@@ -504,7 +521,7 @@ const DRAG_SESSION = 'application/x-baton-session';
 function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, sessions, selectedId,
-    onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete,
+    onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete, onToggleSessionSnooze,
     onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
     busy,
   } = props;
@@ -580,7 +597,11 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
             //   - everything else (running / needs-input / paused / done /
             //     errored / disconnected) → chip stays so the user sees it.
             const shellLive = s.backendId === 'shell' && !isEnded;
-            const showStatusChip = !shellLive && s.status !== 'idle';
+            const isSnoozed = s.snoozedAt != null;
+            // Snoozed rows behave exactly like idle ones — no chip.
+            // The user has told us they don't want to be nagged about
+            // this session's status until they unsnooze it.
+            const showStatusChip = !shellLive && !isSnoozed && s.status !== 'idle';
             // Rename is shown for ALL worktree sessions; for live ones
             // the handler will offer to stop the session first.
             const canRename = isWorktreeSession;
@@ -635,8 +656,10 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                 ) : null}
                 <SessionRowMenu
                   canRename={canRename}
+                  isSnoozed={isSnoozed}
                   onRename={() => onRename(s)}
                   onDelete={() => onDelete(s)}
+                  onToggleSnooze={() => onToggleSessionSnooze(s)}
                   busy={busy}
                 />
               </div>
@@ -650,8 +673,10 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
 
 function SessionRowMenu(props: {
   canRename: boolean;
+  isSnoozed: boolean;
   onRename: () => void;
   onDelete: () => void;
+  onToggleSnooze: () => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -701,6 +726,13 @@ function SessionRowMenu(props: {
               Rename
             </button>
           )}
+          <button
+            className="row-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onToggleSnooze(); }}
+          >
+            {props.isSnoozed ? 'Unsnooze' : 'Snooze'}
+          </button>
           <button
             className="row-menu-item danger"
             role="menuitem"

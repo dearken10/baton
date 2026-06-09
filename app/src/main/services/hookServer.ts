@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { HOOK_FORWARDER_SCRIPT } from './hookForwarderSource.js';
+import { trace, shortSid } from './statusTrace.js';
 
 export interface HookEvent {
   sessionId: string;
@@ -94,9 +95,20 @@ export class HookServer {
       const line = buf.slice(0, nlIdx);
       try {
         const event = JSON.parse(line) as HookEvent;
+        trace('HOOK_RECV', {
+          sid: shortSid(event.sessionId),
+          event: event.event,
+          bodyKeys: event.body && typeof event.body === 'object'
+            ? Object.keys(event.body as object).join(',') || '∅'
+            : '∅',
+        });
         const reply = (await this.handler?.(event)) ?? {};
         finishWith(reply);
-      } catch {
+      } catch (err) {
+        trace('HOOK_PARSE_ERR', {
+          err: String(err).slice(0, 80).replace(/\s+/g, '_'),
+          preview: line.slice(0, 60).replace(/\s+/g, '_'),
+        });
         finishWith({});
       }
     });

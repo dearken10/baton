@@ -67,6 +67,11 @@ export const Session = z.object({
    *  permissions, i.e. Claude auto-approves every tool use. Persisted
    *  per row so toggling survives respawn/resume. */
   skipPermissions: z.boolean(),
+  /** Wall-clock ms when the user snoozed this session, or null when
+   *  active. While snoozed, the renderer hides the status chip (like
+   *  the default `idle` treatment) so false-positive needs-input
+   *  flags don't keep nagging. */
+  snoozedAt: z.number().nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -211,6 +216,14 @@ const SessionRenameRequest = z.object({
   newBranchName: z.string().min(1),
 });
 const SessionRenameResponse = z.object({ session: Session });
+
+/** Toggle per-session snooze. While snoozed, the renderer hides the
+ *  status chip so spurious `needs-input` flags don't nag the user. */
+const SessionSetSnoozedRequest = z.object({
+  sessionId: SessionId,
+  snoozed: z.boolean(),
+});
+const SessionSetSnoozedResponse = z.object({ session: Session });
 
 // ── Worktree readers (right column) ─────────────────────────────
 // Recursive node type defined first, then z.lazy with that as the
@@ -553,6 +566,7 @@ export const ControlVerbs = {
   'session.toggleYolo': { request: SessionToggleYoloRequest, response: SessionToggleYoloResponse },
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
+  'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
 
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
   'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },

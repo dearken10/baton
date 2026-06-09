@@ -14,7 +14,7 @@
   --text-faint: #7a8088;
   --accent: #5b8def;
   --accent-2: #1f3866;
-  --running: #5b8def;
+  --running: #2fbf71;
   --needs: #f0a945;
   --done: #2fbf71;
   --errored: #ef5454;
@@ -72,6 +72,7 @@ button {
 .app {
   display: grid;
   grid-template-rows: 36px 1fr;
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
 }
 
@@ -80,6 +81,7 @@ button {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
   padding: 0 12px 0 84px; /* leave room for macOS traffic lights (hiddenInset) */
   background: var(--bg-1);
   border-bottom: 1px solid var(--border);
@@ -260,6 +262,7 @@ button {
 .main {
   display: flex;
   flex-direction: row;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -697,7 +700,7 @@ button {
   border-radius: 999px;
   border: 1px solid transparent;
 }
-.status-running { color: var(--running); background: rgba(91,141,239,.1); border-color: rgba(91,141,239,.25); }
+.status-running { color: var(--running); background: rgba(47,191,113,.1); border-color: rgba(47,191,113,.25); }
 .status-needs-input { color: var(--needs); background: rgba(240,169,69,.1); border-color: rgba(240,169,69,.3); }
 .status-done { color: var(--done); background: rgba(47,191,113,.1); border-color: rgba(47,191,113,.25); }
 .status-errored { color: var(--errored); background: rgba(239,84,84,.1); border-color: rgba(239,84,84,.3); }

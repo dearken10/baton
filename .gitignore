@@ -17,3 +17,6 @@ app/node_modules/
 app/out/
 app/dist/
 app/tsconfig.node.tsbuildinfo
+
+# baton: per-project app state (worktrees, caches, …)
+.baton/

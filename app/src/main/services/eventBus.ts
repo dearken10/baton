@@ -9,6 +9,7 @@ import { BrowserWindow } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { Channels, type AppEvent } from '../../shared/ipc.js';
 import { getDatabase } from '../database/index.js';
+import { trace, shortSid } from './statusTrace.js';
 
 let seq = 0;
 const bootId = randomUUID();
@@ -54,6 +55,28 @@ export function emit(initial: EventInit): void {
     );
   } catch {
     // never let logging fail the user-facing op
+  }
+
+  // Trace status-relevant emits so we can correlate main → renderer.
+  // We only log the ones that move the chip; spammy event types (token
+  // updates, summarised) would drown the trace.
+  if (event.type === 'session.status_changed') {
+    const winCount = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length;
+    trace('EMIT_STATUS', {
+      sid: shortSid(event.sessionId),
+      from: event.from,
+      to: event.to,
+      seq: event.seq,
+      winCount,
+    });
+  } else if (event.type === 'session.summarized') {
+    const winCount = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length;
+    trace('EMIT_SUMMARY', {
+      sid: shortSid(event.sessionId),
+      summary: event.summary.slice(0, 40).replace(/\s+/g, '_'),
+      seq: event.seq,
+      winCount,
+    });
   }
 
   for (const win of BrowserWindow.getAllWindows()) {

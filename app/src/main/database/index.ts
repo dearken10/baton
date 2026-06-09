@@ -117,6 +117,13 @@ function runMigrations(d: Database.Database): void {
     d.exec('ALTER TABLE projects ADD COLUMN snoozed_at INTEGER');
   } catch { /* already migrated */ }
 
+  // Per-session snooze: when set, the renderer hides the status chip
+  // for this row so the user isn't pinged about false-positive
+  // `needs-input` flags. See SessionRowMenu in LeftColumn.tsx.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN snoozed_at INTEGER');
+  } catch { /* already migrated */ }
+
 }
 
 export function getDatabase(): Database.Database {

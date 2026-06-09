@@ -42,9 +42,10 @@ import {
   renameWorktree,
 } from './worktreeManager.js';
 import { getProject } from './projectStore.js';
+import { trace, shortSid } from './statusTrace.js';
 import { readTranscriptUsage } from './transcriptReader.js';
 import { runSetupScript } from './setupScript.js';
-import { summarizeSession } from './intentSummarizer.js';
+import { summarizeSession, summarizeTerminal } from './intentSummarizer.js';
 
 interface LiveSession {
   meta: Session;
@@ -135,6 +136,11 @@ export class SessionManager {
    *  the status_changed/exit events so the renderer doesn't see a
    *  brief "errored" flash before the new spawn lands. */
   private intentionalKills = new Set<string>();
+  /** When the most recent UserPromptSubmit fired for each session.
+   *  Used to log "time from user enter → chip flipped" and
+   *  "time from user enter → summary generated" so we can see where
+   *  the perceived latency actually lives. Cleared on Stop. */
+  private promptSubmittedAt = new Map<string, number>();
 
   constructor() {
     this.backends = {
@@ -348,7 +354,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, ended_at, tokens_in, tokens_out, last_summary,
-                claude_session_id, skip_permissions
+                claude_session_id, skip_permissions, snoozed_at
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
@@ -359,6 +365,7 @@ export class SessionManager {
         tokens_in: number; tokens_out: number; last_summary: string | null;
         claude_session_id: string | null;
         skip_permissions: number;
+        snoozed_at: number | null;
       }[];
 
     return rows.map((r) => {
@@ -378,6 +385,7 @@ export class SessionManager {
         lastSummary: r.last_summary,
         claudeSessionId: r.claude_session_id,
         skipPermissions: r.skip_permissions === 1,
+        snoozedAt: r.snoozed_at,
       };
     });
   }
@@ -471,6 +479,34 @@ export class SessionManager {
       if (skipPermissions) spawnOpts.skipPermissions = true;
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
+      // When reusing an existing row (resume / respawn / auto-resume on
+      // restart), seed the in-memory meta from the persisted DB row
+      // for fields that should survive across runs but aren't re-emitted
+      // on spawn: lastSummary, tokensIn, tokensOut. The DB row's
+      // last_summary is NOT touched by the upsert below, so it's the
+      // authoritative source; without this seeding, listAll() would
+      // return live.meta with `lastSummary: null` and the chip would
+      // lose the intent label between restarts.
+      let savedSummary: string | null = null;
+      let savedTokensIn = 0;
+      let savedTokensOut = 0;
+      let savedSnoozedAt: number | null = null;
+      if (opts.reuseSessionId) {
+        try {
+          const prev = getDatabase()
+            .prepare('SELECT last_summary, tokens_in, tokens_out, snoozed_at FROM sessions WHERE id = ?')
+            .get(opts.reuseSessionId) as
+            | { last_summary: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null }
+            | undefined;
+          if (prev) {
+            savedSummary = prev.last_summary;
+            savedTokensIn = prev.tokens_in ?? 0;
+            savedTokensOut = prev.tokens_out ?? 0;
+            savedSnoozedAt = prev.snoozed_at;
+          }
+        } catch { /* best-effort */ }
+      }
+
       const session: Session = {
         id: sessionId,
         projectId: opts.projectId,
@@ -480,11 +516,12 @@ export class SessionManager {
         status: 'running',
         startedAt: Date.now(),
         endedAt: null,
-        tokensIn: 0,
-        tokensOut: 0,
-        lastSummary: null,
+        tokensIn: savedTokensIn,
+        tokensOut: savedTokensOut,
+        lastSummary: savedSummary,
         claudeSessionId: opts.resumeClaudeSessionId ?? null,
         skipPermissions,
+        snoozedAt: savedSnoozedAt,
       };
 
       // Make the session visible to the hook handler IMMEDIATELY,
@@ -553,6 +590,12 @@ export class SessionManager {
         this.markExited(sessionId, exitCode);
       });
 
+      trace('SPAWN', {
+        sid: shortSid(session.id),
+        backend: session.backendId,
+        reuse: !!opts.reuseSessionId,
+        resumeClaude: !!opts.resumeClaudeSessionId,
+      });
       emit({ type: 'session.spawned', session });
       return session;
     });
@@ -566,9 +609,20 @@ export class SessionManager {
     // sees the bytes when it wakes up (PRD F11.4).
     if (live.meta.status === 'paused') {
       try { live.handle.resume(); } catch { /* best-effort */ }
-      this.setStatus(sessionId, 'idle');
+      this.setStatus(sessionId, 'idle', 'write:auto-resume');
     }
     live.handle.write(data);
+    // Shell sessions don't get Claude's UserPromptSubmit/Stop hooks,
+    // so we treat a CR/LF in the user's input as a command boundary
+    // and fire the terminal summariser. Small delay so the command's
+    // own output has time to land in recentPtyBytes before Haiku reads
+    // it. Throttled inside summarizeTerminal (90s) — long agent loops
+    // or fast `enter`-mashers don't burn tokens.
+    if (live.meta.backendId === 'shell' && /[\r\n]/.test(data)) {
+      setTimeout(() => {
+        void this.updateTerminalSummary(sessionId).catch(() => { /* best-effort */ });
+      }, 500);
+    }
   }
 
   resize(sessionId: string, cols: number, rows: number): void {
@@ -751,7 +805,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, ended_at, tokens_in, tokens_out, last_summary,
-                  claude_session_id, skip_permissions
+                  claude_session_id, skip_permissions, snoozed_at
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -762,6 +816,7 @@ export class SessionManager {
             tokens_in: number; tokens_out: number;
             last_summary: string | null; claude_session_id: string | null;
             skip_permissions: number;
+            snoozed_at: number | null;
           }
         | undefined;
       if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -800,6 +855,7 @@ export class SessionManager {
         endedAt: row.ended_at,
         tokensIn: row.tokens_in,
         tokensOut: row.tokens_out,
+        snoozedAt: row.snoozed_at,
         lastSummary: row.last_summary,
         claudeSessionId: row.claude_session_id,
         skipPermissions: row.skip_permissions === 1,
@@ -891,6 +947,24 @@ export class SessionManager {
     return this.live.get(sessionId)?.recentPtyBytes ?? null;
   }
 
+  /** Toggle the per-session snooze flag. `snoozed=true` stamps
+   *  snoozed_at = now; `snoozed=false` clears it. The live in-memory
+   *  meta is kept in sync so listAll() reflects the change without
+   *  needing a full re-fetch. */
+  setSnoozed(sessionId: string, snoozed: boolean): Session {
+    const value = snoozed ? Date.now() : null;
+    const res = getDatabase()
+      .prepare('UPDATE sessions SET snoozed_at = ? WHERE id = ?')
+      .run(value, sessionId);
+    if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, snoozedAt: value };
+    const session = this.listAll().find((s) => s.id === sessionId);
+    if (!session) throw new Error(`Session disappeared after snooze toggle: ${sessionId}`);
+    emit({ type: 'session.refreshed', session });
+    return session;
+  }
+
   /** Re-stamp display_order for the given sessions in order. The
    *  renderer scopes this per-project, so we don't enforce a single
    *  cross-project sequence. */
@@ -956,31 +1030,93 @@ export class SessionManager {
    * persist it on the session row + emit. Throttled inside
    * intentSummarizer.ts to once per 90s per session. (PRD F4)
    */
-  private async updateIntentSummary(sessionId: string): Promise<void> {
+  /** For shell sessions: ask Haiku to summarise the terminal's recent
+   *  output and persist the result on the session row. Fire-and-forget
+   *  caller; throttled inside summarizeTerminal unless `force: true`. */
+  async updateTerminalSummary(sessionId: string, opts?: { force?: boolean }): Promise<void> {
+    const live = this.live.get(sessionId);
+    if (!live) return;
+    if (live.meta.backendId !== 'shell') return;
+    const recent = live.recentPtyBytes;
+    if (recent.length === 0) return;
+    const summary = await summarizeTerminal({
+      sessionId,
+      recentBytes: recent,
+      ...(opts?.force ? { force: true } : {}),
+      previousSummary: live.meta.lastSummary,
+    });
+    if (!summary) return;
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET last_summary = ? WHERE id = ?')
+        .run(summary, sessionId);
+    } catch { /* best-effort */ }
+    live.meta = { ...live.meta, lastSummary: summary };
+    emit({ type: 'session.summarized', sessionId, summary });
+  }
+
+  private async updateIntentSummary(sessionId: string, opts?: { force?: boolean }): Promise<void> {
     const live = this.live.get(sessionId);
     const claudeSid = live?.meta.claudeSessionId
       ?? (getDatabase()
             .prepare('SELECT claude_session_id FROM sessions WHERE id = ?')
             .get(sessionId) as { claude_session_id: string | null } | undefined)
               ?.claude_session_id;
-    if (!claudeSid) return;
+    trace('SUMM_START', {
+      sid: shortSid(sessionId),
+      force: !!opts?.force,
+      hasLive: !!live,
+      claudeSid: claudeSid ? claudeSid.slice(0, 8) : '∅',
+    });
+    if (!claudeSid) {
+      trace('SUMM_SKIP_NO_CLAUDESID', { sid: shortSid(sessionId) });
+      return;
+    }
     const cwd = live?.meta.worktreePath
       ?? (getDatabase()
             .prepare('SELECT worktree_path FROM sessions WHERE id = ?')
             .get(sessionId) as { worktree_path: string } | undefined)
               ?.worktree_path;
-    if (!cwd) return;
+    if (!cwd) {
+      trace('SUMM_SKIP_NO_CWD', { sid: shortSid(sessionId) });
+      return;
+    }
 
     const transcriptPath = claudeTranscriptPath(cwd, claudeSid);
-    const summary = await summarizeSession({ sessionId, transcriptPath });
-    if (!summary) return; // throttled or failed
+    const previousSummary = live?.meta.lastSummary
+      ?? ((getDatabase()
+            .prepare('SELECT last_summary FROM sessions WHERE id = ?')
+            .get(sessionId) as { last_summary: string | null } | undefined)
+              ?.last_summary
+          ?? null);
+    const summary = await summarizeSession({
+      sessionId,
+      transcriptPath,
+      previousSummary,
+      ...(opts?.force ? { force: true } : {}),
+    });
+    if (!summary) {
+      trace('SUMM_RESULT_NULL', { sid: shortSid(sessionId) });
+      return;
+    }
 
     try {
       getDatabase()
         .prepare('UPDATE sessions SET last_summary = ? WHERE id = ?')
         .run(summary, sessionId);
-    } catch { /* best-effort */ }
+    } catch (err) {
+      trace('SUMM_DB_ERR', {
+        sid: shortSid(sessionId),
+        err: String(err).slice(0, 80).replace(/\s+/g, '_'),
+      });
+    }
     if (live) live.meta = { ...live.meta, lastSummary: summary };
+    const t0 = this.promptSubmittedAt.get(sessionId);
+    trace('SUMM_EMIT', {
+      sid: shortSid(sessionId),
+      summary: summary.slice(0, 40).replace(/\s+/g, '_'),
+      sincePromptMs: t0 ? Date.now() - t0 : -1,
+    });
     emit({ type: 'session.summarized', sessionId, summary });
   }
 
@@ -997,12 +1133,28 @@ export class SessionManager {
     }
   }
 
-  /** Apply a status transition, persist, and emit if it changed. */
-  private setStatus(sessionId: string, next: SessionStatus): void {
+  /** Apply a status transition, persist, and emit if it changed.
+   *  `reason` is a short tag (e.g. `hook:Stop`, `sweep:idle-pause`)
+   *  logged to ~/.baton/logs/status-trace.log for debugging stuck
+   *  chips — every transition documents WHY it happened. */
+  private setStatus(sessionId: string, next: SessionStatus, reason = 'unknown'): void {
     const live = this.live.get(sessionId);
-    if (!live) return;
+    if (!live) {
+      trace('SET_STATUS_NO_LIVE', { sid: shortSid(sessionId), to: next, reason });
+      return;
+    }
     const prev = live.meta.status;
-    if (prev === next) return;
+    if (prev === next) {
+      trace('SET_STATUS_NOOP', {
+        sid: shortSid(sessionId), status: prev, reason,
+      });
+      return;
+    }
+    const t0 = this.promptSubmittedAt.get(sessionId);
+    trace('SET_STATUS', {
+      sid: shortSid(sessionId), from: prev, to: next, reason,
+      sincePromptMs: t0 ? Date.now() - t0 : -1,
+    });
     live.meta = { ...live.meta, status: next };
     // Track when we entered 'idle' so the sweeper can decide who's
     // been quiet too long. Clear on any other transition so a session
@@ -1013,7 +1165,11 @@ export class SessionManager {
       getDatabase()
         .prepare('UPDATE sessions SET status = ? WHERE id = ?')
         .run(next, sessionId);
-    } catch {
+    } catch (err) {
+      trace('SET_STATUS_DB_ERR', {
+        sid: shortSid(sessionId),
+        err: String(err).slice(0, 80).replace(/\s+/g, '_'),
+      });
       // fail-open on persistence — never block the agent
     }
     emit({
@@ -1029,13 +1185,24 @@ export class SessionManager {
    *  doesn't notice the pause unless they look at the chip. */
   private sweepIdleSessions(): void {
     const now = Date.now();
+    let liveCount = 0;
+    let idleCount = 0;
+    let runningCount = 0;
     for (const [sid, live] of this.live) {
+      liveCount++;
+      if (live.meta.status === 'running') runningCount++;
       if (live.meta.status !== 'idle') continue;
+      idleCount++;
       if (live.lastIdleAt == null) continue;
-      if (now - live.lastIdleAt < IDLE_PAUSE_AFTER_MS) continue;
+      const idleFor = now - live.lastIdleAt;
+      if (idleFor < IDLE_PAUSE_AFTER_MS) continue;
       try { live.handle.pause(); } catch { /* best-effort */ }
-      this.setStatus(sid, 'paused');
+      trace('IDLE_PAUSED', { sid: shortSid(sid), idleForMs: idleFor });
+      this.setStatus(sid, 'paused', 'sweep:idle-pause');
     }
+    trace('IDLE_SWEEP', {
+      liveCount, idleCount, runningCount,
+    });
   }
 
   private idleSweeperHandle: NodeJS.Timeout | null = null;
@@ -1049,12 +1216,21 @@ export class SessionManager {
 
   private markExited(sessionId: string, exitCode: number | null): void {
     const live = this.live.get(sessionId);
-    if (!live) return;
+    if (!live) {
+      trace('EXIT_NO_LIVE', { sid: shortSid(sessionId), exitCode });
+      return;
+    }
+    trace('EXIT', {
+      sid: shortSid(sessionId),
+      exitCode,
+      prevStatus: live.meta.status,
+    });
 
     // Planned kills (YOLO toggle, etc.) skip every event + DB write —
     // the caller is about to immediately respawn the same row, so the
     // renderer should never see this transient exit.
     if (this.intentionalKills.delete(sessionId)) {
+      trace('EXIT_INTENTIONAL', { sid: shortSid(sessionId) });
       this.live.delete(sessionId);
       return;
     }
@@ -1093,6 +1269,13 @@ export class SessionManager {
   private handleHookEvent(event: HookEvent): object {
     try {
       const live = this.live.get(event.sessionId);
+      const curStatus = live ? live.meta.status : null;
+      trace('HOOK_DISPATCH', {
+        sid: shortSid(event.sessionId),
+        event: event.event,
+        curStatus: curStatus ?? '∅',
+        hasLive: !!live,
+      });
 
       // SessionStart is special: Claude can fire it during the tiny
       // window between `pty.spawn` returning and `this.live.set(...)`,
@@ -1105,36 +1288,65 @@ export class SessionManager {
         const body = event.body as { session_id?: string } | undefined;
         const claudeSid = body?.session_id;
         if (claudeSid) this.recordClaudeSessionId(event.sessionId, claudeSid);
-        if (live) this.setStatus(event.sessionId, 'idle');
+        if (live) this.setStatus(event.sessionId, 'idle', 'hook:SessionStart');
         return {};
       }
 
-      if (!live) return {};
+      if (!live) {
+        trace('HOOK_NO_LIVE', { sid: shortSid(event.sessionId), event: event.event });
+        return {};
+      }
 
       switch (event.event) {
 
-        case 'UserPromptSubmit':
+        case 'UserPromptSubmit': {
           // User hit enter on a prompt — Claude is about to (or already
           // is) generating a response. This is the only signal that
           // works for pure-text responses, where no PreToolUse fires.
-          this.setStatus(event.sessionId, 'running');
+          const t0 = Date.now();
+          this.promptSubmittedAt.set(event.sessionId, t0);
+          trace('USER_PROMPT', { sid: shortSid(event.sessionId), t0 });
+          // Talking to a session implicitly un-snoozes it: the user is
+          // clearly engaged with this work again, so the chip should
+          // become visible. No-op if not snoozed.
+          if (live.meta.snoozedAt != null) {
+            trace('AUTO_UNSNOOZE', { sid: shortSid(event.sessionId) });
+            try { this.setSnoozed(event.sessionId, false); }
+            catch { /* best-effort */ }
+          }
+          this.setStatus(event.sessionId, 'running', 'hook:UserPromptSubmit');
+          // Refresh the intent summary right away so the left-column
+          // chip reflects what the user JUST asked, not what they were
+          // working on five minutes ago. Force-bypass the throttle —
+          // user-initiated triggers should always run. Small delay so
+          // Claude has flushed the prompt line into the transcript.
+          setTimeout(() => {
+            void this.updateIntentSummary(event.sessionId, { force: true });
+          }, 300);
           break;
+        }
 
         case 'PreToolUse':
           // Claude is actively working — only flip status if we're
           // currently idle (i.e. between turns) so we don't churn
           // the chip on every tool call inside one turn.
           if (live.meta.status === 'idle' || live.meta.status === 'needs-input') {
-            this.setStatus(event.sessionId, 'running');
+            this.setStatus(event.sessionId, 'running', 'hook:PreToolUse');
+          } else {
+            trace('HOOK_NOOP', {
+              sid: shortSid(event.sessionId),
+              event: 'PreToolUse',
+              reason: `curStatus=${live.meta.status}`,
+            });
           }
           break;
 
         case 'Notification':
-          this.setStatus(event.sessionId, 'needs-input');
+          this.setStatus(event.sessionId, 'needs-input', 'hook:Notification');
           break;
 
         case 'Stop':
-          this.setStatus(event.sessionId, 'idle');
+          this.setStatus(event.sessionId, 'idle', 'hook:Stop');
           // Claude just finished a turn — the transcript line for the
           // assistant message includes a `usage` object. Recompute the
           // running totals so the chip shows the new spend (F11.1).
@@ -1153,13 +1365,18 @@ export class SessionManager {
 
         case 'SessionEnd':
           // pty exit will follow; treat as done preemptively.
-          this.setStatus(event.sessionId, 'done');
+          this.setStatus(event.sessionId, 'done', 'hook:SessionEnd');
           // One last token sweep so the final total is right even if
           // the session ends without a trailing Stop.
           this.updateTokenUsage(event.sessionId);
           break;
       }
-    } catch {
+    } catch (err) {
+      trace('HOOK_HANDLER_ERR', {
+        sid: shortSid(event.sessionId),
+        event: event.event,
+        err: String(err).slice(0, 80).replace(/\s+/g, '_'),
+      });
       // Never throw out to Claude.
     }
     return {};

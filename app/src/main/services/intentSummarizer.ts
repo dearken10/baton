@@ -20,10 +20,11 @@
 import * as fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { trace, shortSid } from './statusTrace.js';
 
 const execFileP = promisify(execFile);
 
-const THROTTLE_MS = 90_000;
+const THROTTLE_MS = 1_000;
 /** Hard timeout — never let a stuck Haiku call leak processes. */
 const TIMEOUT_MS = 20_000;
 /** How many characters of the most recent user / assistant content
@@ -92,7 +93,9 @@ function readRecentTurn(transcriptPath: string): {
 
 /** Run Haiku via the Claude CLI. Returns the trimmed summary string,
  *  or null on any error. */
-async function callHaiku(prompt: string): Promise<string | null> {
+async function callHaiku(sessionId: string, prompt: string): Promise<string | null> {
+  const t0 = Date.now();
+  trace('SUMM_HAIKU_START', { sid: shortSid(sessionId), promptLen: prompt.length });
   try {
     const { stdout } = await execFileP(
       'claude',
@@ -105,8 +108,20 @@ async function callHaiku(prompt: string): Promise<string | null> {
       ?.trim()
       ?? '';
     // Strip surrounding quotes the model occasionally adds.
-    return trimmed.replace(/^["'`]|["'`]$/g, '').slice(0, 60) || null;
-  } catch {
+    const result = trimmed.replace(/^["'`]|["'`]$/g, '').slice(0, 60) || null;
+    trace('SUMM_HAIKU_DONE', {
+      sid: shortSid(sessionId),
+      elapsedMs: Date.now() - t0,
+      resultLen: result?.length ?? 0,
+      preview: (result ?? '').slice(0, 40).replace(/\s+/g, '_') || '∅',
+    });
+    return result;
+  } catch (err) {
+    trace('SUMM_HAIKU_ERR', {
+      sid: shortSid(sessionId),
+      elapsedMs: Date.now() - t0,
+      err: String(err).slice(0, 80).replace(/\s+/g, '_'),
+    });
     return null;
   }
 }
@@ -114,6 +129,17 @@ async function callHaiku(prompt: string): Promise<string | null> {
 export interface SummarizeArgs {
   sessionId: string;
   transcriptPath: string;
+  /** Skip the per-session throttle. Used by user-initiated triggers
+   *  (UserPromptSubmit) where we want the chip to update the moment
+   *  the user hits enter, not 90 s later. Doesn't update the throttle
+   *  clock either, so a forced call doesn't suppress the next
+   *  natural Stop-driven call. */
+  force?: boolean;
+  /** The session's current `last_summary` from the DB, if any. We feed
+   *  this to Haiku so generic prompts ("continue", "next", "fix that
+   *  too") still produce a meaningful chip — Haiku can keep the old
+   *  summary as-is, refine it, or replace it when the user pivots. */
+  previousSummary?: string | null;
 }
 
 /**
@@ -127,19 +153,127 @@ export async function summarizeSession(
 ): Promise<string | null> {
   const now = Date.now();
   const last = lastRunBySession.get(args.sessionId) ?? 0;
-  if (now - last < THROTTLE_MS) return null;
-  lastRunBySession.set(args.sessionId, now);
+  trace('SUMM_CALL', {
+    sid: shortSid(args.sessionId),
+    force: !!args.force,
+    sinceLastMs: last ? now - last : -1,
+    transcriptPath: args.transcriptPath.slice(-60),
+  });
+  if (!args.force) {
+    if (now - last < THROTTLE_MS) {
+      trace('SUMM_THROTTLED', { sid: shortSid(args.sessionId), sinceLastMs: now - last });
+      return null;
+    }
+    lastRunBySession.set(args.sessionId, now);
+  }
 
   const turn = readRecentTurn(args.transcriptPath);
-  if (!turn) return null;
+  if (!turn) {
+    let exists = false;
+    let size = -1;
+    try { const st = fs.statSync(args.transcriptPath); exists = true; size = st.size; }
+    catch { /* file missing */ }
+    trace('SUMM_NO_TURN', {
+      sid: shortSid(args.sessionId),
+      transcriptExists: exists,
+      transcriptBytes: size,
+    });
+    return null;
+  }
 
+  // We deliberately base the summary on the user's prompt only.
+  // Earlier versions also fed the recent assistant output as context;
+  // Haiku's instruction-following on "context, do not summarise this"
+  // is unreliable for short user prompts ("continue", "ok", "go"),
+  // and it would echo the assistant text verbatim as the summary —
+  // e.g. "I don't have context about what task you were previously".
+  // The chip is meant to surface the user's intent, so the user's
+  // prompt is the right signal anyway.
+  if (!turn.lastUser.trim()) {
+    trace('SUMM_NO_USER', {
+      sid: shortSid(args.sessionId),
+      lastAssistantLen: turn.lastAssistant.length,
+    });
+    return null;
+  }
+  const prev = args.previousSummary?.trim();
   const prompt =
-    'Summarise the user\'s current task to Claude Code in 3 to 5 words. ' +
+    'Summarise the user\'s current task in 3 to 5 words. ' +
     'Use an action verb + concise object (e.g. "Refactoring auth middleware"). ' +
     'Output ONLY the summary, no quotes, no preamble.\n\n' +
+    (prev
+      ? `PREVIOUS SUMMARY (still valid unless the user pivots): "${prev}"\n\n`
+      : '') +
     `USER PROMPT:\n${turn.lastUser}\n\n` +
-    `RECENT ASSISTANT OUTPUT (for context, do not summarise this):\n${turn.lastAssistant}\n\n` +
+    (prev
+      ? 'If the user is continuing the same task (e.g. "continue", "go ' +
+        'on", "next"), keep the previous summary. Otherwise write a ' +
+        'fresh one based on the user\'s new prompt.\n\n'
+      : '') +
     'Summary:';
 
-  return callHaiku(prompt);
+  return callHaiku(args.sessionId, prompt);
+}
+
+/** Strip ANSI escape sequences and other terminal control codes so
+ *  Haiku gets clean text. Keeps newlines + tabs. */
+const ANSI_CSI = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+const ANSI_OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const C0_CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f]/g;
+
+function stripAnsi(s: string): string {
+  // CSI: ESC [ params final-byte. OSC: ESC ] payload terminator.
+  // C0 controls except CR/LF/TAB.
+  return s.replace(ANSI_CSI, '').replace(ANSI_OSC, '').replace(C0_CONTROLS, '');
+}
+
+export interface SummarizeTerminalArgs {
+  sessionId: string;
+  /** Recent pty output bytes — the buffer SessionManager already keeps
+   *  for late-mount replay. We sniff the tail of this for context. */
+  recentBytes: Buffer;
+  force?: boolean;
+  /** The session's current `last_summary` from the DB, if any. */
+  previousSummary?: string | null;
+}
+
+/** Same shape as summarizeSession but pulls context from a terminal's
+ *  recent output rather than a Claude transcript. Used for shell
+ *  (non-Claude) sessions so the chip can read "Running tests" or
+ *  "Editing nginx.conf" instead of "❯ zsh". */
+export async function summarizeTerminal(
+  args: SummarizeTerminalArgs
+): Promise<string | null> {
+  const now = Date.now();
+  if (!args.force) {
+    const last = lastRunBySession.get(args.sessionId) ?? 0;
+    if (now - last < THROTTLE_MS) return null;
+    lastRunBySession.set(args.sessionId, now);
+  }
+
+  // Last 2x CONTEXT_CHARS of ANSI-stripped output. Two windows because
+  // the prompt + a couple of commands fit comfortably; more than that
+  // is noise for a 3-5 word summary.
+  const text = stripAnsi(args.recentBytes.toString('utf-8'))
+    .slice(-CONTEXT_CHARS * 2)
+    .trim();
+  if (!text) {
+    trace('SUMM_TERM_NO_TEXT', { sid: shortSid(args.sessionId) });
+    return null;
+  }
+
+  const prev = args.previousSummary?.trim();
+  const prompt =
+    'Summarise what the user is doing in this terminal in 3 to 5 words. ' +
+    'Focus on the most recent command(s). Use an action verb + concise ' +
+    'object (e.g. "Running tests", "Editing nginx config"). Output ' +
+    'ONLY the summary, no quotes, no preamble.\n\n' +
+    (prev
+      ? `PREVIOUS SUMMARY (keep if the user is still on the same task): "${prev}"\n\n`
+      : '') +
+    'RECENT TERMINAL OUTPUT:\n' +
+    text +
+    '\n\nSummary:';
+
+  return callHaiku(args.sessionId, prompt);
 }

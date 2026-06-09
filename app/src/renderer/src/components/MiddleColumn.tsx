@@ -40,17 +40,25 @@ export function MiddleColumn(): JSX.Element {
   const openFiles = useAppStore(selectOpenFiles);
   const hasOpenFile = openFiles.length > 0;
 
-  // When the active session OR the editor-zone visibility changes,
-  // dispatch a window 'resize'. Every TerminalPane listens for that
-  // and runs fit() — without this, switching to a session whose slot
-  // was mounted under display:none can render a blank terminal because
-  // xterm's internal dimensions were zero at first fit.
+  // Per-session split percentage between the top (editor) and bottom
+  // (terminal) zones. Declared up here so the resize effect below can
+  // depend on it.
+  const splitRef = useRef<HTMLDivElement>(null);
+  const [topPct, setTopPct] = useState<number>(() => loadTopPct());
+
+  // When the active session, editor-zone visibility, OR the inner
+  // split ratio changes, dispatch a window 'resize'. Every TerminalPane
+  // listens for that and runs fit() — without this, switching to a
+  // session whose slot was mounted under display:none can render a
+  // blank terminal, and dragging the inner horizontal split can leave
+  // the latest rows clipped below the visible area because xterm's
+  // row count is computed from a pre-resize container height.
   useEffect(() => {
     const id = window.requestAnimationFrame(() => {
       window.dispatchEvent(new Event('resize'));
     });
     return () => window.cancelAnimationFrame(id);
-  }, [selectedId, hasOpenFile]);
+  }, [selectedId, hasOpenFile, topPct]);
 
   const sessions = useMemo(() => Object.values(sessionsRecord), [sessionsRecord]);
   const liveSessions = useMemo(
@@ -89,8 +97,8 @@ export function MiddleColumn(): JSX.Element {
   // (the Monaco surface lands in the next iteration; placeholder for
   // now), live terminal on the bottom. The handle between them is
   // draggable and the resulting percentage is persisted.
-  const splitRef = useRef<HTMLDivElement>(null);
-  const [topPct, setTopPct] = useState<number>(() => loadTopPct());
+  // (splitRef / topPct hoisted above so the resize-dispatch effect
+  // can react to drag changes.)
   const onSplitResize = useCallback((deltaY: number) => {
     const el = splitRef.current;
     if (!el) return;

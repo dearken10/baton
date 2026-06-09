@@ -97,6 +97,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     getSessionManager().reorderSessions(req.orderedIds);
     return { ok: true as const };
   },
+  'session.setSnoozed': (req) => {
+    const session = getSessionManager().setSnoozed(req.sessionId, req.snoozed);
+    return { session };
+  },
 
   'session.list': () => ({ sessions: getSessionManager().listAll() }),
   'usage.getStats': async () => getUsage(),
