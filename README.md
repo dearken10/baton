@@ -1,8 +1,7 @@
 # baton
 
 A desktop supervisor for many parallel AI coding agents (Claude Code,
-Codex) across multiple projects. macOS, Electron. Pre-build — this repo
-currently holds the spec and design only.
+Codex) across multiple projects. macOS, Electron.
 
 **Read first:** [`PRD.md`](PRD.md) — canonical product spec.
 
@@ -10,6 +9,7 @@ currently holds the spec and design only.
 
 ```
 PRD.md                          canonical spec (always start here)
+app/                            the Electron app — see app/README.md
 docs/
   pain-points.md                origin doc — why we're building this
   prior-art.md                  research synthesis (cmux / Conductor /
@@ -38,13 +38,30 @@ design/
 
 ## Status
 
-W1 scaffold landed in [`app/`](app/) — Electron + React + Zustand +
-typed IPC bus + SQLite + 3-column split layout. No agents yet. See
-[`app/README.md`](app/README.md) for the dev path and what's
-intentionally not there yet.
+Working v0 in [`app/`](app/). The radar + summary loop is dogfoodable:
 
-v0 plan in [`PRD.md` §12](PRD.md). 4-week solo build producing the
-demoable radar + summary loop.
+- Claude Code backend with per-session pty + xterm renderer
+- Shell ("terminal") sessions in the project root or any existing worktree
+- Worktree-per-agent with optional `setup.sh` run after `git worktree add`
+- Hook-driven status state machine (`SessionStart` / `UserPromptSubmit` /
+  `PreToolUse` / `Notification` / `Stop` / `SessionEnd`)
+- Haiku-powered intent summaries on the chip
+- Token + 5h-window plan usage
+- Per-project and per-session snooze, with auto-unsnooze on next prompt
+- Light / dark theme
+- Monaco editor + file tree + git status panel
+- Native macOS notifications
+
+Not yet built (tracked in [`PRD.md`](PRD.md)):
+
+- HITL approval cards (F3.11–14) — Claude's inline permission prompts are
+  what you see today
+- Codex backend (F2.6)
+- Agent inbox `Cmd+Shift+I` (F3.8)
+- In-app transitions-log modal (F3.10) — the file at
+  `~/.baton/logs/status-trace.log` is the underlying data
+- Onboarding flow (F13)
+- Remote SSH (F14)
 
 ## Viewing the mockups
 

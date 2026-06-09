@@ -130,9 +130,7 @@ project on different branches.
 - **F1.2** Remove project (keeps the folder, just drops it from the
   workspace).
 - **F1.3** Project shows: name, root path, current main branch, list of
-  agents attached, **worktree disk-usage indicator** (sum of
-  `~/.baton/worktrees/<project>` with "Clean up worktrees done > 7 days"
-  action).
+  agents attached.
 - **F1.4** **Per-project setup script** (`setup.sh` or `setup.json` with
   `copyFiles` + `runCommands`), runs after `git worktree add` and before
   the agent spawns. Solves the worktree-doesn't-carry-`node_modules`-`.env`
@@ -150,6 +148,13 @@ project on different branches.
 - **F1.6** **`setup.json --dry-run`** mode: shows what would copy/run
   without executing. Surfaced as a "Preview setup" button in the
   add-project flow and the new-agent dialog.
+- **F1.7** **Project snooze.** Per-project toggle (from the project ⋮
+  menu) hides the project from the Active view and parks it under a
+  Snoozed segment. Snoozed projects keep their sessions on disk and in
+  the DB; nothing is killed. Default view is Active. Counts on each
+  segment header reflect filtered totals. **Auto-unsnooze:** any
+  `UserPromptSubmit` in a session under a snoozed project clears the
+  project snooze (the user is back; un-snooze for them).
 
 ### Agent session management
 
@@ -180,16 +185,18 @@ project on different branches.
   this shape later; we model it from MVP.)*
 - **F2.6** **Pluggable agent backend.** `AgentBackend` TS interface.
   v1 ships **two real backends + a test backend**:
-  - `ClaudeCodeBackend` — primary.
+  - `ClaudeCodeBackend` — primary. **Shipped.**
   - `CodexBackend` — first-class v1 alternative; required because
     onboarding (F13.3) accepts either Claude or Codex.
+    *(Status: deferred — not yet built.)*
   - `MockAgentBackend` — Demo mode (F2.8) and tests.
   Each backend declares its own lifecycle signal mapping
   (Stop / Notification / PreToolUse equivalents) — do **not** assume
   Claude Code's signals work for Codex. New-agent dialog has a
   backend picker; default is the first one detected as installed.
-  *(Source: cmux #5501 — Gemini never emits `Stop`. Gemini /
-  OpenCode / other backends are v2.)*
+  A `ShellBackend` (plain login shell) ships alongside for
+  non-agent terminal sessions (F2.11). *(Source: cmux #5501 —
+  Gemini never emits `Stop`. Gemini / OpenCode / other backends are v2.)*
 - **F2.7** **Hooks must fail-open.** Every agent hook we install (for
   status, notifications, HITL approvals) preserves `$?`, returns within
   a bounded time, and falls back to the agent's own behavior on
@@ -199,6 +206,23 @@ project on different branches.
   that spawns a `MockAgentBackend` with a scripted transcript.
   Exercises radar + summary + HITL without requiring Claude credentials.
   Drops time-to-wow.
+- **F2.9** **Session snooze.** Per-session toggle (row ⋮ menu) hides
+  the status chip for that session — treated like `idle` even when the
+  underlying state is `running` / `needs-input`. Solves false-positive
+  `needs-input` chips (rogue notification, agent stuck on a prompt the
+  user has decided to leave). Survives restart (`sessions.snoozed_at`
+  in SQLite).
+- **F2.10** **Auto-unsnooze on `UserPromptSubmit`.** When the user
+  submits a prompt to a snoozed session (or any session whose parent
+  project is snoozed), both the session and the parent project are
+  un-snoozed in the same handler. Engagement implies un-snooze; the
+  user should not have to remember to do it manually.
+- **F2.11** **Worktree terminal.** Project ⋮ menu has a "New worktree
+  terminal" action that opens a modal listing the project's existing
+  worktrees (from `git worktree list`, minus the main checkout) and
+  spawns a `ShellBackend` session at the selected one. Pairs with the
+  existing "New worktree" (creates a fresh worktree + agent session)
+  and "New Terminal" (shell in the project root).
 
 ### Status surfacing (the "radar")
 
@@ -215,6 +239,11 @@ project on different branches.
   (tool name from `PreToolUse` on top, LLM summary line below — see
   F4), time-in-current-status, **accumulated token spend**, and (if
   configured) **Claude plan 5h-window usage %**.
+  **Chip suppression rules:** (a) `idle` Claude sessions show no chip
+  (boring default state); (b) `ShellBackend` sessions never show a
+  chip (their "running" is just a live login shell, their "done" on
+  restart is just "the previous shell exited" — neither is
+  interesting); (c) snoozed sessions show no chip per F2.9.
 - **F3.4** Clicking a chip focuses that session in the main area. Chips
   are addressable by **stable UUID**, not by index — deep links survive
   relaunch (`baton://session/<uuid>`). *(Source: cmux #5486.)*
@@ -223,24 +252,31 @@ project on different branches.
   `errored`. Dock badge count tracks unread. Notification click →
   focuses the chip. *(Source: Crystal pitfall — renderer Web
   Notification API loses focus/badge affordances.)*
-- **F3.6** **Caller-aware routing:** every hook invocation passes
-  `{sessionId, pid, ppid, tty}` so the notification surfaces in the
-  right session card even when fired from a nested subprocess.
-  *(Source: cmux `TerminalNotificationCallerResolver`.)*
+- **F3.6** **Caller-aware routing:** hook events must be attributable
+  to the right session card even when fired from a nested subprocess
+  (e.g. a bash command Claude shelled out to). **We solve this with
+  env-var inheritance, not pid traversal.** At spawn time we set
+  `BATON_SESSION_ID` (and `BATON_HOOK_SOCK`, see §11) on the agent
+  pty; subprocesses inherit them, and our hook forwarder reads
+  `process.env.BATON_SESSION_ID` to tag every event. No process-tree
+  walk needed. *(cmux used `TerminalNotificationCallerResolver` for
+  the same problem.)*
 - **F3.7** Sidebar metadata (status, summary, ports, git branch)
   refreshes regardless of which workspace is focused. *(Source: cmux
   TODO P0 — gating on focus made the Claude loading indicator go
   stale.)*
 - **F3.8** **Agent inbox** (Cmd+Shift+I) — left-rail list of every
   chip in `needs-input` or `errored`, sorted by age. Makes the queue
-  visible even when radar is scrolled.
+  visible even when radar is scrolled. *(Status: deferred — not yet
+  built.)*
 - **F3.9** **Per-agent intent label** — user-editable persistent label
   ("Stripe migration"). Worktree name is for git; label is for humans.
-- **F3.10** **Transitions log** ("Why did the chip change?") —
-  right-click → modal with every state change + timestamp + trigger.
-  Trust-building for the hybrid intent line.
 
 ### Human-in-the-loop approvals (HITL)
+
+*Status: the entire HITL block (F3.11–F3.14) is deferred. Today
+Claude's own inline permission prompt in the embedded pty is what
+users see; baton does not intercept or replace it.*
 
 - **F3.11** When an agent hooks for permission (e.g. `PreToolUse` with
   a destructive command), the hook **blocks on a `request_id` semaphore**
@@ -590,6 +626,9 @@ precedent.
   rate-limit values (auto-fills with Anthropic-documented defaults;
   re-detectable from rate-limit response headers if present).
   Powers F11.3.
+- **F12.6** **Theme toggle** (titlebar): light / dark. Bootstrap value
+  in `~/.baton/config.json` per F12.3 so first paint after launch
+  uses the right theme without flashing.
 
 ---
 
@@ -1040,6 +1079,30 @@ from MVP.
 **Why a single event bus:** cmux + Crystal both shipped multi-GB
 memory leaks from per-component listeners. One typed bus + Zustand
 selectors.
+
+**Hook plumbing (per-PID socket).** The hook server listens on
+`~/.baton/hooks-<pid>.sock`, **not** the historically-singular
+`~/.baton/hooks.sock`. Each baton process owns its own socket path
+and writes it into the spawned agent's environment as
+`BATON_HOOK_SOCK`. Without this, two baton instances on the same
+machine (e.g. an installed build and a `electron-vite dev` running
+out of a worktree during dogfood) race for the same socket path —
+whichever starts last `unlink()`s the earlier one's socket and
+silently hijacks every hook fired by the earlier instance's agents,
+leaving their chips permanently stuck at `running`. On start, the
+hook server sweeps `hooks-<pid>.sock` files whose owner pid is gone
+(`process.kill(pid, 0)` → `ESRCH`) but never touches a live peer's
+socket.
+
+**Diagnostics: status trace log.** Every state-machine transition,
+hook receipt, summary call, IPC emit, and idle sweep is appended
+to `~/.baton/logs/status-trace.log` as a single grep-friendly line
+(`<ISO-ts> CATEGORY sid=<8-char> key=value …`). Rolls at 5 MB to
+`.log.1` (one generation). Powers the F3.10 transitions log without
+needing an in-app UI; also the first place to look when a chip's
+behavior doesn't match a hook. Renderer mirrors status / summary /
+refresh events as `[status-trace] RENDERER_*` console.debug lines so
+main → IPC → renderer can be correlated end-to-end.
 
 ---
 
