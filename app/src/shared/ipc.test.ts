@@ -31,6 +31,14 @@ describe('control verb registry', () => {
         "app.meta",
         "app.ping",
         "app.setSelectedSession",
+        "connection.create",
+        "connection.delete",
+        "connection.list",
+        "connection.listDir",
+        "connection.reconnect",
+        "connection.test",
+        "connection.testPath",
+        "connection.update",
         "editor.openIn",
         "file.copy",
         "file.create",
@@ -120,7 +128,8 @@ describe('app.meta', () => {
 describe('session.list', () => {
   it('parses empty request + response', () => {
     expect(SessionListRequest.parse({})).toEqual({});
-    expect(SessionListResponse.parse({ sessions: [] })).toEqual({ sessions: [] });
+    expect(SessionListResponse.parse({ sessions: [], startingIds: [] }))
+      .toEqual({ sessions: [], startingIds: [] });
   });
   it('parses a session row', () => {
     const r = SessionListResponse.parse({
@@ -142,6 +151,7 @@ describe('session.list', () => {
           lastSummary: null,
         },
       ],
+      startingIds: [],
     });
     expect(r.sessions[0]?.status).toBe('running');
   });
@@ -166,6 +176,7 @@ describe('session.list', () => {
             lastSummary: null,
           },
         ],
+        startingIds: [],
       })
     ).toThrow();
   });

@@ -43,6 +43,7 @@ import {
   renameWorktree,
 } from './worktreeManager.js';
 import { getProject, setProjectSnoozed } from './projectStore.js';
+import { getFsForProject } from './fs/registry.js';
 import { trace, shortSid } from './statusTrace.js';
 import { readTranscriptUsage } from './transcriptReader.js';
 import { runSetupScript } from './setupScript.js';
@@ -125,6 +126,60 @@ function claudeTranscriptPath(cwd: string, claudeSessionId: string): string {
 function claudeTranscriptExists(cwd: string, claudeSessionId: string): boolean {
   try {
     return fs.existsSync(claudeTranscriptPath(cwd, claudeSessionId));
+  } catch {
+    return false;
+  }
+}
+
+/** True when the session's project lives on this Mac (local fs). For
+ *  remote-pinned projects we can't easily check the transcript from
+ *  here — it lives on the remote host under that user's `~/.claude`.
+ *  Callers gate the local transcript probe on this so remote sessions
+ *  aren't mis-classified as "no transcript" and force-respawned. */
+function isLocalSessionProject(projectId: string): boolean {
+  try {
+    const p = getProject(projectId);
+    return !p || p.connectionId === 'local';
+  } catch {
+    return true;
+  }
+}
+
+/** Async transcript-existence probe that works for both local and
+ *  remote projects. Local: `fs.existsSync` on the Mac path. Remote:
+ *  SSH-resolve the remote `$HOME` once, then `[ -f <path> ]`.
+ *
+ *  Critical for auto-resume: a stale `claude_session_id` (captured
+ *  from a previous SessionStart hook before the pty died) points at
+ *  a transcript file that may never have been written. Without this
+ *  check, `claude --resume <id>` would fail every time on restart
+ *  and the session would loop in 'errored'. */
+async function transcriptExistsFor(
+  projectId: string,
+  cwd: string,
+  claudeSessionId: string,
+): Promise<boolean> {
+  try {
+    const project = getProject(projectId);
+    if (!project || project.connectionId === 'local') {
+      return claudeTranscriptExists(cwd, claudeSessionId);
+    }
+    const batonFs = getFsForProject(projectId);
+    // Resolve the remote $HOME so we can construct the same path
+    // shape Claude uses. We hit the master so this is cheap once
+    // it's warm.
+    const homeRes = await batonFs.exec('bash', ['-lc', 'echo "$HOME"'], {
+      cwd: '/',
+      timeoutMs: 5000,
+    });
+    if (homeRes.code !== 0) return false;
+    const remoteHome = homeRes.stdout.trim();
+    if (!remoteHome) return false;
+    // Same sanitization Claude itself does (slash, dot, underscore → dash).
+    const sanitized = cwd.replace(/[/._]/g, '-');
+    const transcriptPath =
+      `${remoteHome}/.claude/projects/${sanitized}/${claudeSessionId}.jsonl`;
+    return await batonFs.exists(transcriptPath);
   } catch {
     return false;
   }
@@ -214,7 +269,7 @@ export class SessionManager {
       //   codex       → ~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl
       const orphans = getDatabase()
         .prepare(
-          `SELECT id, claude_session_id, worktree_path, backend_id
+          `SELECT id, project_id, claude_session_id, worktree_path, backend_id
              FROM sessions
             WHERE status = 'errored'
               AND claude_session_id IS NOT NULL
@@ -222,14 +277,27 @@ export class SessionManager {
         )
         .all() as {
           id: string;
+          project_id: string;
           claude_session_id: string;
           worktree_path: string;
           backend_id: string;
         }[];
+      // Remote sessions get a pass here: their transcript lives on the
+      // remote host and we can't probe it from the Mac without paying
+      // an SSH round-trip per row. Trust the captured claude_session_id
+      // and let `claude --resume` decide. If the transcript really is
+      // gone, claude exits non-zero and the session stays "errored" —
+      // exactly where it was.
       const orphanIds = orphans
-        .filter((o) => o.backend_id === 'codex'
-          ? !codexTranscriptExists(o.claude_session_id)
-          : !claudeTranscriptExists(o.worktree_path, o.claude_session_id))
+        .filter((o) => {
+          // Remote projects: skip orphan sweep — transcript lives on
+          // the remote host and we can't probe it from here without an
+          // SSH round-trip per row. Stays errored, exactly where it was.
+          if (!isLocalSessionProject(o.project_id)) return false;
+          return o.backend_id === 'codex'
+            ? !codexTranscriptExists(o.claude_session_id)
+            : !claudeTranscriptExists(o.worktree_path, o.claude_session_id);
+        })
         .map((o) => o.id);
       if (orphanIds.length > 0) {
         const ph = orphanIds.map(() => '?').join(',');
@@ -249,29 +317,56 @@ export class SessionManager {
     }
   }
 
+  /** Read the ids that `autoResumeRecent` would pick at boot, without
+   *  actually spawning anything. The IPC `session.list` handler returns
+   *  this list so the renderer can flip rows to "Starting…" atomically
+   *  with loading them, avoiding the flash of stale chips before the
+   *  per-session `session.starting` events arrive. */
+  autoResumeCandidateIds(maxAgeMs: number = 30 * 24 * 60 * 60 * 1000, limit: number = 30): string[] {
+    try {
+      const now = Date.now();
+      const rows = getDatabase()
+        .prepare(
+          `SELECT s.id
+             FROM sessions s
+             JOIN projects p ON p.id = s.project_id
+            WHERE s.status IN ('done', 'errored')
+              AND s.ended_at > ?
+              AND p.snoozed_at IS NULL
+            ORDER BY s.ended_at DESC
+            LIMIT ?`
+        )
+        .all(now - maxAgeMs, limit) as { id: string }[];
+      return rows.map((r) => r.id);
+    } catch {
+      return [];
+    }
+  }
+
   /**
    * Auto-resume sessions that the app didn't gracefully close. Called
    * once after the window finishes loading so the renderer is
-   * subscribed to events. Limits and recency thresholds avoid
-   * spawning a horde of Claude processes from old runs.
+   * subscribed to events.
+   *
+   * Window: 30 days (was 30 min). The old window left long-tail
+   * sessions stranded — user closes the app for the weekend, comes
+   * back Monday, has to click every row to bring sessions up. With
+   * 30 days, "every session the user has been touching" comes back
+   * automatically. Snoozed projects are skipped (snooze acts as the
+   * user's opt-out from auto-resume), and the limit is bumped to
+   * 30 so users with many parallel agents still see them all.
    */
   async autoResumeRecent(opts: {
     candidateIds?: string[];
     maxAgeMs?: number;
     limit?: number;
   } = {}): Promise<void> {
-    // 30-minute window catches typical "quit then restart" cycles.
-    // Older sessions are treated as "the user let them die" and stay
-    // ended. Override for tests; reconciled IDs were a 1:1 list of
-    // sessions we KNOW were live at quit time, but we no longer scope
-    // by them because shell sessions that ended cleanly via SIGTERM
-    // get their markExited written to DB BEFORE app close — so they're
-    // already 'done' at next boot and reconcile doesn't see them.
-    const maxAge = opts.maxAgeMs ?? 30 * 60 * 1000;
-    const limit = opts.limit ?? 10;
+    const maxAge = opts.maxAgeMs ?? 30 * 24 * 60 * 60 * 1000;
+    const limit = opts.limit ?? 30;
     const now = Date.now();
     let rows: {
       id: string;
+      project_id: string;
       backend_id: string;
       claude_session_id: string | null;
       worktree_path: string;
@@ -287,7 +382,7 @@ export class SessionManager {
         const placeholders = opts.candidateIds.map(() => '?').join(',');
         rows = getDatabase()
           .prepare(
-            `SELECT id, backend_id, claude_session_id, worktree_path, status
+            `SELECT id, project_id, backend_id, claude_session_id, worktree_path, status
                FROM sessions
               WHERE id IN (${placeholders})
                 AND ended_at > ?
@@ -296,13 +391,18 @@ export class SessionManager {
           )
           .all(...opts.candidateIds, now - maxAge, limit) as never;
       } else {
+        // Skip snoozed projects — snooze is the user's opt-out from
+        // background activity, including auto-resume.
         rows = getDatabase()
           .prepare(
-            `SELECT id, backend_id, claude_session_id, worktree_path, status
-               FROM sessions
-              WHERE status IN ('done', 'errored')
-                AND ended_at > ?
-              ORDER BY ended_at DESC
+            `SELECT s.id, s.project_id, s.backend_id, s.claude_session_id,
+                    s.worktree_path, s.status
+               FROM sessions s
+               JOIN projects p ON p.id = s.project_id
+              WHERE s.status IN ('done', 'errored')
+                AND s.ended_at > ?
+                AND p.snoozed_at IS NULL
+              ORDER BY s.ended_at DESC
               LIMIT ?`
           )
           .all(now - maxAge, limit) as never;
@@ -311,19 +411,36 @@ export class SessionManager {
       return;
     }
 
-    for (const r of rows) {
+    // Fan out the spawns in parallel. With 30 sessions and sequential
+    // 5-10s SSH round-trips, sequential would take 2-3 minutes — long
+    // enough that the user sees "everything is starting…" forever.
+    // Parallel: bounded by SshConnection's ControlMaster (shared
+    // socket, cheap subsequent channels) and node-pty (no shared
+    // resource). Per-session `queue.run` lock in spawn() prevents
+    // ordering surprises within a single session.
+    await Promise.all(rows.map(async (r) => {
       // Shell sessions have nothing to restore — just respawn a fresh
       // pty at the same cwd. Agent sessions try to resume if their
       // transcript still exists on disk (Claude under
       // ~/.claude/projects, Codex under ~/.codex/sessions); otherwise
       // fall back to a fresh respawn at the same cwd.
       const shellSession = r.backend_id === 'shell';
+      // Probe whether the previous transcript still exists on the
+      // right filesystem. For claude-code we use the async helper that
+      // SSH-stats remote `~/.claude/projects/…` so remote-pinned
+      // sessions don't loop in a resume-fail cycle. Codex transcripts
+      // are only checked locally (`~/.codex/sessions/…`); on remote
+      // we treat that as "no transcript" and fall through to respawn.
       let hasTranscript = false;
       if (r.claude_session_id) {
         if (r.backend_id === 'claude-code') {
-          hasTranscript = claudeTranscriptExists(r.worktree_path, r.claude_session_id);
+          hasTranscript = await transcriptExistsFor(
+            r.project_id, r.worktree_path, r.claude_session_id,
+          );
         } else if (r.backend_id === 'codex') {
-          hasTranscript = codexTranscriptExists(r.claude_session_id);
+          hasTranscript =
+            isLocalSessionProject(r.project_id) &&
+            codexTranscriptExists(r.claude_session_id);
         }
       }
       const needsRespawn = shellSession || !r.claude_session_id || !hasTranscript;
@@ -356,7 +473,7 @@ export class SessionManager {
           const fresh = this.listAll().find((s) => s.id === r.id);
           if (fresh) emit({ type: 'session.refreshed', session: fresh });
         }
-        continue;
+        return;
       }
 
       try {
@@ -368,7 +485,7 @@ export class SessionManager {
         // eslint-disable-next-line no-console
         console.warn(`[baton] auto-resume of ${r.id} failed:`, err);
       }
-    }
+    }));
   }
 
   /**
@@ -445,6 +562,15 @@ export class SessionManager {
     if (!backend) throw new Error(`Unknown backend: ${opts.backendId}`);
 
     const sessionId = opts.reuseSessionId ?? randomUUID();
+    // Tell the renderer "we're starting this one" the instant we
+    // accept the spawn. Without this, the row stays on a stale
+    // `done`/`errored` chip for the duration of the SSH round-trip
+    // (5–10 s for remote) while the user wonders if anything is
+    // happening. session.spawned (success) or session.exited
+    // (failure) will clear the marker.
+    if (opts.reuseSessionId) {
+      emit({ type: 'session.starting', sessionId });
+    }
     return this.queue.run(sessionId, async () => {
       const installed = await backend.isInstalled();
       if (!installed) {
@@ -457,11 +583,13 @@ export class SessionManager {
       // anything else and redirect cwd into it. Branch + cwd for the
       // session will reflect the worktree, not the project root.
       let cwd = opts.cwd;
+      const batonFs = getFsForProject(opts.projectId);
       if (opts.newWorktreeBranch) {
         const wt = await createWorktree({
           projectId: opts.projectId,
           projectRoot: opts.cwd,
           branchName: opts.newWorktreeBranch,
+          fs: batonFs,
         });
         cwd = wt.path;
 
@@ -487,7 +615,7 @@ export class SessionManager {
       // after spawn, there'd be a window where Claude is alive (and
       // could fire SessionStart) but `this.live` doesn't yet contain
       // the session — the hook would silently no-op.
-      const branch = (await readCurrentBranch(cwd)) ?? 'no git';
+      const branch = (await readCurrentBranch(batonFs, cwd)) ?? 'no git';
 
       const skipPermissions = opts.skipPermissions ?? false;
       const spawnOpts: {
@@ -497,11 +625,13 @@ export class SessionManager {
         rows: number;
         resumeAgentSessionId?: string;
         skipPermissions?: boolean;
+        fs?: typeof batonFs;
       } = {
         sessionId,
         cwd,
         cols: 100,
         rows: 32,
+        fs: batonFs,
       };
       if (opts.resumeAgentSessionId) {
         spawnOpts.resumeAgentSessionId = opts.resumeAgentSessionId;
@@ -695,10 +825,16 @@ export class SessionManager {
     // first user prompt, so if it's missing the `--resume` (Claude)
     // / `resume <id>` (Codex) call will fail. Catch upstream of
     // pty.spawn so the chip doesn't go red.
+    //
+    // Claude probe is async so it can SSH-stat the right
+    // `~/.claude/projects/…` path on the remote for remote-pinned
+    // projects — local stat would false-negative every remote session
+    // and loop them forever. Codex transcript probe is sync + local
+    // for now (remote codex transcripts not handled until daemon).
     const transcriptOk = row.backend_id === 'codex'
       ? codexTranscriptExists(row.claude_session_id)
       : row.backend_id === 'claude-code'
-        ? claudeTranscriptExists(row.worktree_path, row.claude_session_id)
+        ? (await transcriptExistsFor(row.project_id, row.worktree_path, row.claude_session_id))
         : true; // shells / unknown — let the spawn path decide.
     if (!transcriptOk) {
       const label = row.backend_id === 'codex' ? 'Codex' : 'Claude';
@@ -798,9 +934,15 @@ export class SessionManager {
       this.live.delete(sessionId);
     }
 
+    // Only attempt --resume if the transcript file actually exists
+    // (probed on the right side — local fs for local projects, SSH
+    // for remote ones). Falls back to a fresh spawn otherwise so the
+    // YOLO toggle doesn't get stuck on a stale claude_session_id.
     const useResume =
       !!row.claude_session_id &&
-      claudeTranscriptExists(row.worktree_path, row.claude_session_id);
+      (await transcriptExistsFor(
+        row.project_id, row.worktree_path, row.claude_session_id,
+      ));
 
     return this.spawn({
       projectId: row.project_id,
@@ -868,10 +1010,12 @@ export class SessionManager {
         );
       }
 
+      const renameFs = getFsForProject(project.id);
       const updated = await renameWorktree({
         projectRoot: project.path,
         worktreePath: row.worktree_path,
         newBranchName,
+        fs: renameFs,
       });
 
       getDatabase()
@@ -953,7 +1097,8 @@ export class SessionManager {
       let worktreeRemoved = false;
       if (shouldRemoveWt && project && isWorktreeSession) {
         try {
-          await removeWorktree(project.path, row.worktree_path);
+          const removeFs = getFsForProject(project.id);
+          await removeWorktree(removeFs, project.path, row.worktree_path);
           worktreeRemoved = true;
         } catch {
           // best-effort — the row still goes away

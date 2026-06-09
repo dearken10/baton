@@ -8,8 +8,16 @@
 
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
+import { enableMapSet } from 'immer';
+
+// Allow immer to produce drafts of Map/Set — required for our
+// `pendingSessionIds: Set<string>` field. Idempotent, but must run
+// before any immer producer is invoked (this module's `create()`
+// below does that as a side-effect of import).
+enableMapSet();
 import type {
   AppEvent,
+  ConnectionProfile,
   Project,
   Session,
   SessionStatus,
@@ -63,11 +71,21 @@ export interface AppState {
   bootStartedAt: number;
   projects: Record<string, Project>;
   sessions: Record<string, Session>;
+  /** Connection profiles keyed by id. The built-in `local` profile is
+   *  always present (seeded by the main process at boot). */
+  connections: Record<string, ConnectionProfile>;
   /** Render order for project / session lists (drag-to-reorder).
    *  Keyed by id → integer position. Lower = earlier in the list. */
   projectOrder: Record<string, number>;
   sessionOrder: Record<string, number>;
   selectedSessionId: string | null;
+  /** Session ids whose spawn/resume/respawn IPC is currently in flight.
+   *  Lives in the store (not a per-column local state) so the sidebar
+   *  row and the middle-column "Start fresh…" button both reflect the
+   *  same pending state — clicking the button immediately flips the
+   *  sidebar row from `done` → `starting` rather than showing `done`
+   *  until the new pty bytes arrive. */
+  pendingSessionIds: Set<string>;
   /** Per-session editor state. Keyed by session id. */
   editorBySession: Record<string, EditorState>;
   /** One-shot "after the next openFile finishes loading, reveal line N
@@ -77,9 +95,15 @@ export interface AppState {
   pendingGoto: { absPath: string; line: number; col: number; nonce: number } | null;
 
   loadProjects(projects: Project[]): void;
-  loadSessions(sessions: Session[]): void;
+  loadSessions(sessions: Session[], startingIds?: readonly string[]): void;
+  loadConnections(profiles: ConnectionProfile[]): void;
   ingestEvent(event: AppEvent): void;
   selectSession(sessionId: string | null): void;
+  /** Set / clear the spawn-in-flight marker for a session. Renderer
+   *  components flip this around `session.spawn`/`session.respawn`/
+   *  `session.resume` IPC calls so the row reflects the work in
+   *  progress before main's `session.spawned` event arrives. */
+  setSessionPending(sessionId: string, pending: boolean): void;
   /** Open a file in the active session's editor.
    *   - 'preview' (default): single-click — replaces any preview tab.
    *   - 'sticky': pinned — opens fresh OR promotes preview to sticky.
@@ -100,9 +124,11 @@ export const useAppStore = create<AppState>()(
     bootStartedAt: Date.now(),
     projects: {},
     sessions: {},
+    connections: {},
     projectOrder: {},
     sessionOrder: {},
     selectedSessionId: null,
+    pendingSessionIds: new Set<string>(),
     editorBySession: loadPersisted(),
     pendingGoto: null,
 
@@ -116,7 +142,13 @@ export const useAppStore = create<AppState>()(
         });
       }),
 
-    loadSessions: (sessions) =>
+    loadConnections: (profiles) =>
+      set((s) => {
+        s.connections = {};
+        profiles.forEach((p) => { s.connections[p.id] = p; });
+      }),
+
+    loadSessions: (sessions, startingIds) =>
       set((s) => {
         s.sessions = {};
         s.sessionOrder = {};
@@ -129,6 +161,14 @@ export const useAppStore = create<AppState>()(
         const live = new Set(sessions.map((x) => x.id));
         for (const sid of Object.keys(s.editorBySession)) {
           if (!live.has(sid)) delete s.editorBySession[sid];
+        }
+        // Seed pending state from main's auto-resume candidate list so
+        // the first render shows "Starting…" instead of the stale
+        // `done`/`errored` status. Per-session `session.starting`
+        // events arrive shortly after and confirm; `session.spawned`
+        // (success) or `session.exited` (early failure) clear.
+        if (startingIds && startingIds.length) {
+          for (const id of startingIds) s.pendingSessionIds.add(id);
         }
       }),
 
@@ -170,8 +210,17 @@ export const useAppStore = create<AppState>()(
             event.orderedIds.forEach((id, i) => { s.sessionOrder[id] = i; });
             break;
           }
+          case 'session.starting':
+            // Main has accepted a (re)spawn — flip the row to "Starting…"
+            // before the slow SSH round-trip completes. Cleared by
+            // session.spawned (success) or session.exited (failure).
+            s.pendingSessionIds.add(event.sessionId);
+            break;
           case 'session.spawned':
             s.sessions[event.session.id] = event.session;
+            // Clear the spawn-in-flight marker — main now has the new
+            // pty up; the row should reflect the real status from here.
+            s.pendingSessionIds.delete(event.session.id);
             if (!s.selectedSessionId) s.selectedSessionId = event.session.id;
             break;
           case 'session.status_changed': {
@@ -205,6 +254,11 @@ export const useAppStore = create<AppState>()(
               sess.endedAt = Date.now();
               sess.status = event.exitCode === 0 ? 'done' : 'errored';
             }
+            // Spawn failed fast (pty exited before main returned
+            // session.spawned). Clear the marker so the row stops
+            // showing "Starting…" — it should display the real
+            // done/errored state from here.
+            s.pendingSessionIds.delete(event.sessionId);
             break;
           }
           case 'session.deleted': {
@@ -243,12 +297,27 @@ export const useAppStore = create<AppState>()(
             }
             break;
           }
+          case 'connection.added':
+          case 'connection.updated': {
+            s.connections[event.profile.id] = event.profile;
+            break;
+          }
+          case 'connection.removed': {
+            delete s.connections[event.id];
+            break;
+          }
         }
       }),
 
     selectSession: (sessionId) =>
       set((s) => {
         s.selectedSessionId = sessionId;
+      }),
+
+    setSessionPending: (sessionId, pending) =>
+      set((s) => {
+        if (pending) s.pendingSessionIds.add(sessionId);
+        else s.pendingSessionIds.delete(sessionId);
       }),
 
     openFile: (absPath, kind = 'preview', goto) =>

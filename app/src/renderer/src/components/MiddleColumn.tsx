@@ -69,27 +69,38 @@ export function MiddleColumn(): JSX.Element {
   const selectedProject = selected ? projectsRecord[selected.projectId] ?? null : null;
   const selectedIsLive = !!selected && isLive(selected);
 
-  const [respawnBusy, setRespawnBusy] = useState(false);
+  // Per-session pending lock shared with the LeftColumn via the store
+  // — the sidebar row needs to flip to "Starting…" the same instant
+  // this button is clicked, otherwise the user sees a stale `done`
+  // chip until session.spawned fires.
+  const pendingSet = useAppStore((s) => s.pendingSessionIds);
+  const setSessionPending = useAppStore((s) => s.setSessionPending);
+  const isRespawnPending = (sid: string): boolean => pendingSet.has(sid);
+  const markRespawnPending = (sid: string, on: boolean): void => {
+    setSessionPending(sid, on);
+  };
   async function respawnHere(sessionId: string): Promise<void> {
-    setRespawnBusy(true);
+    if (isRespawnPending(sessionId)) return;
+    markRespawnPending(sessionId, true);
     try {
       const { session } = await window.baton.call('session.respawn', { sessionId });
       selectSession(session.id);
     } catch (err) {
       alert(`Start session failed: ${String(err)}`);
     } finally {
-      setRespawnBusy(false);
+      markRespawnPending(sessionId, false);
     }
   }
   async function resumeHere(sessionId: string): Promise<void> {
-    setRespawnBusy(true);
+    if (isRespawnPending(sessionId)) return;
+    markRespawnPending(sessionId, true);
     try {
       const { session } = await window.baton.call('session.resume', { sessionId });
       selectSession(session.id);
     } catch (err) {
       alert(`Resume failed: ${String(err)}`);
     } finally {
-      setRespawnBusy(false);
+      markRespawnPending(sessionId, false);
     }
   }
 
@@ -236,18 +247,24 @@ export function MiddleColumn(): JSX.Element {
                     type="button"
                     className="btn primary"
                     onClick={() => resumeHere(selected.id)}
-                    disabled={respawnBusy}
+                    disabled={isRespawnPending(selected.id)}
+                    aria-busy={isRespawnPending(selected.id) || undefined}
                   >
-                    Resume conversation
+                    {isRespawnPending(selected.id) ? 'Starting…' : 'Resume conversation'}
                   </button>
                 ) : null}
                 <button
                   type="button"
                   className={`btn${selected.backendId === 'shell' ? ' primary' : ''}`}
                   onClick={() => respawnHere(selected.id)}
-                  disabled={respawnBusy}
+                  disabled={isRespawnPending(selected.id)}
+                  aria-busy={isRespawnPending(selected.id) || undefined}
                 >
-                  {selected.backendId === 'shell' ? 'Open fresh terminal' : 'Start fresh session here'}
+                  {isRespawnPending(selected.id)
+                    ? 'Starting…'
+                    : selected.backendId === 'shell'
+                      ? 'Open fresh terminal'
+                      : 'Start fresh session here'}
                 </button>
               </div>
               <p className="dim mono">

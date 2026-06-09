@@ -27,6 +27,8 @@ export type HookHandler = (e: HookEvent) => Promise<object | undefined> | object
 
 export class HookServer {
   private server: net.Server | null = null;
+  private tcpServer: net.Server | null = null;
+  private tcpPort = 0;
   private handler: HookHandler | null = null;
 
   /** Path to the unix socket main listens on.
@@ -69,6 +71,12 @@ export class HookServer {
     }
   }
 
+  /** Localhost TCP port for remote sessions. The remote forwarder
+   *  reaches us through an SSH reverse-port-forward set up by the
+   *  remote PTY backend (see fs/remoteFs.ts spawnPty). */
+  tcpAddr(): string { return `127.0.0.1:${this.tcpPort}`; }
+  getTcpPort(): number { return this.tcpPort; }
+
   /** Write the forwarder script and start listening. Safe to call multiple times. */
   async start(handler: HookHandler): Promise<void> {
     this.handler = handler;
@@ -81,17 +89,30 @@ export class HookServer {
 
     this.sweepStaleSockets(dir);
 
+    // Unix socket for local sessions.
     const sockPath = this.sockPath();
     // Our pid is unique to this process, so any file at this path is a
     // leftover from a prior crashed run with the same pid — safe to
     // remove. (sweepStaleSockets handles other pids.)
     try { fs.unlinkSync(sockPath); } catch { /* no prior socket */ }
-
     this.server = net.createServer((client) => this.onClient(client));
     await new Promise<void>((resolve, reject) => {
       this.server!.once('error', reject);
       this.server!.listen(sockPath, () => {
         this.server!.off('error', reject);
+        resolve();
+      });
+    });
+
+    // Localhost TCP for remote sessions (reached via SSH -R from the
+    // remote). Bind to an ephemeral port so we don't collide.
+    this.tcpServer = net.createServer((client) => this.onClient(client));
+    await new Promise<void>((resolve, reject) => {
+      this.tcpServer!.once('error', reject);
+      this.tcpServer!.listen(0, '127.0.0.1', () => {
+        const addr = this.tcpServer!.address();
+        if (addr && typeof addr === 'object') this.tcpPort = addr.port;
+        this.tcpServer!.off('error', reject);
         resolve();
       });
     });
@@ -101,6 +122,10 @@ export class HookServer {
     if (this.server) {
       this.server.close();
       this.server = null;
+    }
+    if (this.tcpServer) {
+      this.tcpServer.close();
+      this.tcpServer = null;
     }
     try { fs.unlinkSync(this.sockPath()); } catch { /* ignore */ }
   }

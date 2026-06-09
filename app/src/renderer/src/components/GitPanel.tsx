@@ -29,6 +29,10 @@ const STATE_ORDER: FileState[] = [
 ];
 
 export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.Element {
+  const session = useAppStore((s) => s.sessions[sessionId]);
+  const project = useAppStore((s) => session ? s.projects[session.projectId] : undefined);
+  const connection = useAppStore((s) => project ? s.connections[project.connectionId] : undefined);
+  const isRemote = !!connection && connection.kind !== 'local';
   const [report, setReport] = useState<GitStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -320,6 +324,8 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
             onChanged: refresh,
             onRequestRename: (absPath, currentName) =>
               setRenameTarget({ absPath, currentName }),
+            sessionId,
+            isRemote,
           })}
           onClose={() => setCtxMenu(null)}
         />
@@ -335,7 +341,7 @@ export function GitPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.El
             const t = renameTarget;
             setRenameTarget(null);
             void window.baton
-              .call('file.rename', { absPath: t.absPath, newName: v })
+              .call('file.rename', { absPath: t.absPath, newName: v, sessionId })
               .then(() => refresh())
               .catch((err) => alert(`Rename failed: ${String(err)}`));
           }}

@@ -19,6 +19,7 @@ export const HOOK_FORWARDER_SCRIPT = String.raw`#!/usr/bin/env node
 
 const net = require('node:net');
 const sockPath = process.env.BATON_HOOK_SOCK;
+const tcpAddr  = process.env.BATON_HOOK_TCP;   // "host:port"; remote forwarder uses this
 const sessionId = process.env.BATON_SESSION_ID;
 const eventName = process.argv[2] || 'unknown';
 
@@ -28,7 +29,7 @@ function failOpen() {
   process.exit(0);
 }
 
-if (!sockPath || !sessionId) failOpen();
+if ((!sockPath && !tcpAddr) || !sessionId) failOpen();
 
 let stdin = '';
 process.stdin.setEncoding('utf8');
@@ -42,7 +43,17 @@ process.stdin.on('end', () => {
   const payload = { sessionId, event: eventName, body };
   let response = '';
   let resolved = false;
-  const sock = net.createConnection(sockPath);
+
+  // Prefer TCP when set (remote forwarder), fall back to the Unix socket.
+  let sock;
+  if (tcpAddr) {
+    const idx = tcpAddr.lastIndexOf(':');
+    const host = tcpAddr.slice(0, idx) || '127.0.0.1';
+    const port = Number(tcpAddr.slice(idx + 1));
+    sock = net.createConnection({ host, port });
+  } else {
+    sock = net.createConnection(sockPath);
+  }
 
   const finish = (text) => {
     if (resolved) return;

@@ -24,7 +24,10 @@ import type {
   AgentSpawnOpts,
 } from './agentBackend.js';
 import { getHookServer } from './hookServer.js';
+import { HOOK_FORWARDER_SCRIPT } from './hookForwarderSource.js';
 import { trustDirectoryForClaude } from './claudeTrust.js';
+import type { BatonFs } from './fs/types.js';
+import { RemoteFs } from './fs/remoteFs.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,12 +40,19 @@ export interface ClaudeCodeSpawnOpts extends AgentSpawnOpts {
   /** When true, also pass `--dangerously-skip-permissions` so Claude
    *  auto-approves every tool use (YOLO mode). */
   skipPermissions?: boolean;
+  /** The Fs whose host actually runs claude. LocalFs → claude runs on
+   *  this Mac (the original path). RemoteFs → claude runs on the
+   *  remote box, pty streamed over SSH. */
+  fs?: BatonFs;
 }
 
 export class ClaudeCodeBackend implements AgentBackend {
   readonly id = 'claude-code' as const;
 
   async isInstalled(): Promise<boolean> {
+    // Local install only — the remote spawn path probes claude via
+    // ssh at spawn time (a quick `command -v claude` lives in the
+    // shell line below, gated by a friendly error message).
     try {
       const { stdout } = await execFileAsync('claude', ['--version']);
       return /\d+\.\d+/.test(stdout);
@@ -52,6 +62,9 @@ export class ClaudeCodeBackend implements AgentBackend {
   }
 
   async spawn(opts: ClaudeCodeSpawnOpts): Promise<AgentHandle> {
+    if (opts.fs && !opts.fs.isLocal) {
+      return this.spawnRemote(opts, opts.fs as RemoteFs);
+    }
     // Pre-trust the cwd in Claude's user config so the CLI doesn't
     // sit on the "Do you trust this directory?" prompt — that prompt
     // blocks SessionStart from firing, which means the session's
@@ -140,6 +153,173 @@ export class ClaudeCodeBackend implements AgentBackend {
     return wrap(ptyProcess, () => {
       try { fs.unlinkSync(settingsPath); } catch { /* best-effort cleanup */ }
     });
+  }
+
+  /**
+   * Remote spawn — claude runs on the remote box, pty is streamed
+   * over SSH. The hook bridge piggybacks on SSH's reverse port forward
+   * so our Mac's hookServer still receives PreToolUse / Stop / etc.
+   */
+  private async spawnRemote(
+    opts: ClaudeCodeSpawnOpts,
+    remoteFs: RemoteFs,
+  ): Promise<AgentHandle> {
+    const hooks = getHookServer();
+    const tcpPort = hooks.getTcpPort();
+    if (!tcpPort) throw new Error('hookServer TCP port not started yet');
+
+    // Probe & install dependencies on the remote. We need `claude` and
+    // `node` (for our forwarder).
+    //
+    // We use `bash -ilc` (interactive login). Ubuntu/Debian's default
+    // ~/.bashrc has `case $- in *i*) ;; *) return ;; esac` near the
+    // top — a non-interactive shell exits before sourcing nvm,
+    // npm-global, asdf, or whatever else adds claude to PATH. Adding
+    // -i bypasses that guard. The cost is that an interactive bash
+    // might print MOTD/aliases noise to the pty for the spawn case,
+    // but that's strictly preferable to "claude not found".
+    // Pre-flight: make sure the cwd actually exists. A missing dir
+    // makes `cd` fail before the probe even runs, and we'd misreport
+    // the failure as "claude not found".
+    if (!(await remoteFs.exists(opts.cwd))) {
+      throw new Error(
+        `Remote project folder does not exist: ${opts.cwd}\n\n` +
+        `SSH into ${remoteFs.profile.host} and \`mkdir -p ${opts.cwd}\`, ` +
+        `or remove and re-add the project.`
+      );
+    }
+    const probe = await remoteFs.exec(
+      'bash', ['-ilc', 'command -v claude && command -v node || true'],
+      { cwd: opts.cwd, timeoutMs: 8000 }
+    );
+    if (probe.code !== 0 || !probe.stdout.includes('claude')) {
+      const path = probe.stdout.trim();
+      const stderr = probe.stderr.trim();
+      throw new Error(
+        `claude CLI not found on remote host (${remoteFs.profile.host}).\n\n` +
+        `Probe stdout: ${path || '(empty)'}\n` +
+        `Probe stderr: ${stderr || '(empty)'}\n` +
+        `Probe exit: ${probe.code}\n\n` +
+        `SSH into the host and run \`bash -ilc 'which claude'\` to ` +
+        `reproduce — that's what baton runs.`
+      );
+    }
+
+    // Write the per-session settings file and a copy of the forwarder
+    // script under ~/.baton on the remote. We can't reuse the local
+    // path because Claude on the remote can't see our Mac's disk.
+    // Resolve HOME via a one-shot ssh — we need a real absolute path
+    // for forwarderPath / settingsPath.
+    const homeRes = await remoteFs.exec('bash', ['-ilc', 'echo "$HOME"'], {
+      cwd: '/', timeoutMs: 4000,
+    });
+    const remoteHome = homeRes.stdout.trim() || '/tmp';
+    const remoteDir = `${remoteHome}/.baton`;
+    const remoteForwarder = `${remoteDir}/hook-forwarder.js`;
+    const remoteSettings = `${remoteDir}/baton-claude-${opts.sessionId}.settings.json`;
+
+    await remoteFs.mkdir(remoteDir, { recursive: true });
+    // The forwarder script is the same on local + remote — read TCP
+    // env first, fall back to BATON_HOOK_SOCK.
+    await remoteFs.writeFile(remoteForwarder, HOOK_FORWARDER_SCRIPT);
+    // chmod +x — helpful when the user runs it standalone, not
+    // strictly required since claude invokes it via `node`.
+    await remoteFs.exec('chmod', ['+x', remoteForwarder], {
+      cwd: remoteDir, timeoutMs: 4000,
+    }).catch(() => { /* best-effort */ });
+
+    const hookCmd = (event: string): string =>
+      `node ${shellEscape(remoteForwarder)} ${event}`;
+    const settings = {
+      hooks: {
+        SessionStart: [
+          { hooks: [{ type: 'command', command: hookCmd('SessionStart') }] },
+        ],
+        UserPromptSubmit: [
+          { hooks: [{ type: 'command', command: hookCmd('UserPromptSubmit') }] },
+        ],
+        PreToolUse: [
+          { matcher: '*', hooks: [{ type: 'command', command: hookCmd('PreToolUse') }] },
+        ],
+        Notification: [
+          { hooks: [{ type: 'command', command: hookCmd('Notification') }] },
+        ],
+        Stop: [
+          { hooks: [{ type: 'command', command: hookCmd('Stop') }] },
+        ],
+        SessionEnd: [
+          { hooks: [{ type: 'command', command: hookCmd('SessionEnd') }] },
+        ],
+      },
+    };
+    await remoteFs.writeFile(remoteSettings, JSON.stringify(settings, null, 2));
+
+    // Pre-trust the worktree on the remote so claude doesn't sit on
+    // the "Quick safety check: do you trust this directory?" prompt
+    // the first time. Claude reads ~/.claude.json (NOT ~/.claude/
+    // config.json — the latter is unrelated). See ./claudeTrust.ts
+    // for the local equivalent.
+    //
+    // We resolve the cwd's realpath (Claude stores the symlink-resolved
+    // form), then merge a stub entry into projects[<realpath>]. If the
+    // entry already exists with hasTrustDialogAccepted=true, the inner
+    // script no-ops. Atomic-ish write via rename.
+    await remoteFs.exec('bash', ['-ilc',
+      `node -e '` +
+      `const fs=require("fs"),p=require("path"); ` +
+      `const home=process.env.HOME||"/tmp"; ` +
+      `const f=p.join(home,".claude.json"); ` +
+      `let cwd=${JSON.stringify(opts.cwd)}; ` +
+      `try{cwd=fs.realpathSync(cwd);}catch(e){} ` +
+      `let cfg={}; try{cfg=JSON.parse(fs.readFileSync(f,"utf8"));}catch(e){} ` +
+      `cfg.projects=cfg.projects||{}; ` +
+      `const stub={"allowedTools":[],"mcpContextUris":[],"mcpServers":{},"enabledMcpjsonServers":[],"disabledMcpjsonServers":[],"hasTrustDialogAccepted":true}; ` +
+      `cfg.projects[cwd]=Object.assign({},stub,cfg.projects[cwd]||{},{"hasTrustDialogAccepted":true}); ` +
+      `try{const tmp=f+".baton.tmp";fs.writeFileSync(tmp,JSON.stringify(cfg,null,2));fs.renameSync(tmp,f);}catch(e){}'`,
+    ], { cwd: remoteHome, timeoutMs: 5000 }).catch(() => { /* best-effort */ });
+
+    const claudeArgs: string[] = ['--settings', remoteSettings];
+    if (opts.resumeAgentSessionId) {
+      claudeArgs.push('--resume', opts.resumeAgentSessionId);
+    }
+    if (opts.skipPermissions) {
+      claudeArgs.push('--dangerously-skip-permissions');
+    }
+
+    const remoteEnv: Record<string, string> = {
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      BATON_HOOK_TCP: `127.0.0.1:${tcpPort}`,
+      BATON_SESSION_ID: opts.sessionId,
+      ...(opts.env ?? {}),
+    };
+
+    // Wrap the claude exec in `bash -ilc` to match the probe (see the
+    // long comment above on the probe). Without -i, Ubuntu/Debian's
+    // default ~/.bashrc returns early for non-interactive shells and
+    // any PATH adjustments there (nvm, npm-global, asdf, …) don't
+    // apply. The probe finding claude but the spawn not would be a
+    // miserable failure mode.
+    const innerCmd = `exec claude ${claudeArgs.map(shellEscape).join(' ')}`;
+    const handle = await remoteFs.spawnPty({
+      command: 'bash',
+      args: ['-ilc', innerCmd],
+      cwd: opts.cwd,
+      env: remoteEnv,
+      cols: opts.cols,
+      rows: opts.rows,
+      // Forward the remote's `<tcpPort>` to our Mac's hook listener
+      // through the existing master. Same port number on both ends
+      // keeps the env var simple.
+      reverseForward: [{ remotePort: tcpPort, localPort: tcpPort }],
+    });
+
+    // Clean up the settings file when the session ends. Use the
+    // pty's onExit subscription so we don't leak per-session JSONs.
+    handle.onExit(() => {
+      void remoteFs.rm(remoteSettings, { force: true }).catch(() => { /* ignore */ });
+    });
+    return handle;
   }
 }
 

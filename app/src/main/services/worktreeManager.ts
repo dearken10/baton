@@ -5,17 +5,15 @@
  * Worktrees live at `<projectRoot>/.baton/worktrees/<branchSlug>/`,
  * inside the user's project — same pattern as Crystal. The `.baton/`
  * directory is gitignored on first create so the project never sees
- * any of our state as untracked files, and the same dir is reserved
- * for future per-project app state (caches, session metadata, etc.).
+ * any of our state as untracked files.
  *
- * Mirrors Crystal's `worktreeManager.ts` pattern: withLock-serialised
- * creates, tolerant remove. (Crystal's code is the precedent we
- * cited in `docs/prior-art.md`.)
+ * Stage 2: every git/fs op routes through the project's BatonFs.
+ * LocalFs runs the same code as before; RemoteFs shells the same
+ * commands over SSH.
  */
 
-import * as fs from 'node:fs';
-import * as path from 'node:path';
-import simpleGit from 'simple-git';
+import { posix } from 'node:path';
+import type { BatonFs } from './fs/types.js';
 
 const BATON_DIR_NAME = '.baton';
 const WORKTREES_SUBDIR = 'worktrees';
@@ -40,6 +38,8 @@ export interface CreateWorktreeArgs {
   /** Optional: base commit / branch / ref to branch off from.
    *  Defaults to the current HEAD of the project root. */
   base?: string;
+  /** The BatonFs that owns projectRoot (local or remote). */
+  fs: BatonFs;
 }
 
 export interface WorktreeInfo {
@@ -68,30 +68,27 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
   if (!branch) throw new Error('Branch name is required.');
 
   const branchSlug = slugify(branch);
-  const wtDir = path.join(
+  const wtDir = posix.join(
     args.projectRoot,
     BATON_DIR_NAME,
     WORKTREES_SUBDIR,
     branchSlug
   );
   const lockKey = `wt:${args.projectRoot}:${branchSlug}`;
+  const { fs } = args;
 
   return withLock(lockKey, async () => {
-    if (fs.existsSync(wtDir)) {
+    if (await fs.exists(wtDir)) {
       throw new Error(`A worktree already exists at ${wtDir}.`);
     }
-    if (!fs.existsSync(path.join(args.projectRoot, '.git'))) {
+    if (!(await fs.exists(posix.join(args.projectRoot, '.git')))) {
       throw new Error(
         `Cannot create a worktree: ${args.projectRoot} is not a git repo.`
       );
     }
 
-    // Make sure .baton-worktrees/ is gitignored BEFORE we create the
-    // worktree inside it — otherwise `git status` in the project root
-    // shows the worktree as untracked, which users will accidentally
-    // commit. Best-effort; failure is logged but not fatal.
     try {
-      ensureGitignored(args.projectRoot);
+      await ensureGitignored(fs, args.projectRoot);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.warn(
@@ -100,22 +97,21 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
       );
     }
 
-    fs.mkdirSync(path.dirname(wtDir), { recursive: true });
+    await fs.mkdir(posix.dirname(wtDir), { recursive: true });
 
-    const git = simpleGit(args.projectRoot);
-    // `git worktree add -b <branch> <path> [base]`
-    const cmd = ['worktree', 'add', '-b', branch, wtDir];
-    if (args.base) cmd.push(args.base);
-    try {
-      await git.raw(cmd);
-    } catch (err) {
-      // Clean up the partial dir so a retry can succeed.
-      try { fs.rmSync(wtDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    const gitArgs = ['worktree', 'add', '-b', branch, wtDir];
+    if (args.base) gitArgs.push(args.base);
+    const res = await fs.exec('git', gitArgs, {
+      cwd: args.projectRoot,
+      timeoutMs: 60_000,
+    });
+    if (res.code !== 0) {
+      // Best-effort cleanup so a retry can succeed.
+      try { await fs.rm(wtDir, { recursive: true, force: true }); } catch { /* ignore */ }
       throw new Error(
-        `git worktree add failed: ${err instanceof Error ? err.message : String(err)}`
+        `git worktree add failed: ${res.stderr.trim() || res.stdout.trim() || `exit ${res.code}`}`
       );
     }
-
     return { path: wtDir, branch };
   });
 }
@@ -124,15 +120,14 @@ export async function createWorktree(args: CreateWorktreeArgs): Promise<Worktree
  * Append `.baton/` to the project's `.gitignore` if it isn't already
  * excluded. Idempotent — re-running on a project that already has the
  * entry is a no-op. Creates a `.gitignore` if one doesn't exist.
- *
- * We exclude the WHOLE `.baton/` dir (not just `.baton/worktrees/`)
- * because the same dir is reserved for other per-project app state.
  */
-function ensureGitignored(projectRoot: string): void {
-  const gitignorePath = path.join(projectRoot, '.gitignore');
+async function ensureGitignored(fs: BatonFs, projectRoot: string): Promise<void> {
+  const gitignorePath = posix.join(projectRoot, '.gitignore');
   let content = '';
-  if (fs.existsSync(gitignorePath)) {
-    content = fs.readFileSync(gitignorePath, 'utf-8');
+  if (await fs.exists(gitignorePath)) {
+    const read = await fs.readFile(gitignorePath, { maxBytes: 256 * 1024 });
+    if (read.tooLarge || read.binary) return; // leave it alone
+    content = read.content;
     const lines = content.split(/\r?\n/).map((l) => l.trim());
     const isExcluded = lines.some((line) =>
       line === `${BATON_DIR_NAME}/` ||
@@ -140,30 +135,24 @@ function ensureGitignored(projectRoot: string): void {
       line === `/${BATON_DIR_NAME}/` ||
       line === `/${BATON_DIR_NAME}`
     );
-    if (isExcluded) return; // already excluded
+    if (isExcluded) return;
   }
   const sep = content.length === 0 || content.endsWith('\n') ? '' : '\n';
   const block = `${sep}\n${GITIGNORE_MARKER}\n${BATON_DIR_NAME}/\n`;
-  fs.writeFileSync(gitignorePath, content + block);
+  await fs.writeFile(gitignorePath, content + block);
 }
 
 export interface RenameWorktreeArgs {
   projectRoot: string;
   worktreePath: string;
   newBranchName: string;
+  fs: BatonFs;
 }
 
 /**
  * Rename a worktree's branch + move its directory to match. Used when
  * the user picked the auto-generated `wip-<hex>` default and now wants
  * a real branch name.
- *
- * Steps:
- *   1) git branch -m <old> <new>  (inside the worktree)
- *   2) git worktree move <oldDir> <newDir>  (from the project root)
- *
- * Caller is responsible for ensuring the worktree's pty/agent is NOT
- * live (no held file handles).
  */
 export async function renameWorktree(
   args: RenameWorktreeArgs
@@ -172,58 +161,55 @@ export async function renameWorktree(
   if (!newBranch) throw new Error('New branch name is required.');
 
   const newSlug = slugify(newBranch);
-  const newDir = path.join(
-    path.dirname(args.worktreePath),
-    newSlug
-  );
+  const newDir = posix.join(posix.dirname(args.worktreePath), newSlug);
+  const { fs } = args;
   if (newDir === args.worktreePath) {
-    // No real change. Read the current branch and return.
-    const cur = await simpleGit(args.worktreePath).revparse([
-      '--abbrev-ref', 'HEAD',
-    ]);
-    return { path: args.worktreePath, branch: cur.trim() };
+    const cur = await fs.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: args.worktreePath,
+      timeoutMs: 8000,
+    });
+    return { path: args.worktreePath, branch: cur.stdout.trim() };
   }
-  if (fs.existsSync(newDir)) {
+  if (await fs.exists(newDir)) {
     throw new Error(`A worktree already exists at ${newDir}.`);
   }
 
   const lockKey = `wt:${args.projectRoot}:${newSlug}`;
   return withLock(lockKey, async () => {
-    const wtGit = simpleGit(args.worktreePath);
-    const oldBranch = (
-      await wtGit.revparse(['--abbrev-ref', 'HEAD'])
-    ).trim();
+    const oldBranchRes = await fs.exec('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: args.worktreePath,
+      timeoutMs: 8000,
+    });
+    const oldBranch = oldBranchRes.stdout.trim();
 
-    // 1) Rename the branch inside the worktree. `branch -m` keeps
-    //    HEAD pointing at the renamed ref.
     if (oldBranch !== newBranch) {
-      try {
-        await wtGit.raw(['branch', '-m', oldBranch, newBranch]);
-      } catch (err) {
+      const rename = await fs.exec(
+        'git', ['branch', '-m', oldBranch, newBranch],
+        { cwd: args.worktreePath, timeoutMs: 15_000 }
+      );
+      if (rename.code !== 0) {
         throw new Error(
-          `git branch -m failed: ${err instanceof Error ? err.message : String(err)}`
+          `git branch -m failed: ${rename.stderr.trim() || `exit ${rename.code}`}`
         );
       }
     }
 
-    // 2) Move the worktree directory. From the project root.
-    try {
-      await simpleGit(args.projectRoot).raw([
-        'worktree', 'move', args.worktreePath, newDir,
-      ]);
-    } catch (err) {
-      // Try to roll the branch rename back so we don't leave the
-      // user in a confused half-state.
-      try {
-        if (oldBranch !== newBranch) {
-          await wtGit.raw(['branch', '-m', newBranch, oldBranch]);
-        }
-      } catch { /* best-effort rollback */ }
+    const move = await fs.exec(
+      'git', ['worktree', 'move', args.worktreePath, newDir],
+      { cwd: args.projectRoot, timeoutMs: 30_000 }
+    );
+    if (move.code !== 0) {
+      // Roll the branch rename back.
+      if (oldBranch !== newBranch) {
+        await fs.exec(
+          'git', ['branch', '-m', newBranch, oldBranch],
+          { cwd: args.worktreePath, timeoutMs: 15_000 }
+        ).catch(() => { /* best-effort rollback */ });
+      }
       throw new Error(
-        `git worktree move failed: ${err instanceof Error ? err.message : String(err)}`
+        `git worktree move failed: ${move.stderr.trim() || `exit ${move.code}`}`
       );
     }
-
     return { path: newDir, branch: newBranch };
   });
 }
@@ -236,23 +222,18 @@ export interface WorktreeListEntry {
   head: string | null;
 }
 
-/**
- * Parse `git worktree list --porcelain` output. The format is a series
- * of blocks separated by blank lines, where each block has lines like
- *   worktree /abs/path
- *   HEAD <oid>
- *   branch refs/heads/<name>
- * For detached heads, the `branch` line is absent and a `detached` line
- * appears instead.
- */
-export async function listWorktrees(projectRoot: string): Promise<WorktreeListEntry[]> {
-  if (!fs.existsSync(path.join(projectRoot, '.git'))) return [];
-  let raw: string;
-  try {
-    raw = await simpleGit(projectRoot).raw(['worktree', 'list', '--porcelain']);
-  } catch {
-    return [];
-  }
+/** Parse `git worktree list --porcelain`. */
+export async function listWorktrees(
+  fs: BatonFs,
+  projectRoot: string,
+): Promise<WorktreeListEntry[]> {
+  if (!(await fs.exists(posix.join(projectRoot, '.git')))) return [];
+  const res = await fs.exec(
+    'git', ['worktree', 'list', '--porcelain'],
+    { cwd: projectRoot, timeoutMs: 15_000 }
+  );
+  if (res.code !== 0) return [];
+  const raw = res.stdout;
   const out: WorktreeListEntry[] = [];
   let cur: Partial<WorktreeListEntry> | null = null;
   for (const line of raw.split('\n')) {
@@ -269,26 +250,26 @@ export async function listWorktrees(projectRoot: string): Promise<WorktreeListEn
     }
   }
   if (cur) out.push({ path: cur.path ?? '', branch: cur.branch ?? null, head: cur.head ?? null });
-  // Drop the main worktree (the project root itself); we only care
-  // about children rooted in `.baton/worktrees/`.
   return out.filter((w) => w.path !== projectRoot);
 }
 
 /** Tolerant remove — never throws. */
 export async function removeWorktree(
+  fs: BatonFs,
   projectRoot: string,
-  worktreePath: string
+  worktreePath: string,
 ): Promise<void> {
   try {
-    const git = simpleGit(projectRoot);
-    await git.raw(['worktree', 'remove', '--force', worktreePath]);
+    await fs.exec(
+      'git', ['worktree', 'remove', '--force', worktreePath],
+      { cwd: projectRoot, timeoutMs: 30_000 }
+    );
   } catch {
-    // It may already be gone, or the project root may have moved.
-    // The cleanup below handles that case.
+    // best-effort
   }
   try {
-    if (fs.existsSync(worktreePath)) {
-      fs.rmSync(worktreePath, { recursive: true, force: true });
+    if (await fs.exists(worktreePath)) {
+      await fs.rm(worktreePath, { recursive: true, force: true });
     }
   } catch { /* ignore */ }
 }

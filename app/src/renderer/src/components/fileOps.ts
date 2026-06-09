@@ -39,9 +39,18 @@ export function buildFileMenuItems(opts: {
    *  the Files panel passes this; the Git panel leaves it undefined
    *  (and hits files, not dirs, anyway). */
   onRequestNewFile?: (parentAbsPath: string) => void;
+  /** Pass the active session id so file ops on a remote project go
+   *  through SSH rather than the local fs. Undefined for places where
+   *  the menu has no session context (e.g. project-level actions). */
+  sessionId?: string;
+  /** True when the project's connection isn't local. Used to suppress
+   *  "Reveal in Finder" (which can't open a remote path) and re-label
+   *  "Delete (move to Trash)" since remote Linux has no trash. */
+  isRemote?: boolean;
 }): MenuItem[] {
-  const { absPath, isDir, isRoot = false, openFile, onChanged, onRequestRename, onRequestNewFile } = opts;
+  const { absPath, isDir, isRoot = false, openFile, onChanged, onRequestRename, onRequestNewFile, sessionId, isRemote } = opts;
   const items: MenuItem[] = [];
+  const sidPayload = sessionId ? { sessionId } : {};
 
   if (isDir && onRequestNewFile) {
     items.push({
@@ -66,14 +75,16 @@ export function buildFileMenuItems(opts: {
     },
   });
 
-  items.push({
-    label: 'Reveal in Finder',
-    onClick: () => {
-      void window.baton.call('file.revealInFinder', { absPath }).catch((err) => {
-        alert(`Reveal failed: ${String(err)}`);
-      });
-    },
-  });
+  if (!isRemote) {
+    items.push({
+      label: 'Reveal in Finder',
+      onClick: () => {
+        void window.baton.call('file.revealInFinder', { absPath, ...sidPayload }).catch((err) => {
+          alert(`Reveal failed: ${String(err)}`);
+        });
+      },
+    });
+  }
 
   if (!isRoot) {
     items.push({
@@ -81,7 +92,7 @@ export function buildFileMenuItems(opts: {
       onClick: () => {
         void (async () => {
           try {
-            await window.baton.call('file.copy', { absPath });
+            await window.baton.call('file.copy', { absPath, ...sidPayload });
             onChanged();
           } catch (err) {
             alert(`Duplicate failed: ${String(err)}`);
@@ -99,19 +110,23 @@ export function buildFileMenuItems(opts: {
     });
 
     items.push({
-      label: 'Delete (move to Trash)',
+      label: isRemote ? 'Delete (permanent)' : 'Delete (move to Trash)',
       onClick: () => {
         const name = absPath.split('/').pop() ?? absPath;
-        const ok = window.confirm(
-          `Move "${name}" to the Trash?\n\n` +
-          (isDir
-            ? 'The folder and everything inside it will be moved to the OS Trash.'
-            : 'The file will be moved to the OS Trash. You can restore it from Finder.')
-        );
+        const lead = isRemote
+          ? `Permanently delete "${name}" on the remote?\n\n` +
+            (isDir
+              ? 'The folder and everything inside it will be removed (rm -rf). There is no remote trash.'
+              : 'The file will be removed (rm). There is no remote trash.')
+          : `Move "${name}" to the Trash?\n\n` +
+            (isDir
+              ? 'The folder and everything inside it will be moved to the OS Trash.'
+              : 'The file will be moved to the OS Trash. You can restore it from Finder.');
+        const ok = window.confirm(lead);
         if (!ok) return;
         void (async () => {
           try {
-            await window.baton.call('file.delete', { absPath });
+            await window.baton.call('file.delete', { absPath, ...sidPayload });
             onChanged();
           } catch (err) {
             alert(`Delete failed: ${String(err)}`);

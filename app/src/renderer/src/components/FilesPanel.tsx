@@ -32,6 +32,10 @@ interface Props {
 export const DRAG_FILE_PATH = 'application/x-baton-filepath';
 
 export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.Element {
+  const session = useAppStore((s) => s.sessions[sessionId]);
+  const project = useAppStore((s) => session ? s.projects[session.projectId] : undefined);
+  const connection = useAppStore((s) => project ? s.connections[project.connectionId] : undefined);
+  const isRemote = !!connection && connection.kind !== 'local';
   const [root, setRoot] = useState<FileTreeNodeT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set(['']));
@@ -88,7 +92,7 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
     setRenameTarget(null);
     if (!t) return;
     try {
-      await window.baton.call('file.rename', { absPath: t.absPath, newName });
+      await window.baton.call('file.rename', { absPath: t.absPath, newName, sessionId });
       onChanged();
     } catch (err) {
       alert(`Rename failed: ${String(err)}`);
@@ -226,6 +230,8 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
             onChanged,
             onRequestRename,
             onRequestNewFile,
+            sessionId,
+            isRemote,
           })}
           onClose={() => setCtxMenu(null)}
         />

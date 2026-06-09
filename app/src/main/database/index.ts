@@ -66,6 +66,25 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- Connection profiles. The built-in row with id='local' is seeded at
+-- boot in runMigrations(); it represents this Mac and is uneditable.
+-- SSH-specific columns are nullable so the local row can leave them
+-- empty without complicating the schema.
+CREATE TABLE IF NOT EXISTS connection_profiles (
+  id                  TEXT PRIMARY KEY,
+  name                TEXT NOT NULL,
+  kind                TEXT NOT NULL CHECK (kind IN ('local','ssh')),
+  host                TEXT,
+  user                TEXT,
+  port                INTEGER,
+  auth_method         TEXT,
+  auth_key_path       TEXT,
+  claude_creds_mode   TEXT,
+  last_status         TEXT,
+  last_probed_at      INTEGER,
+  created_at          INTEGER NOT NULL
+);
+
 `;
 
 export function initDatabase(): Database.Database {
@@ -123,6 +142,27 @@ function runMigrations(d: Database.Database): void {
   try {
     d.exec('ALTER TABLE sessions ADD COLUMN snoozed_at INTEGER');
   } catch { /* already migrated */ }
+
+  // Connection model. Old databases predate connection_profiles and
+  // have no connection_id on their project rows; everything pre-existing
+  // is a local project.
+  try {
+    d.exec(
+      `ALTER TABLE projects ADD COLUMN connection_id TEXT NOT NULL DEFAULT 'local'`
+    );
+  } catch { /* already migrated */ }
+
+  // Seed the built-in 'local' row. ON CONFLICT keeps it idempotent
+  // across relaunches; we don't overwrite a renamed local row (the user
+  // can't actually rename it in the UI, but be defensive).
+  d.prepare(
+    `INSERT INTO connection_profiles
+       (id, name, kind, host, user, port, auth_method, auth_key_path,
+        claude_creds_mode, last_status, last_probed_at, created_at)
+     VALUES ('local', 'Local Mac', 'local', NULL, NULL, NULL, NULL, NULL,
+             NULL, 'success', ?, ?)
+     ON CONFLICT(id) DO NOTHING`
+  ).run(Date.now(), Date.now());
 
 }
 

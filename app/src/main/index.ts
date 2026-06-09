@@ -23,6 +23,7 @@ import { initDatabase, closeDatabase } from './database/index.js';
 import { getSessionManager } from './services/sessionManager.js';
 import { addProject } from './services/projectStore.js';
 import { startNotifier } from './services/notifier.js';
+import { warmAllConnections, dropAllConnections } from './services/fs/registry.js';
 
 /**
  * Per PRD NF6: tight CSP in production. In dev we relax it just
@@ -108,6 +109,24 @@ function createWindow(): void {
     }, 800);
   });
   void reconciledSessionIds; // kept for diagnostics; no longer scopes auto-resume
+
+  // BATON_DEBUG_RESPAWN=<sessionId> → after first render, fire a
+  // respawn on that session and log the outcome. Used to test the
+  // remote-spawn path end-to-end without manual clicks.
+  const debugRespawn = process.env['BATON_DEBUG_RESPAWN'];
+  if (debugRespawn) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      setTimeout(async () => {
+        try {
+          console.log(`[BATON_DEBUG_RESPAWN] respawning ${debugRespawn}…`);
+          const s = await getSessionManager().respawn(debugRespawn);
+          console.log(`[BATON_DEBUG_RESPAWN] ok: ${s.id} status=${s.status} branch=${s.branch}`);
+        } catch (err) {
+          console.error('[BATON_DEBUG_RESPAWN] FAILED:', err);
+        }
+      }, 2000);
+    });
+  }
 
   // BATON_TEST=1 → after first render, auto-add the project at
   // BATON_TEST_PATH (default = repo root) and spawn a Claude Code
@@ -227,6 +246,9 @@ app.whenReady().then(() => {
   // transitions into native macOS notifications + dock badge. (PRD F9)
   startNotifier();
 
+  // Warm any saved SSH connections so the dropdown badges show
+  // real status the first time the user opens AddProjectDialog.
+  warmAllConnections();
 
   createWindow();
 
@@ -246,5 +268,6 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   getSessionManager().killAll();
+  dropAllConnections();
   closeDatabase();
 });

@@ -1,0 +1,1439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>baton · Remote server design</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --running:#5b8def; --needs:#f0a945; --done:#2fbf71;
+    --errored:#ef5454; --paused:#6b7280;
+  }
+  * { box-sizing:border-box; }
+  html, body {
+    margin:0; padding:0;
+    background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter','SF Pro Text',system-ui,sans-serif;
+    font-size:13px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+  a { color:var(--accent); text-decoration:none; }
+  a:hover { text-decoration:underline; }
+
+  /* ─── Page chrome ─── */
+  .doc-nav {
+    position:sticky; top:0; z-index:5;
+    background:rgba(10,11,13,0.92);
+    backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--border);
+    padding:14px 24px;
+    display:flex; gap:18px; align-items:center; flex-wrap:wrap;
+  }
+  .doc-nav .brand-row { display:flex; align-items:center; gap:10px; margin-right:18px; }
+  .doc-nav .brand {
+    width:26px; height:26px; border-radius:7px;
+    background:linear-gradient(135deg,var(--accent) 0%, #8b6cef 100%);
+    display:grid; place-items:center; color:white; font-weight:700; font-size:12px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  .doc-nav .brand-name { font-weight:600; font-size:14px; }
+  .doc-nav .brand-tag { font-size:11px; color:var(--text-faint);
+    text-transform:uppercase; letter-spacing:0.06em; }
+  .doc-nav .links { display:flex; gap:14px; flex-wrap:wrap; }
+  .doc-nav .links a { font-size:12px; color:var(--text-dim); }
+  .doc-nav .links a:hover { color:var(--accent); }
+  .doc-intro {
+    padding:28px 24px 8px; max-width:880px;
+  }
+  .doc-intro h1 { margin:0 0 8px; font-size:22px; font-weight:600; }
+  .doc-intro p { margin:0 0 8px; color:var(--text-dim); }
+
+  /* ─── Section frame ─── */
+  .section { padding:40px 24px 16px; max-width:980px; }
+  .section h2 {
+    margin:0 0 6px; font-size:17px; font-weight:600;
+    color:var(--text);
+  }
+  .section .meta {
+    color:var(--text-dim); font-size:12px; margin-bottom:16px;
+    display:flex; flex-wrap:wrap; gap:14px;
+  }
+  .section .meta span { display:inline-flex; align-items:center; gap:6px; }
+  .section .stage {
+    background:#06070a;
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:32px;
+    position:relative;
+    overflow:hidden;
+  }
+  .section .stage.scrim::before {
+    content:""; position:absolute; inset:0;
+    background:radial-gradient(circle at top, rgba(91,141,239,0.05), transparent 70%);
+    pointer-events:none;
+  }
+  .section .note {
+    margin-top:14px; font-size:12px; color:var(--text-dim);
+    padding:10px 14px; background:var(--bg-1);
+    border:1px solid var(--border); border-radius:8px;
+  }
+  .section .note strong { color:var(--text); }
+
+  /* ─── Dialog look-and-feel (matches existing onboarding mockup) ─── */
+  .modal {
+    width:min(720px,100%); margin:0 auto;
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:14px;
+    box-shadow:0 30px 80px rgba(0,0,0,0.65), 0 0 0 1px rgba(91,141,239,0.10);
+    display:flex; flex-direction:column;
+    overflow:hidden;
+  }
+  .modal.narrow { width:min(560px,100%); }
+  .modal-head {
+    padding:18px 24px 14px;
+    border-bottom:1px solid var(--border);
+    background:var(--bg-1);
+  }
+  .modal-head h3 { margin:0 0 4px; font-size:15px; font-weight:600; }
+  .modal-head p { margin:0; color:var(--text-dim); font-size:12px; }
+  .modal-body { padding:20px 24px; }
+  .modal-foot {
+    padding:14px 24px;
+    border-top:1px solid var(--border);
+    background:var(--bg-1);
+    display:flex; align-items:center; gap:10px;
+  }
+  .modal-foot .spacer { flex:1; }
+
+  /* ─── Connection row (the new "Run on:" picker) ─── */
+  .conn-row {
+    display:flex; align-items:center; gap:10px;
+    padding:12px 14px;
+    margin-bottom:18px;
+    background:var(--bg-2);
+    border:1px solid var(--border);
+    border-radius:10px;
+  }
+  .conn-row .lbl {
+    font-size:11px; color:var(--text-faint);
+    text-transform:uppercase; letter-spacing:0.06em;
+    margin-right:4px;
+  }
+  .conn-toggle {
+    display:inline-flex;
+    background:var(--bg-1);
+    border:1px solid var(--border);
+    border-radius:8px;
+    padding:3px;
+  }
+  .conn-toggle button {
+    border:none; background:transparent;
+    padding:6px 12px;
+    border-radius:6px;
+    color:var(--text-dim);
+    font-size:12px; cursor:pointer;
+    font-family:inherit;
+    display:inline-flex; align-items:center; gap:6px;
+  }
+  .conn-toggle button.active {
+    background:var(--bg-3);
+    color:var(--text);
+    box-shadow:inset 0 0 0 1px var(--border-2);
+  }
+  .conn-toggle button .ic { font-size:13px; }
+
+  .profile-picker {
+    flex:1;
+    display:flex; align-items:center; gap:8px;
+  }
+  .profile-select {
+    flex:1;
+    display:inline-flex; align-items:center; gap:8px;
+    padding:7px 11px;
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:6px;
+    cursor:pointer;
+    font-size:13px;
+  }
+  .profile-select:hover { border-color:var(--border-2); background:var(--bg-3); }
+  .profile-select .name { color:var(--text); font-weight:500; }
+  .profile-select .host {
+    color:var(--text-dim);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    font-size:12px;
+  }
+  .profile-select .chev {
+    margin-left:auto; color:var(--text-faint); font-size:10px;
+  }
+  .profile-select.placeholder .name { color:var(--text-faint); font-weight:400; }
+  .profile-select.disabled {
+    background:var(--bg-2);
+    color:var(--text-faint);
+    cursor:not-allowed;
+    border-style:dashed;
+  }
+  .conn-status {
+    font-size:11px;
+    padding:2px 8px;
+    border-radius:999px;
+    background:rgba(47,191,113,0.10);
+    color:var(--done);
+    border:1px solid rgba(47,191,113,0.30);
+    font-weight:600;
+    text-transform:uppercase; letter-spacing:0.04em;
+  }
+  .conn-status.warn { background:rgba(240,169,69,0.10); color:var(--needs);
+    border-color:rgba(240,169,69,0.30); }
+  .conn-status.err { background:rgba(239,84,84,0.10); color:var(--errored);
+    border-color:rgba(239,84,84,0.30); }
+
+  /* ─── Tabs (Add existing / Create new) ─── */
+  .tabs {
+    display:flex; gap:0;
+    border-bottom:1px solid var(--border);
+    margin-bottom:18px;
+  }
+  .tabs button {
+    border:none; background:transparent;
+    padding:9px 14px;
+    color:var(--text-dim);
+    font-size:13px; cursor:pointer;
+    font-family:inherit;
+    border-bottom:2px solid transparent;
+    margin-bottom:-1px;
+  }
+  .tabs button.active {
+    color:var(--text);
+    border-bottom-color:var(--accent);
+  }
+
+  /* ─── Form ─── */
+  .field { margin-bottom:14px; }
+  .field:last-child { margin-bottom:0; }
+  .field > .label {
+    display:block;
+    font-size:11px; color:var(--text-dim);
+    text-transform:uppercase; letter-spacing:0.06em;
+    margin-bottom:6px;
+  }
+  .field input[type="text"], .field input[type="number"], .field select {
+    width:100%;
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:6px;
+    color:var(--text);
+    padding:8px 11px;
+    font-size:13px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    outline:none;
+  }
+  .field input:focus, .field select:focus { border-color:var(--accent); }
+  .field .row-with-button {
+    display:flex; gap:8px;
+  }
+  .field .row-with-button input { flex:1; }
+  .field .hint { font-size:11px; color:var(--text-faint); margin-top:5px; }
+  .field-row { display:grid; grid-template-columns:1fr 110px; gap:10px; }
+
+  .checkbox {
+    display:flex; align-items:center; gap:8px;
+    font-size:13px;
+    cursor:pointer;
+    user-select:none;
+  }
+  .checkbox input { accent-color:var(--accent); }
+
+  /* ─── Validate result ─── */
+  .validate {
+    display:flex; align-items:center; gap:8px;
+    padding:8px 11px;
+    background:var(--bg-1);
+    border:1px solid var(--border);
+    border-radius:6px;
+    font-size:12px;
+    margin-top:8px;
+  }
+  .validate .ic {
+    width:18px; height:18px; border-radius:50%;
+    display:grid; place-items:center;
+    font-weight:700; font-size:11px;
+  }
+  .validate.ok { border-color:rgba(47,191,113,0.30); }
+  .validate.ok .ic { background:rgba(47,191,113,0.18); color:var(--done); }
+  .validate.err { border-color:rgba(239,84,84,0.30); }
+  .validate.err .ic { background:rgba(239,84,84,0.18); color:var(--errored); }
+  .validate .path { color:var(--text-dim); font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+  .validate .path strong { color:var(--text); font-weight:500; }
+
+  /* ─── Mini remote tree (Variant B) ─── */
+  .tree-pop {
+    margin-top:10px;
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:8px;
+    max-height:240px;
+    overflow:auto;
+    padding:6px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    font-size:12px;
+  }
+  .tree-row {
+    display:flex; align-items:center; gap:6px;
+    padding:4px 6px;
+    border-radius:4px;
+    cursor:pointer;
+    color:var(--text-dim);
+  }
+  .tree-row:hover { background:var(--bg-2); color:var(--text); }
+  .tree-row .chev { width:10px; color:var(--text-faint); }
+  .tree-row .ic { color:var(--text-faint); }
+  .tree-row.dir .ic { color:var(--accent); }
+  .tree-row.selected { background:var(--accent-2); color:var(--text); }
+  .tree-row.selected .ic { color:var(--accent); }
+  .tree-row.indent-1 { padding-left:22px; }
+  .tree-row.indent-2 { padding-left:38px; }
+  .tree-row.indent-3 { padding-left:54px; }
+  .tree-header {
+    display:flex; align-items:center; gap:6px;
+    padding:4px 6px;
+    font-size:11px; color:var(--text-faint);
+    border-bottom:1px solid var(--border);
+    margin-bottom:4px;
+  }
+
+  /* ─── Buttons (shared) ─── */
+  .btn {
+    padding:7px 13px;
+    border-radius:6px;
+    border:1px solid var(--border-2);
+    background:var(--bg-2);
+    color:var(--text);
+    font-size:12.5px; font-weight:500;
+    cursor:pointer;
+    font-family:inherit;
+  }
+  .btn:hover { background:var(--bg-3); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:white; }
+  .btn.primary:hover { filter:brightness(1.05); }
+  .btn.ghost { background:transparent; border-color:transparent; color:var(--text-dim); }
+  .btn.ghost:hover { background:var(--bg-2); color:var(--text); }
+  .btn.danger { background:rgba(239,84,84,0.10); border-color:rgba(239,84,84,0.30); color:var(--errored); }
+  .btn-small { padding:5px 9px; font-size:11.5px; }
+  .btn-link { background:transparent; border:none; color:var(--accent); cursor:pointer; padding:0; font:inherit; }
+  .btn-link:hover { text-decoration:underline; }
+
+  /* ─── New Connection modal stacked on parent ─── */
+  .stack-host {
+    position:relative;
+    padding:24px;
+    background:var(--bg);
+    border-radius:12px;
+  }
+  .stack-host .parent-dim {
+    filter:blur(2px) brightness(0.5);
+    pointer-events:none;
+    opacity:0.65;
+  }
+  .stack-host .stacked {
+    position:absolute; top:0; left:0; right:0; bottom:0;
+    display:grid; place-items:center;
+    background:rgba(5,6,8,0.55);
+    backdrop-filter:blur(3px);
+    padding:32px;
+    border-radius:12px;
+  }
+
+  /* ─── Profile dropdown popover ─── */
+  .profile-pop {
+    margin-top:10px;
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:8px;
+    overflow:hidden;
+    box-shadow:0 20px 50px rgba(0,0,0,0.55);
+  }
+  .profile-pop .item {
+    display:flex; align-items:center; gap:10px;
+    padding:10px 14px;
+    cursor:pointer;
+    border-bottom:1px solid var(--border);
+  }
+  .profile-pop .item:last-child { border-bottom:none; }
+  .profile-pop .item:hover { background:var(--bg-2); }
+  .profile-pop .item.selected { background:var(--accent-2); }
+  .profile-pop .item .info { flex:1; min-width:0; }
+  .profile-pop .item .name { color:var(--text); font-weight:500; font-size:13px; }
+  .profile-pop .item .host {
+    color:var(--text-dim);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    font-size:11.5px;
+  }
+  .profile-pop .item .badge {
+    font-size:10px; font-weight:600;
+    padding:2px 7px; border-radius:999px;
+    text-transform:uppercase; letter-spacing:0.04em;
+  }
+  .profile-pop .item .badge.ok { color:var(--done); background:rgba(47,191,113,0.10);
+    border:1px solid rgba(47,191,113,0.30); }
+  .profile-pop .item .badge.warn { color:var(--needs); background:rgba(240,169,69,0.10);
+    border:1px solid rgba(240,169,69,0.30); }
+  .profile-pop .item .badge.muted { color:var(--text-faint); background:var(--bg-2);
+    border:1px solid var(--border); }
+  .profile-pop .item.new { color:var(--accent); font-weight:500; }
+  .profile-pop .item.new .ic { color:var(--accent); }
+
+  /* ─── Workspace 3-col shell (right panel preview) ─── */
+  .workspace {
+    display:grid;
+    grid-template-rows:36px 1fr;
+    height:560px;
+    background:var(--bg);
+    border:1px solid var(--border);
+    border-radius:12px;
+    overflow:hidden;
+  }
+  .wp-titlebar {
+    display:flex; align-items:center; gap:12px;
+    padding:0 12px;
+    background:var(--bg-1);
+    border-bottom:1px solid var(--border);
+    font-size:12px; color:var(--text-dim);
+  }
+  .wp-titlebar .dots { display:flex; gap:6px; }
+  .wp-titlebar .dots .dot { width:11px; height:11px; border-radius:50%; }
+  .wp-titlebar .dots .dot.r { background:#ff5f57; }
+  .wp-titlebar .dots .dot.y { background:#febc2e; }
+  .wp-titlebar .dots .dot.g { background:#28c840; }
+  .wp-titlebar .title { color:var(--text); font-weight:500; margin-left:8px; }
+  .wp-titlebar .spacer { flex:1; }
+  .wp-titlebar .pill {
+    padding:2px 9px; border-radius:999px;
+    background:var(--bg-2); border:1px solid var(--border);
+    font-size:11px;
+    display:inline-flex; align-items:center; gap:6px;
+  }
+  .wp-titlebar .pill .dot-sm {
+    width:7px; height:7px; border-radius:50%;
+    background:var(--done);
+  }
+  .wp-titlebar .pill.warn { border-color:rgba(240,169,69,0.40); color:var(--needs); }
+  .wp-titlebar .pill.warn .dot-sm { background:var(--needs); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+  .wp-cols { display:grid; grid-template-columns:280px 1fr 360px; height:100%; }
+  .wp-col { border-right:1px solid var(--border); overflow:hidden; display:flex; flex-direction:column; }
+  .wp-col:last-child { border-right:none; }
+  .wp-left { background:var(--bg-1); }
+  .wp-mid { background:var(--bg); }
+  .wp-right { background:var(--bg-1); }
+
+  .wp-section-head {
+    padding:10px 14px;
+    font-size:11px; color:var(--text-faint);
+    text-transform:uppercase; letter-spacing:0.06em;
+    display:flex; align-items:center; gap:8px;
+    border-bottom:1px solid var(--border);
+  }
+  .wp-section-head .conn-chip {
+    font-size:10px;
+    padding:2px 7px;
+    border-radius:999px;
+    text-transform:none;
+    letter-spacing:0;
+    font-weight:500;
+    color:var(--accent);
+    background:rgba(91,141,239,0.10);
+    border:1px solid rgba(91,141,239,0.30);
+    display:inline-flex; align-items:center; gap:5px;
+    margin-left:auto;
+  }
+  .wp-section-head .conn-chip.warn {
+    color:var(--needs);
+    background:rgba(240,169,69,0.10);
+    border-color:rgba(240,169,69,0.30);
+  }
+  .wp-section-head .conn-chip .dot-sm {
+    width:6px; height:6px; border-radius:50%;
+    background:var(--done);
+  }
+  .wp-section-head .conn-chip.warn .dot-sm {
+    background:var(--needs);
+    animation:pulse 1.2s infinite;
+  }
+
+  .wp-project {
+    padding:10px 14px;
+    border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:10px;
+  }
+  .wp-project .ic {
+    width:24px; height:24px; border-radius:6px;
+    display:grid; place-items:center;
+    background:var(--bg-3);
+  }
+  .wp-project .ic.remote {
+    background:rgba(91,141,239,0.12);
+    color:var(--accent);
+  }
+  .wp-project .info { flex:1; min-width:0; }
+  .wp-project .name { color:var(--text); font-weight:500; font-size:13px; }
+  .wp-project .sub {
+    color:var(--text-dim); font-size:11px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+
+  .wp-session {
+    padding:10px 14px;
+    margin:6px 8px;
+    border-radius:8px;
+    background:var(--bg-2);
+    border:1px solid var(--border);
+    font-size:12px;
+  }
+  .wp-session.selected { border-color:var(--accent); background:rgba(91,141,239,0.05); }
+  .wp-session .top { display:flex; align-items:center; gap:8px; margin-bottom:4px; }
+  .wp-session .top .dot-sm { width:6px; height:6px; border-radius:50%; background:var(--running); }
+  .wp-session .top .branch { color:var(--text); font-weight:500;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace; font-size:12px; }
+  .wp-session .summary { color:var(--text-dim); font-size:11px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .wp-mid-tabs {
+    padding:8px 12px;
+    display:flex; gap:8px;
+    border-bottom:1px solid var(--border);
+    background:var(--bg-1);
+  }
+  .wp-mid-tab {
+    padding:5px 10px;
+    border-radius:5px;
+    background:var(--bg-2);
+    border:1px solid var(--border);
+    color:var(--text-dim);
+    font-size:11px; cursor:default;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  .wp-mid-tab.active { color:var(--text); background:var(--bg-3); border-color:var(--border-2); }
+  .wp-mid-body {
+    flex:1;
+    padding:16px;
+    color:var(--text-faint);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    font-size:12px;
+  }
+  .wp-mid-body .agent-line { margin-bottom:4px; color:var(--text-dim); }
+  .wp-mid-body .agent-line.prompt { color:var(--accent); }
+
+  /* Right tabs */
+  .wp-right-tabs {
+    display:flex; gap:0;
+    border-bottom:1px solid var(--border);
+    background:var(--bg-1);
+  }
+  .wp-right-tabs button {
+    border:none; background:transparent;
+    padding:9px 14px;
+    color:var(--text-dim);
+    font-size:12px; cursor:pointer;
+    font-family:inherit;
+    border-bottom:2px solid transparent;
+    margin-bottom:-1px;
+  }
+  .wp-right-tabs button.active {
+    color:var(--text);
+    border-bottom-color:var(--accent);
+  }
+  .wp-right-body {
+    flex:1; overflow:auto;
+    padding:6px;
+  }
+  .file-row {
+    display:flex; align-items:center; gap:6px;
+    padding:4px 10px;
+    font-size:12px;
+    color:var(--text-dim);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+    border-radius:4px;
+  }
+  .file-row:hover { background:var(--bg-2); }
+  .file-row.dir { color:var(--accent); }
+  .file-row.indent-1 { padding-left:24px; }
+  .file-row.indent-2 { padding-left:38px; }
+  .file-row .ic { font-size:11px; }
+  .file-row .badge-rate {
+    margin-left:auto;
+    font-size:10px;
+    color:var(--text-faint);
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+
+  /* Disconnect banner inside right column */
+  .right-banner {
+    margin:10px;
+    padding:12px;
+    background:rgba(240,169,69,0.06);
+    border:1px solid rgba(240,169,69,0.30);
+    border-radius:8px;
+    font-size:12px;
+    color:var(--text);
+  }
+  .right-banner .head {
+    display:flex; align-items:center; gap:8px;
+    margin-bottom:8px;
+    font-weight:500;
+  }
+  .right-banner .head .dot-sm {
+    width:8px; height:8px; border-radius:50%;
+    background:var(--needs);
+    animation:pulse 1.2s infinite;
+  }
+  .right-banner .sub { color:var(--text-dim); font-size:11px; margin-bottom:10px; }
+  .right-banner .actions { display:flex; gap:6px; }
+
+  .stale-overlay {
+    position:relative;
+  }
+  .stale-overlay .file-row { opacity:0.45; }
+
+  /* ─── Onboarding 2-step preview ─── */
+  .onb-modal {
+    width:min(720px,100%);
+    background:var(--bg-1);
+    border:1px solid var(--border-2);
+    border-radius:14px;
+    box-shadow:0 30px 80px rgba(0,0,0,0.65);
+    overflow:hidden;
+  }
+  .onb-head {
+    padding:18px 24px 14px;
+    border-bottom:1px solid var(--border);
+  }
+  .onb-head .brand-row { display:flex; align-items:center; gap:10px; margin-bottom:14px; }
+  .onb-head .brand {
+    width:28px; height:28px; border-radius:8px;
+    background:linear-gradient(135deg,var(--accent) 0%, #8b6cef 100%);
+    display:grid; place-items:center; color:white; font-weight:700; font-size:13px;
+    font-family:ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  .onb-head .brand-name { font-weight:600; font-size:15px; }
+  .onb-head .brand-tag { margin-left:auto; font-size:11px; color:var(--text-faint);
+    text-transform:uppercase; letter-spacing:0.06em; }
+  .onb-head .stepper { display:flex; align-items:center; gap:10px; }
+  .onb-head .stepper .dot {
+    width:8px; height:8px; border-radius:50%;
+    background:var(--bg-3); border:1px solid var(--border-2);
+  }
+  .onb-head .stepper .dot.active {
+    background:var(--accent); border-color:var(--accent);
+    box-shadow:0 0 0 3px rgba(91,141,239,0.25);
+  }
+  .onb-head .stepper .label {
+    font-size:11px; color:var(--text-dim);
+    margin-left:auto;
+  }
+  .onb-head .stepper .label strong { color:var(--text); font-weight:500; }
+  .onb-body { padding:24px; }
+  .onb-body h1 { font-size:20px; font-weight:600; margin:0 0 6px; }
+  .onb-body .lede { color:var(--text-dim); margin:0 0 18px; max-width:560px; }
+  .onb-foot {
+    padding:14px 24px;
+    border-top:1px solid var(--border);
+    display:flex; gap:10px;
+  }
+  .onb-foot .spacer { flex:1; }
+
+  /* Side-by-side stage for compare layouts */
+  .compare {
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:18px;
+  }
+  .compare > div { min-width:0; }
+  .compare-label {
+    font-size:11px; color:var(--text-faint);
+    text-transform:uppercase; letter-spacing:0.06em;
+    margin-bottom:8px;
+  }
+  .compare-label strong { color:var(--text); font-weight:600; }
+
+  ::-webkit-scrollbar { width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb { background:var(--bg-3); border-radius:4px; }
+</style>
+</head>
+<body>
+
+<nav class="doc-nav">
+  <div class="brand-row">
+    <div class="brand">c24</div>
+    <div class="brand-name">baton</div>
+    <div class="brand-tag">remote server design</div>
+  </div>
+  <div class="links">
+    <a href="#s1">1 · Add project (Local)</a>
+    <a href="#s2">2 · Add project (Remote, text-path)</a>
+    <a href="#s3">3 · Add project (Remote, tree browser)</a>
+    <a href="#s4">4 · Profile dropdown</a>
+    <a href="#s5">5 · New Connection modal</a>
+    <a href="#s6">6 · Workspace · connected</a>
+    <a href="#s7">7 · Workspace · disconnected</a>
+    <a href="#s8">8 · Onboarding (2-step)</a>
+  </div>
+</nav>
+
+<div class="doc-intro">
+  <h1>Remote-server design — mockup pass</h1>
+  <p>Per the four decisions: connection is a <strong>project-level</strong>
+    property; folder discovery shown as both <strong>Variant&nbsp;A
+    (text path + Validate)</strong> and <strong>Variant&nbsp;B (mini tree
+    browser)</strong>; new projects default to <strong>Local</strong>;
+    onboarding collapses to <strong>two steps</strong> (Environment →
+    First project). The Connection step becomes inline at project
+    creation.</p>
+  <p>All screens are dark theme to match <code>mockup.html</code> /
+    <code>mockup-onboarding.html</code>. Static HTML, no JS interactions
+    wired up — this is a visual pass to react to.</p>
+</div>
+
+<!-- ════════════════════════════════════════════════════════════════
+  1 · Add Project — Local (default)
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s1">
+  <h2>1 · Add project — Local (default state)</h2>
+  <div class="meta">
+    <span>● Opened from sidebar “+ Add project”</span>
+    <span>● Local selected → profile picker hidden</span>
+  </div>
+  <div class="stage scrim">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Add project</h3>
+        <p>Point baton at an existing folder, or create a fresh one.</p>
+      </div>
+      <div class="modal-body">
+
+        <!-- Connection picker on top -->
+        <div class="conn-row">
+          <span class="lbl">Run on</span>
+          <div class="conn-toggle">
+            <button class="active"><span class="ic">💻</span> Local Mac</button>
+            <button><span class="ic">🛰</span> Remote SSH</button>
+          </div>
+        </div>
+
+        <!-- Tabs unchanged -->
+        <div class="tabs">
+          <button class="active">Add existing</button>
+          <button>Create new</button>
+        </div>
+
+        <!-- Add existing form -->
+        <div>
+          <div class="field">
+            <span class="label">Folder</span>
+            <div class="row-with-button">
+              <input type="text" placeholder="/Users/you/code/my-project" value="/Users/kenchu/Developments/baton-demo">
+              <button class="btn">Choose…</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="label">Project name</span>
+            <input type="text" placeholder="Defaults to folder name" value="baton-demo">
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost">Cancel</button>
+        <div class="spacer"></div>
+        <button class="btn primary">Add project</button>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Behavior:</strong> Local Mac is preselected. The profile
+    picker only appears when <em>Remote SSH</em> is toggled on (see
+    §2). The rest of the dialog is the existing two-tab form,
+    untouched.
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+  2 · Add Project — Remote, Variant A (text-path + Validate)
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s2">
+  <h2>2 · Add project — Remote selected · Variant&nbsp;A (text path + Validate)</h2>
+  <div class="meta">
+    <span>● Existing profile <code>prod-gpu</code> picked</span>
+    <span>● Validate ran <code>test -d</code> on the remote, resolved <code>~</code></span>
+    <span>● <strong>Recommended</strong> first ship</span>
+  </div>
+  <div class="stage scrim">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Add project</h3>
+        <p>Point baton at an existing folder on the remote, or create a fresh one there.</p>
+      </div>
+      <div class="modal-body">
+
+        <div class="conn-row">
+          <span class="lbl">Run on</span>
+          <div class="conn-toggle">
+            <button><span class="ic">💻</span> Local Mac</button>
+            <button class="active"><span class="ic">🛰</span> Remote SSH</button>
+          </div>
+          <div class="profile-picker">
+            <div class="profile-select">
+              <span class="name">prod-gpu</span>
+              <span class="host">ken@gpu-1.internal:22</span>
+              <span class="chev">▾</span>
+            </div>
+            <span class="conn-status">Connected</span>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button class="active">Add existing</button>
+          <button>Create new</button>
+        </div>
+
+        <div>
+          <div class="field">
+            <span class="label">Folder on remote</span>
+            <div class="row-with-button">
+              <input type="text" placeholder="~/work/my-repo" value="~/work/llm-docker-dev6">
+              <button class="btn">Validate</button>
+            </div>
+            <div class="validate ok">
+              <span class="ic">✓</span>
+              <span class="path">resolved to <strong>/home/ken/work/llm-docker-dev6</strong> · git repo · 1,284 files</span>
+            </div>
+            <div class="hint">Path is evaluated on <code>ken@gpu-1.internal</code>.
+              <code>~</code> expands to the remote home.</div>
+          </div>
+          <div class="field">
+            <span class="label">Project name</span>
+            <input type="text" placeholder="Defaults to folder name" value="llm-docker-dev6">
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost">Cancel</button>
+        <div class="spacer"></div>
+        <button class="btn primary">Add project</button>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Variant A behavior:</strong> User types a path; Validate
+    runs <code>test -d &lt;path&gt; &amp;&amp; pwd</code> on the remote
+    daemon and reports the resolved absolute path. Cheap to build,
+    matches what power-users already do. Failure case shows a red
+    inline error (path missing, permission denied, daemon down).
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+  3 · Add Project — Remote, Variant B (mini tree browser)
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s3">
+  <h2>3 · Add project — Remote selected · Variant&nbsp;B (mini remote tree)</h2>
+  <div class="meta">
+    <span>● Same dialog as #2, with a <em>Browse</em> button</span>
+    <span>● Inline tree, lazy <code>readdir</code> per expand</span>
+    <span>● ~150 LOC extra; reuses FilesPanel tree</span>
+  </div>
+  <div class="stage scrim">
+    <div class="modal">
+      <div class="modal-head">
+        <h3>Add project</h3>
+        <p>Point baton at an existing folder on the remote, or create a fresh one there.</p>
+      </div>
+      <div class="modal-body">
+
+        <div class="conn-row">
+          <span class="lbl">Run on</span>
+          <div class="conn-toggle">
+            <button><span class="ic">💻</span> Local Mac</button>
+            <button class="active"><span class="ic">🛰</span> Remote SSH</button>
+          </div>
+          <div class="profile-picker">
+            <div class="profile-select">
+              <span class="name">prod-gpu</span>
+              <span class="host">ken@gpu-1.internal:22</span>
+              <span class="chev">▾</span>
+            </div>
+            <span class="conn-status">Connected</span>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <button class="active">Add existing</button>
+          <button>Create new</button>
+        </div>
+
+        <div>
+          <div class="field">
+            <span class="label">Folder on remote</span>
+            <div class="row-with-button">
+              <input type="text" placeholder="~/work/my-repo" value="~/work/llm-docker-dev6">
+              <button class="btn">Browse…</button>
+              <button class="btn">Validate</button>
+            </div>
+            <div class="tree-pop">
+              <div class="tree-header">📁 /home/ken/</div>
+              <div class="tree-row dir"><span class="chev">▸</span> <span class="ic">📁</span> Downloads/</div>
+              <div class="tree-row dir"><span class="chev">▾</span> <span class="ic">📁</span> work/</div>
+              <div class="tree-row dir indent-1 selected"><span class="chev">▸</span> <span class="ic">📁</span> llm-docker-dev6/</div>
+              <div class="tree-row dir indent-1"><span class="chev">▸</span> <span class="ic">📁</span> baton-fixtures/</div>
+              <div class="tree-row dir indent-1"><span class="chev">▸</span> <span class="ic">📁</span> training-runs/</div>
+              <div class="tree-row dir"><span class="chev">▸</span> <span class="ic">📁</span> scratch/</div>
+              <div class="tree-row dir"><span class="chev">▸</span> <span class="ic">📁</span> .baton/</div>
+            </div>
+            <div class="hint">Directories only · sorted alphabetically · hidden folders shown for <code>.baton/</code></div>
+          </div>
+          <div class="field">
+            <span class="label">Project name</span>
+            <input type="text" placeholder="Defaults to folder name" value="llm-docker-dev6">
+          </div>
+        </div>
+
+      </div>
+      <div class="modal-foot">
+        <button class="btn ghost">Cancel</button>
+        <div class="spacer"></div>
+        <button class="btn primary">Add project</button>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Variant B behavior:</strong> Browse opens an inline tree
+    that lazy-loads one level on expand (reuse the existing
+    FilesPanel readdir code, just routed through the remote daemon).
+    Clicking a row fills the path field. Validate still confirms. My
+    recommendation: ship A first, add B later only if Validate proves
+    clumsy.
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+  4 · Profile dropdown popover
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s4">
+  <h2>4 · Connection profile dropdown</h2>
+  <div class="meta">
+    <span>● Opened from the profile picker</span>
+    <span>● Badges reflect last-known status</span>
+  </div>
+  <div class="stage scrim">
+    <div class="modal narrow">
+      <div class="modal-body" style="padding-bottom:8px;">
+        <div class="conn-row" style="margin-bottom:8px;">
+          <span class="lbl">Run on</span>
+          <div class="conn-toggle">
+            <button><span class="ic">💻</span> Local</button>
+            <button class="active"><span class="ic">🛰</span> Remote</button>
+          </div>
+          <div class="profile-picker">
+            <div class="profile-select">
+              <span class="name">prod-gpu</span>
+              <span class="host">ken@gpu-1.internal</span>
+              <span class="chev">▾</span>
+            </div>
+          </div>
+        </div>
+        <div class="profile-pop">
+          <div class="item selected">
+            <div class="info">
+              <div class="name">prod-gpu</div>
+              <div class="host">ken@gpu-1.internal:22 · key auth</div>
+            </div>
+            <div class="badge ok">Connected</div>
+          </div>
+          <div class="item">
+            <div class="info">
+              <div class="name">staging</div>
+              <div class="host">deploy@stg.imbee.io:22 · ssh-agent</div>
+            </div>
+            <div class="badge muted">Idle</div>
+          </div>
+          <div class="item">
+            <div class="info">
+              <div class="name">jetson-lab</div>
+              <div class="host">ken@jetson-lab.local:2200 · key auth</div>
+            </div>
+            <div class="badge warn">Unreachable</div>
+          </div>
+          <div class="item new">
+            <span class="ic">＋</span>
+            <span>New connection…</span>
+          </div>
+          <div class="item">
+            <span class="ic" style="color:var(--text-faint);">⚙</span>
+            <span>Manage profiles…</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Behavior:</strong> The dropdown reuses the saved-profiles
+    list. Status badges are last-probed; clicking a stale one re-probes
+    in the background. <em>Manage profiles…</em> opens
+    Settings → Connections (rename / delete / edit auth).
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+  5 · New Connection modal
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s5">
+  <h2>5 · New Connection modal</h2>
+  <div class="meta">
+    <span>● Stacked on AddProjectDialog (dimmed behind)</span>
+    <span>● Test-connection result inline</span>
+    <span>● Auto-installs the remote daemon (probed silently)</span>
+  </div>
+  <div class="stage scrim">
+    <div class="stack-host">
+      <!-- ghost of parent dialog behind -->
+      <div class="modal parent-dim">
+        <div class="modal-head">
+          <h3>Add project</h3>
+          <p>Point baton at an existing folder on the remote, or create a fresh one there.</p>
+        </div>
+        <div class="modal-body" style="height:240px;"></div>
+        <div class="modal-foot"></div>
+      </div>
+      <div class="stacked">
+        <div class="modal narrow">
+          <div class="modal-head">
+            <h3>New SSH connection</h3>
+            <p>Saved as a profile — reusable across projects.</p>
+          </div>
+          <div class="modal-body">
+            <div class="field">
+              <span class="label">Profile name</span>
+              <input type="text" placeholder="dev-box" value="prod-gpu">
+            </div>
+            <div class="field-row">
+              <div class="field" style="margin:0;">
+                <span class="label">Host</span>
+                <input type="text" placeholder="dev-box.internal" value="gpu-1.internal">
+              </div>
+              <div class="field" style="margin:0;">
+                <span class="label">Port</span>
+                <input type="text" value="22">
+              </div>
+            </div>
+            <div class="field">
+              <span class="label">User</span>
+              <input type="text" placeholder="kenchu" value="ken">
+            </div>
+            <div class="field">
+              <span class="label">Auth</span>
+              <select>
+                <option>SSH key · ~/.ssh/id_ed25519</option>
+                <option>ssh-agent</option>
+                <option>Password (macOS Keychain)</option>
+              </select>
+              <div class="hint">Keys stay on this Mac; only the public side is offered to the remote.</div>
+            </div>
+            <div class="field">
+              <span class="label">Claude credentials on remote</span>
+              <label class="checkbox" style="margin-bottom:6px;">
+                <input type="radio" name="creds" checked>
+                <span>Use the remote’s existing <code>~/.claude/credentials</code></span>
+              </label>
+              <label class="checkbox">
+                <input type="radio" name="creds">
+                <span>Forward from this Mac per session (via SSH env)</span>
+              </label>
+            </div>
+            <div class="validate ok">
+              <span class="ic">✓</span>
+              <span class="path"><strong>Reachable</strong> · 64 ms RTT · node 20.10 · git 2.43 · daemon installed (auto)</span>
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn ghost">Cancel</button>
+            <div class="spacer"></div>
+            <button class="btn">Test connection</button>
+            <button class="btn primary">Save & use</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Behavior:</strong> Test connection runs the F13.2 SSH probe
+    + F14.1 daemon probe. If <code>node</code> / <code>git</code> is
+    missing on the remote, the validate row turns red and surfaces the
+    package-manager-specific install command. Save & use returns to
+    AddProjectDialog with this profile pre-selected.
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+  6 · Workspace — Right panel on a remote project (connected)
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s6">
+  <h2>6 · Workspace — right panels on a remote project (connected)</h2>
+  <div class="meta">
+    <span>● Right column unchanged structurally</span>
+    <span>● Adds connection chip in section headers + titlebar</span>
+    <span>● File rows render identically; data routed via <code>RemoteFs</code></span>
+  </div>
+  <div class="stage scrim">
+    <div class="workspace">
+      <div class="wp-titlebar">
+        <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+        <div class="title">baton</div>
+        <div class="spacer"></div>
+        <div class="pill">🛰 prod-gpu · <span class="dot-sm"></span> connected · 64 ms</div>
+      </div>
+      <div class="wp-cols">
+        <!-- LEFT -->
+        <div class="wp-col wp-left">
+          <div class="wp-project">
+            <div class="ic remote">🛰</div>
+            <div class="info">
+              <div class="name">llm-docker-dev6</div>
+              <div class="sub">ken@gpu-1.internal:~/work/llm-docker-dev6</div>
+            </div>
+          </div>
+          <div class="wp-section-head">
+            Sessions (3)
+            <span class="conn-chip"><span class="dot-sm"></span> prod-gpu</span>
+          </div>
+          <div class="wp-session selected">
+            <div class="top">
+              <span class="dot-sm"></span>
+              <span class="branch">wt/llm-fix-prompt</span>
+            </div>
+            <div class="summary">Editing src/prompt/builder.ts — adding eos token</div>
+          </div>
+          <div class="wp-session">
+            <div class="top">
+              <span class="dot-sm" style="background:var(--needs);"></span>
+              <span class="branch">wt/migrate-tokenizer</span>
+            </div>
+            <div class="summary">⚠ Needs input: overwrite tokenizer.json?</div>
+          </div>
+          <div class="wp-session">
+            <div class="top">
+              <span class="dot-sm" style="background:var(--done);"></span>
+              <span class="branch">wt/perf-bench</span>
+            </div>
+            <div class="summary">✓ Done · benchmark report ready</div>
+          </div>
+        </div>
+
+        <!-- MID -->
+        <div class="wp-col wp-mid">
+          <div class="wp-mid-tabs">
+            <div class="wp-mid-tab">⌥ Summary</div>
+            <div class="wp-mid-tab active">⌥ Terminal · wt/llm-fix-prompt</div>
+            <div class="wp-mid-tab">⌥ Editor</div>
+          </div>
+          <div class="wp-mid-body">
+            <div class="agent-line">$ claude --resume</div>
+            <div class="agent-line">Reading src/prompt/builder.ts (lines 1-240)…</div>
+            <div class="agent-line">Found 2 prompt templates. Adding &lt;eos&gt; after each.</div>
+            <div class="agent-line prompt">▌ proceed with edit?</div>
+          </div>
+        </div>
+
+        <!-- RIGHT — files panel with remote chip -->
+        <div class="wp-col wp-right">
+          <div class="wp-right-tabs">
+            <button class="active">📁 Files</button>
+            <button>🔍 Search</button>
+            <button>⎇ Git</button>
+          </div>
+          <div class="wp-section-head">
+            wt/llm-fix-prompt
+            <span class="conn-chip"><span class="dot-sm"></span> prod-gpu</span>
+          </div>
+          <div class="wp-right-body">
+            <div class="file-row dir"><span class="ic">▾📁</span> .baton/</div>
+            <div class="file-row dir indent-1"><span class="ic">▸📁</span> worktrees/</div>
+            <div class="file-row dir"><span class="ic">▾📁</span> src/</div>
+            <div class="file-row dir indent-1"><span class="ic">▾📁</span> prompt/</div>
+            <div class="file-row indent-2"><span class="ic">●</span> builder.ts <span class="badge-rate">M</span></div>
+            <div class="file-row indent-2"><span class="ic">📄</span> tokens.ts</div>
+            <div class="file-row dir indent-1"><span class="ic">▸📁</span> models/</div>
+            <div class="file-row dir"><span class="ic">▸📁</span> scripts/</div>
+            <div class="file-row dir"><span class="ic">▸📁</span> tests/</div>
+            <div class="file-row"><span class="ic">📄</span> package.json</div>
+            <div class="file-row"><span class="ic">📄</span> README.md</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>What changes vs. local:</strong> (1) a titlebar pill shows
+    the active remote + RTT, (2) the project row gets a 🛰 icon and
+    <code>user@host:path</code> sublabel, (3) each right-column section
+    header gets a small connection chip so you always know which
+    machine the files came from. The actual panel rendering is
+    identical — same FilesPanel / GitPanel / SearchPanel components,
+    just the IPC verbs route to <code>RemoteFs</code> in main.
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+  7 · Workspace — disconnected mid-session
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s7">
+  <h2>7 · Workspace — disconnected (reconnecting)</h2>
+  <div class="meta">
+    <span>● SSH dropped mid-session (F14.8)</span>
+    <span>● Right panel dims + banner with Reconnect now</span>
+    <span>● Sessions stay visible (greyed); daemon buffers events</span>
+  </div>
+  <div class="stage scrim">
+    <div class="workspace">
+      <div class="wp-titlebar">
+        <div class="dots"><div class="dot r"></div><div class="dot y"></div><div class="dot g"></div></div>
+        <div class="title">baton</div>
+        <div class="spacer"></div>
+        <div class="pill warn">🛰 prod-gpu · <span class="dot-sm"></span> disconnected · retrying 12 s</div>
+      </div>
+      <div class="wp-cols">
+        <div class="wp-col wp-left">
+          <div class="wp-project">
+            <div class="ic remote">🛰</div>
+            <div class="info">
+              <div class="name">llm-docker-dev6</div>
+              <div class="sub">ken@gpu-1.internal:~/work/llm-docker-dev6</div>
+            </div>
+          </div>
+          <div class="wp-section-head">
+            Sessions (3)
+            <span class="conn-chip warn"><span class="dot-sm"></span> disconnected</span>
+          </div>
+          <div class="wp-session selected" style="opacity:0.6;">
+            <div class="top">
+              <span class="dot-sm" style="background:var(--paused);"></span>
+              <span class="branch">wt/llm-fix-prompt</span>
+            </div>
+            <div class="summary">Last seen: editing prompt/builder.ts (12 s ago)</div>
+          </div>
+          <div class="wp-session" style="opacity:0.6;">
+            <div class="top">
+              <span class="dot-sm" style="background:var(--paused);"></span>
+              <span class="branch">wt/migrate-tokenizer</span>
+            </div>
+            <div class="summary">Last seen: ⚠ awaiting input</div>
+          </div>
+          <div class="wp-session" style="opacity:0.6;">
+            <div class="top">
+              <span class="dot-sm" style="background:var(--paused);"></span>
+              <span class="branch">wt/perf-bench</span>
+            </div>
+            <div class="summary">Last seen: ✓ done</div>
+          </div>
+        </div>
+
+        <div class="wp-col wp-mid">
+          <div class="wp-mid-tabs">
+            <div class="wp-mid-tab">⌥ Summary</div>
+            <div class="wp-mid-tab active">⌥ Terminal · wt/llm-fix-prompt</div>
+            <div class="wp-mid-tab">⌥ Editor</div>
+          </div>
+          <div class="wp-mid-body">
+            <div class="agent-line">$ claude --resume</div>
+            <div class="agent-line">Reading src/prompt/builder.ts (lines 1-240)…</div>
+            <div class="agent-line">Found 2 prompt templates. Adding &lt;eos&gt; after each.</div>
+            <div class="agent-line prompt">▌ proceed with edit?</div>
+            <div class="agent-line" style="color:var(--needs); margin-top:14px;">
+              [SSH disconnected — buffered events will replay on reconnect]
+            </div>
+          </div>
+        </div>
+
+        <div class="wp-col wp-right">
+          <div class="wp-right-tabs">
+            <button class="active">📁 Files</button>
+            <button>🔍 Search</button>
+            <button>⎇ Git</button>
+          </div>
+          <div class="wp-section-head">
+            wt/llm-fix-prompt
+            <span class="conn-chip warn"><span class="dot-sm"></span> disconnected</span>
+          </div>
+          <div class="right-banner">
+            <div class="head"><span class="dot-sm"></span> Connection lost · retrying in 12 s</div>
+            <div class="sub">Showing files as of 12 s ago. Edits made on the remote
+              since the drop will appear once we reconnect.</div>
+            <div class="actions">
+              <button class="btn btn-small primary">Reconnect now</button>
+              <button class="btn btn-small">Switch to local…</button>
+              <button class="btn btn-small ghost">Kill sessions</button>
+            </div>
+          </div>
+          <div class="wp-right-body stale-overlay">
+            <div class="file-row dir"><span class="ic">▾📁</span> .baton/</div>
+            <div class="file-row dir indent-1"><span class="ic">▸📁</span> worktrees/</div>
+            <div class="file-row dir"><span class="ic">▾📁</span> src/</div>
+            <div class="file-row dir indent-1"><span class="ic">▾📁</span> prompt/</div>
+            <div class="file-row indent-2"><span class="ic">●</span> builder.ts <span class="badge-rate">M</span></div>
+            <div class="file-row indent-2"><span class="ic">📄</span> tokens.ts</div>
+            <div class="file-row dir indent-1"><span class="ic">▸📁</span> models/</div>
+            <div class="file-row dir"><span class="ic">▸📁</span> scripts/</div>
+            <div class="file-row"><span class="ic">📄</span> package.json</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Behavior:</strong> All three remote-driven panels fall to
+    last-known-good state, dimmed, with a non-modal banner. Search is
+    disabled until reconnect; editor reads from the cached tree but
+    writes are queued + flushed on reconnect (matches F14.3 replay
+    semantics). “Switch to local…” lets the user reattach the project
+    to the Local profile (rare, but escape hatch).
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════════════════════════
+  8 · Onboarding — collapsed to 2 steps
+════════════════════════════════════════════════════════════════ -->
+<section class="section" id="s8">
+  <h2>8 · Onboarding — collapsed to 2 steps</h2>
+  <div class="meta">
+    <span>● Connection step removed</span>
+    <span>● Local is assumed; remote profiles are created lazily at Add-Project time</span>
+    <span>● Existing F13.5 Skip-to-Demo unchanged</span>
+  </div>
+  <div class="compare">
+    <div>
+      <div class="compare-label"><strong>Before</strong> — 3 steps (current PRD F13.1)</div>
+      <div class="stage scrim" style="padding:18px;">
+        <div class="onb-modal">
+          <div class="onb-head">
+            <div class="brand-row">
+              <div class="brand">c24</div>
+              <div class="brand-name">baton</div>
+              <div class="brand-tag">setup</div>
+            </div>
+            <div class="stepper">
+              <span class="dot active"></span>
+              <span class="dot"></span>
+              <span class="dot"></span>
+              <span class="label">Step <strong>1</strong> of 3 · Connection</span>
+            </div>
+          </div>
+          <div class="onb-body" style="opacity:0.55;">
+            <h1>Where will the agents run?</h1>
+            <p class="lede">Pick Local Mac or set up SSH to a remote.</p>
+            <div style="padding:18px; background:var(--bg-2); border:1px solid var(--border); border-radius:8px;
+              color:var(--text-faint); font-size:12px;">[Local / Remote cards · SSH form…]</div>
+          </div>
+          <div class="onb-foot">
+            <div class="spacer"></div>
+            <button class="btn ghost">Skip & try Demo →</button>
+            <button class="btn primary">Continue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="compare-label"><strong>After</strong> — 2 steps</div>
+      <div class="stage scrim" style="padding:18px;">
+        <div class="onb-modal">
+          <div class="onb-head">
+            <div class="brand-row">
+              <div class="brand">c24</div>
+              <div class="brand-name">baton</div>
+              <div class="brand-tag">setup</div>
+            </div>
+            <div class="stepper">
+              <span class="dot active"></span>
+              <span class="dot"></span>
+              <span class="label">Step <strong>1</strong> of 2 · Environment</span>
+            </div>
+          </div>
+          <div class="onb-body">
+            <h1>Check your agent CLIs</h1>
+            <p class="lede">baton needs at least one of <code>claude</code> or
+              <code>codex</code> on this Mac. You can add remote servers
+              later when you create a project.</p>
+            <div style="padding:14px; background:var(--bg-2); border:1px solid var(--border); border-radius:10px;
+              display:flex; align-items:center; gap:14px;">
+              <div style="width:30px; height:30px; border-radius:8px;
+                background:rgba(47,191,113,0.12); color:var(--done);
+                display:grid; place-items:center; font-weight:700;">✓</div>
+              <div style="flex:1;">
+                <div style="color:var(--text); font-weight:500;">Claude Code · 2.1.139</div>
+                <div style="color:var(--text-dim); font-family:ui-monospace,Menlo,monospace; font-size:11px;">
+                  claude --version</div>
+              </div>
+              <div style="font-size:11px; padding:3px 8px; border-radius:999px;
+                color:var(--done); background:rgba(47,191,113,0.10);
+                border:1px solid rgba(47,191,113,0.30); font-weight:600;">INSTALLED</div>
+            </div>
+            <div style="margin-top:10px; padding:14px; background:var(--bg-2); border:1px solid var(--border); border-radius:10px;
+              display:flex; align-items:center; gap:14px;">
+              <div style="width:30px; height:30px; border-radius:8px;
+                background:transparent; color:var(--text-faint);
+                border:1px dashed var(--border-2);
+                display:grid; place-items:center;">○</div>
+              <div style="flex:1;">
+                <div style="color:var(--text);">Codex CLI</div>
+                <div style="color:var(--text-dim); font-family:ui-monospace,Menlo,monospace; font-size:11px;">
+                  codex --version → not found</div>
+              </div>
+              <button class="btn btn-small">Copy install</button>
+            </div>
+            <div style="margin-top:14px; padding:10px 14px; border-radius:10px;
+              background:rgba(47,191,113,0.08); border:1px solid rgba(47,191,113,0.30);
+              display:flex; align-items:center; gap:10px;">
+              <span style="color:var(--done); font-weight:700;">✓</span>
+              <span><strong>Ready to continue.</strong> Codex is optional.</span>
+            </div>
+          </div>
+          <div class="onb-foot">
+            <div class="spacer"></div>
+            <button class="btn ghost">Skip & try Demo →</button>
+            <button class="btn primary">Continue</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="note">
+    <strong>Why collapse:</strong> The 3-step flow forced every first
+    user to make a hosting decision before they'd seen the app. With
+    connection at the project level, Local is the only sensible
+    default for first-launch; remote profiles get created on-demand
+    when the user is actually ready (i.e. clicks <em>Remote SSH</em>
+    in AddProjectDialog). Step 2 (First project) reuses the same
+    AddProjectDialog from sections 1-3, so the user discovers the
+    connection picker there.
+  </div>
+</section>
+
+<div class="section" style="padding-bottom:60px;">
+  <div class="note" style="background:rgba(91,141,239,0.06); border-color:rgba(91,141,239,0.30);">
+    <strong>What's next:</strong> Confirm Variant A (text + Validate)
+    vs B (mini tree browser) and whether the disconnected-state
+    affordances in §7 feel right. After that I'll write up the model
+    + IPC changes (the <code>ConnectionProfile</code> schema, the
+    <code>Fs</code> interface split, project schema migration) before
+    touching renderer code.
+  </div>
+</div>
+
+</body>
+</html>

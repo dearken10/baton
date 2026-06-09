@@ -13,11 +13,9 @@
 
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
 import * as fsp from 'node:fs/promises';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFile, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import simpleGit from 'simple-git';
 import { z } from 'zod';
 
 const execFileP = promisify(execFile);
@@ -30,6 +28,14 @@ import {
   type ResponseOf,
 } from '../../shared/ipc.js';
 import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed } from '../services/projectStore.js';
+import {
+  listConnections,
+  createConnection,
+  updateConnection,
+  deleteConnection,
+  testConnection,
+  testPath,
+} from '../services/connectionStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
@@ -37,6 +43,7 @@ import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
 import { getDatabase } from '../database/index.js';
+import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
 
 type Handler<V extends ControlVerb> = (
   req: RequestOf<V>
@@ -64,11 +71,14 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     if (res.canceled || res.filePaths.length === 0) return { path: null };
     return { path: res.filePaths[0] ?? null };
   },
-  'project.add': (req) => ({ project: addProject(req.path, req.name) }),
-  'project.create': (req) => ({
-    project: createProject({
+  'project.add': (req) => ({
+    project: addProject(req.path, req.name, req.connectionId ?? 'local'),
+  }),
+  'project.create': async (req) => ({
+    project: await createProject({
       path: req.path,
       ...(req.initGit !== undefined ? { initGit: req.initGit } : {}),
+      ...(req.connectionId !== undefined ? { connectionId: req.connectionId } : {}),
     }),
   }),
   'project.list': () => ({ projects: listProjects() }),
@@ -103,7 +113,85 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return { session };
   },
 
-  'session.list': () => ({ sessions: getSessionManager().listAll() }),
+  'connection.list': () => ({ profiles: listConnections() }),
+  'connection.create': (req) => {
+    const profile = createConnection({
+      name: req.name,
+      host: req.host,
+      user: req.user,
+      port: req.port,
+      authMethod: req.authMethod,
+      ...(req.authKeyPath !== undefined ? { authKeyPath: req.authKeyPath } : {}),
+      claudeCredsMode: req.claudeCredsMode,
+    });
+    return { profile };
+  },
+  'connection.update': (req) => {
+    const profile = updateConnection({
+      id: req.id,
+      ...(req.name !== undefined ? { name: req.name } : {}),
+      ...(req.host !== undefined ? { host: req.host } : {}),
+      ...(req.user !== undefined ? { user: req.user } : {}),
+      ...(req.port !== undefined ? { port: req.port } : {}),
+      ...(req.authMethod !== undefined ? { authMethod: req.authMethod } : {}),
+      ...(req.authKeyPath !== undefined ? { authKeyPath: req.authKeyPath } : {}),
+      ...(req.claudeCredsMode !== undefined ? { claudeCredsMode: req.claudeCredsMode } : {}),
+    });
+    return { profile };
+  },
+  'connection.delete': (req) => {
+    deleteConnection(req.id);
+    dropConnection(req.id);
+    return { ok: true as const };
+  },
+  'connection.test': async (req) => {
+    const res = await testConnection(req.id);
+    return res;
+  },
+  'connection.testPath': async (req) => {
+    const res = await testPath(req.connectionId, req.path);
+    return res;
+  },
+  'connection.reconnect': async (req) => {
+    await reconnectConnection(req.id);
+    return { ok: true as const };
+  },
+  'connection.listDir': async (req) => {
+    try {
+      const fs = getFs(req.connectionId);
+      // Resolve `~` and any relative segments to an absolute path. For
+      // an empty input we default to the home directory.
+      const requested = req.path.trim() || '~';
+      const quoted = shellQuoteWithTilde(requested);
+      const resolveRes = await fs.exec(
+        'sh', ['-c', `cd ${quoted} 2>&1 && pwd -P`],
+        { cwd: '/', timeoutMs: 5000 }
+      );
+      if (resolveRes.code !== 0) {
+        return {
+          resolvedPath: '',
+          entries: [],
+          error: (resolveRes.stderr || resolveRes.stdout).trim() || `exit ${resolveRes.code}`,
+        };
+      }
+      const resolvedPath = resolveRes.stdout.trim();
+      const entries = await fs.readdir(resolvedPath);
+      entries.sort((a, b) => {
+        const ad = a.kind === 'dir' ? 0 : 1;
+        const bd = b.kind === 'dir' ? 0 : 1;
+        if (ad !== bd) return ad - bd;
+        return a.name.localeCompare(b.name);
+      });
+      return { resolvedPath, entries, error: '' };
+    } catch (err) {
+      return { resolvedPath: '', entries: [], error: String(err) };
+    }
+  },
+
+  'session.list': () => ({
+    sessions: getSessionManager().listAll(),
+    startingIds: getSessionManager().autoResumeCandidateIds(),
+  }),
   'usage.getStats': async () => getUsage(),
   'usage.getCodexStats': () => getCodexUsage(),
   'session.spawn': async (req) => {
@@ -120,7 +208,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     // arbitrary directory).
     let cwd = project.path;
     if (req.existingWorktreePath) {
-      const wts = await listWorktrees(project.path);
+      const wts = await listWorktrees(getFsForProject(project.id), project.path);
       const ok = wts.some((w) => w.path === req.existingWorktreePath);
       if (!ok) {
         throw new Error(
@@ -183,30 +271,43 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     if (!worktreePath) {
       return { root: { name: '', path: '', type: 'dir' as const, children: [] } };
     }
-    const root = await readFileTree(worktreePath);
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) {
+      return { root: { name: '', path: '', type: 'dir' as const, children: [] } };
+    }
+    const root = await readFileTree(fs, worktreePath);
     return { root };
   },
   'worktree.readDir': async (req) => {
     const worktreePath = tryResolveWorktreePath(req.sessionId);
     if (!worktreePath) return { children: [], truncated: false };
-    return await readSubdir(worktreePath, req.relPath);
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) return { children: [], truncated: false };
+    return await readSubdir(fs, worktreePath, req.relPath);
   },
   'worktree.gitStatus': async (req) => {
     const worktreePath = tryResolveWorktreePath(req.sessionId);
     if (!worktreePath) {
       return { branch: null, ahead: 0, behind: 0, files: [], dirty: false };
     }
-    const report = await readGitStatus(worktreePath);
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) {
+      return { branch: null, ahead: 0, behind: 0, files: [], dirty: false };
+    }
+    const report = await readGitStatus(fs, worktreePath);
     return report;
   },
   'worktree.list': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
-    const entries = await listWorktrees(project.path);
+    const projectFs = getFsForProject(project.id);
+    const entries = await listWorktrees(projectFs, project.path);
     // Same `.git/...` filter we apply to orphan detection: skip
-    // submodule gitdirs that masquerade as worktrees.
+    // submodule gitdirs that masquerade as worktrees. Path separator
+    // is `/` on remote (POSIX), platform-dependent locally.
+    const sep = projectFs.isLocal ? path.sep : '/';
     const worktrees = entries
-      .filter((e) => !e.path.includes(`${path.sep}.git${path.sep}`))
+      .filter((e) => !e.path.includes(`${sep}.git${sep}`))
       .map((e) => ({ path: e.path, branch: e.branch }));
     return { worktrees };
   },
@@ -219,7 +320,14 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     );
     const orphans: { projectId: string; path: string; branch: string | null }[] = [];
     for (const p of projects) {
-      const entries = await listWorktrees(p.path);
+      let entries: { path: string; branch: string | null; head: string | null }[];
+      try {
+        const projectFs = getFsForProject(p.id);
+        entries = await listWorktrees(projectFs, p.path);
+      } catch {
+        // Remote that's currently offline — skip orphan scan for it.
+        continue;
+      }
       for (const e of entries) {
         // Any path with a `/.git/` segment is git bookkeeping
         // (submodule gitdirs, etc.) — never a real worktree, even
@@ -229,7 +337,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
         // and would otherwise tempt the user to click Remove (which
         // would `git worktree remove --force` the submodule's gitdir
         // and break the parent repo's submodule tracking).
-        if (e.path.includes(`${path.sep}.git${path.sep}`)) continue;
+        // `path.sep` for local (might be `\` on Windows builds);
+        // `/` for any remote, where filesystems are POSIX.
+        const sep = getFsForProject(p.id).isLocal ? path.sep : '/';
+        if (e.path.includes(`${sep}.git${sep}`)) continue;
         // The "main" worktree is already filtered out by listWorktrees.
         // Anything not tracked by a session row is an orphan.
         if (!known.has(e.path)) {
@@ -241,59 +352,83 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'git.stage': async (req) => {
     const worktreePath = resolveWorktreePath(req.sessionId);
-    await simpleGit(worktreePath).add(req.paths);
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) throw new Error(`Unknown session: ${req.sessionId}`);
+    const res = await fs.exec('git', ['add', '--', ...req.paths], {
+      cwd: worktreePath, timeoutMs: 30_000,
+    });
+    if (res.code !== 0) {
+      throw new Error(`git add failed: ${res.stderr.trim() || `exit ${res.code}`}`);
+    }
     return { ok: true as const };
   },
   'git.unstage': async (req) => {
     const worktreePath = resolveWorktreePath(req.sessionId);
-    // `git reset HEAD <paths>` unstages without touching the working
-    // tree. simple-git's raw is the most predictable way to do this.
-    await simpleGit(worktreePath).raw(['reset', 'HEAD', '--', ...req.paths]);
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) throw new Error(`Unknown session: ${req.sessionId}`);
+    const res = await fs.exec('git', ['reset', 'HEAD', '--', ...req.paths], {
+      cwd: worktreePath, timeoutMs: 30_000,
+    });
+    if (res.code !== 0) {
+      throw new Error(`git reset failed: ${res.stderr.trim() || `exit ${res.code}`}`);
+    }
     return { ok: true as const };
   },
   'git.commit': async (req) => {
     const worktreePath = resolveWorktreePath(req.sessionId);
-    const res = await simpleGit(worktreePath).commit(req.message);
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) throw new Error(`Unknown session: ${req.sessionId}`);
+    const res = await fs.exec('git', ['commit', '-m', req.message], {
+      cwd: worktreePath, timeoutMs: 30_000,
+    });
+    if (res.code !== 0) {
+      throw new Error(`git commit failed: ${res.stderr.trim() || `exit ${res.code}`}`);
+    }
+    // Grab the short OID for the toast.
+    const oidRes = await fs.exec('git', ['rev-parse', '--short', 'HEAD'], {
+      cwd: worktreePath, timeoutMs: 5000,
+    });
     return {
       ok: true as const,
-      oid: (res.commit ?? '').slice(0, 7),
+      oid: oidRes.stdout.trim(),
     };
   },
   'git.push': async (req) => {
     const worktreePath = resolveWorktreePath(req.sessionId);
-    try {
-      // `git push` with no args — uses the branch's configured
-      // upstream. simple-git surfaces git's own stdout/stderr on error.
-      const out = await simpleGit(worktreePath).raw(['push']);
-      return { ok: true, output: out || 'Push complete.' };
-    } catch (err) {
-      return {
-        ok: false,
-        output: err instanceof Error ? err.message : String(err),
-      };
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) return { ok: false, output: 'session not found' };
+    const res = await fs.exec('git', ['push'], {
+      cwd: worktreePath, timeoutMs: 120_000,
+    });
+    if (res.code !== 0) {
+      return { ok: false, output: res.stderr.trim() || res.stdout.trim() || `exit ${res.code}` };
     }
+    return { ok: true, output: res.stdout || 'Push complete.' };
   },
   'git.pull': async (req) => {
     const worktreePath = resolveWorktreePath(req.sessionId);
-    try {
-      const out = await simpleGit(worktreePath).raw(['pull', '--ff-only']);
-      return { ok: true, output: out || 'Pull complete.' };
-    } catch (err) {
-      return {
-        ok: false,
-        output: err instanceof Error ? err.message : String(err),
-      };
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) return { ok: false, output: 'session not found' };
+    const res = await fs.exec('git', ['pull', '--ff-only'], {
+      cwd: worktreePath, timeoutMs: 120_000,
+    });
+    if (res.code !== 0) {
+      return { ok: false, output: res.stderr.trim() || res.stdout.trim() || `exit ${res.code}` };
     }
+    return { ok: true, output: res.stdout || 'Pull complete.' };
   },
   'worktree.removeOrphan': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
-    await removeWorktree(project.path, req.path);
+    const projectFs = getFsForProject(project.id);
+    await removeWorktree(projectFs, project.path, req.path);
     return { ok: true as const };
   },
   'worktree.search': async (req) => {
     const cwd = resolveWorktreePath(req.sessionId);
-    return await runGitGrep(cwd, req);
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) return { matches: [], truncated: false, error: 'session not found' };
+    return await runGitGrep(fs, cwd, req);
   },
   'shell.openPath': async (req) => {
     // openPath returns a string — empty on success, error message on
@@ -352,56 +487,40 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return { ok: false, error: 'unknown editor' };
   },
   'file.read': async (req) => {
-    const max = req.maxBytes ?? 5 * 1024 * 1024;
-    const stat = await fsp.stat(req.absPath);
-    if (stat.size > max) {
-      return {
-        content: '',
-        mtimeMs: stat.mtimeMs,
-        binary: false,
-        tooLarge: true,
-        size: stat.size,
-      };
-    }
-    const buf = await fsp.readFile(req.absPath);
-    // Cheap binary sniff: NUL byte in the first 4 KB is a strong hit.
-    const sliceEnd = Math.min(buf.length, 4096);
-    let binary = false;
-    for (let i = 0; i < sliceEnd; i++) {
-      if (buf[i] === 0) { binary = true; break; }
-    }
-    if (binary) {
-      return {
-        content: '',
-        mtimeMs: stat.mtimeMs,
-        binary: true,
-        tooLarge: false,
-        size: stat.size,
-      };
-    }
-    return {
-      content: buf.toString('utf-8'),
-      mtimeMs: stat.mtimeMs,
-      binary: false,
-      tooLarge: false,
-      size: stat.size,
-    };
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    const opts = req.maxBytes !== undefined ? { maxBytes: req.maxBytes } : undefined;
+    return await fs.readFile(req.absPath, opts);
   },
   'file.readGitDiff': async (req) => {
-    const repoRoot = findRepoRoot(req.absPath);
-    let stat: { mtimeMs: number } | null = null;
-    try { stat = await fsp.stat(req.absPath); } catch { stat = null; }
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
 
+    // Find the repo root via `git rev-parse --show-toplevel`. For local
+    // we can also walk the parent chain (older code path); for remote
+    // shelling out is the only option, so we unify.
+    const stat = await fs.stat(req.absPath);
     let working = '';
     if (stat) {
-      try { working = await fsp.readFile(req.absPath, 'utf-8'); }
-      catch { /* binary or unreadable — leave empty */ }
+      const r = await fs.readFile(req.absPath, { maxBytes: 5 * 1024 * 1024 });
+      if (!r.binary && !r.tooLarge) working = r.content;
     }
 
+    // cwd for the git command: parent of the file. If the file itself
+    // is gone, walk up via a parent path until we find a dir that
+    // exists — easy with posix join + `dirname`.
+    const cwd = req.absPath.replace(/\/+[^/]+\/?$/, '') || '/';
+    const rootRes = await fs.exec('git', ['rev-parse', '--show-toplevel'], {
+      cwd, timeoutMs: 6000,
+    });
+    if (rootRes.code !== 0) {
+      return {
+        head: working,
+        working,
+        state: 'clean' as const,
+        mtimeMs: stat?.mtimeMs ?? 0,
+      };
+    }
+    const repoRoot = rootRes.stdout.trim();
     if (!repoRoot) {
-      // Not in a repo. Treat the working file as the only side; nothing
-      // to diff against, so we return head === working so the diff
-      // editor renders a clean view.
       return {
         head: working,
         working,
@@ -410,22 +529,16 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       };
     }
 
-    const relPath = path.relative(repoRoot, req.absPath).split(path.sep).join('/');
-    const git = simpleGit(repoRoot);
+    // Make path relative using POSIX semantics — works for both Fs.
+    const rel = req.absPath.startsWith(repoRoot + '/')
+      ? req.absPath.slice(repoRoot.length + 1)
+      : req.absPath;
 
-    // `git show HEAD:<relPath>` returns the HEAD blob. Throws if the
-    // file didn't exist in HEAD (untracked or newly added), in which
-    // case the "previous" side is empty.
-    let head = '';
-    try {
-      head = await git.show([`HEAD:${relPath}`]);
-    } catch {
-      head = '';
-    }
+    const showRes = await fs.exec('git', ['show', `HEAD:${rel}`], {
+      cwd: repoRoot, timeoutMs: 15_000, maxStdoutBytes: 10 * 1024 * 1024,
+    });
+    const head = showRes.code === 0 ? showRes.stdout : '';
 
-    // Coarse state — same buckets as worktree.gitStatus. We re-derive
-    // here instead of calling readGitStatus to keep this fast for a
-    // single file.
     let state: ResponseOf<'file.readGitDiff'>['state'] = 'clean';
     if (!stat && head) state = 'deleted';
     else if (!head && stat) state = 'untracked';
@@ -439,74 +552,46 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     };
   },
   'file.readBinary': async (req) => {
-    const max = req.maxBytes ?? 8 * 1024 * 1024;
-    const stat = await fsp.stat(req.absPath);
-    if (stat.size > max) {
-      return {
-        data: '',
-        mimeType: mimeFromPath(req.absPath),
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-        tooLarge: true,
-      };
-    }
-    const buf = await fsp.readFile(req.absPath);
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    const opts = req.maxBytes !== undefined ? { maxBytes: req.maxBytes } : undefined;
+    const r = await fs.readFileBinary(req.absPath, opts);
     return {
-      data: buf.toString('base64'),
+      data: r.data,
       mimeType: mimeFromPath(req.absPath),
-      size: stat.size,
-      mtimeMs: stat.mtimeMs,
-      tooLarge: false,
+      size: r.size,
+      mtimeMs: r.mtimeMs,
+      tooLarge: r.tooLarge,
     };
   },
   'file.write': async (req) => {
-    // Stale-write guard: if the file on disk is newer than what the
-    // renderer loaded, refuse unless `force: true`. The renderer then
-    // surfaces a "file changed on disk" prompt.
-    if (req.knownMtimeMs != null && !req.force) {
-      try {
-        const stat = await fsp.stat(req.absPath);
-        if (stat.mtimeMs > req.knownMtimeMs + 1) {
-          return { ok: false, mtimeMs: stat.mtimeMs, stale: true };
-        }
-      } catch {
-        // File doesn't exist on disk anymore — proceed (we'll create it).
-      }
-    }
-    await fsp.writeFile(req.absPath, req.content, 'utf-8');
-    const stat = await fsp.stat(req.absPath);
-    return { ok: true, mtimeMs: stat.mtimeMs, stale: false };
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    const opts: { knownMtimeMs?: number; force?: boolean } = {};
+    if (req.knownMtimeMs !== undefined) opts.knownMtimeMs = req.knownMtimeMs;
+    if (req.force !== undefined) opts.force = req.force;
+    return await fs.writeFile(req.absPath, req.content, opts);
   },
 
   'file.copy': async (req) => {
-    const dest = req.destAbsPath ?? await pickSiblingCopyName(req.absPath);
-    // recursive so directories work the same way as files. errorOnExist
-    // keeps us from clobbering an existing target — the caller can
-    // pass an explicit destAbsPath if they want overwrite semantics.
-    await fsp.cp(req.absPath, dest, {
-      recursive: true,
-      errorOnExist: true,
-      force: false,
-    });
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    const dest = req.destAbsPath ?? await pickSiblingCopyName(fs, req.absPath);
+    await fs.cp(req.absPath, dest, { recursive: true, errorOnExist: true });
     return { destAbsPath: dest };
   },
   'file.rename': async (req) => {
     if (req.newName.includes('/') || req.newName.includes('\\') || req.newName === '..' || req.newName === '.') {
       throw new Error('Invalid name — basename must not contain slashes or be . / ..');
     }
-    const dir = path.dirname(req.absPath);
-    const newAbs = path.join(dir, req.newName);
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    // POSIX-style dirname extraction (works the same for both Fs since
+    // remote paths are always `/`-separated and local paths on macOS
+    // use `/` too).
+    const dir = req.absPath.replace(/\/+[^/]+\/?$/, '') || '/';
+    const newAbs = dir === '/' ? `/${req.newName}` : `${dir}/${req.newName}`;
     if (newAbs === req.absPath) return { newAbsPath: newAbs };
-    // Refuse to clobber an existing file with the new name. The
-    // renderer surfaces this as an alert and the user can choose
-    // another name.
-    try {
-      await fsp.access(newAbs);
+    if (await fs.exists(newAbs)) {
       throw new Error(`"${req.newName}" already exists in this folder.`);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
-    await fsp.rename(req.absPath, newAbs);
+    await fs.rename(req.absPath, newAbs);
     return { newAbsPath: newAbs };
   },
   'file.create': async (req) => {
@@ -522,14 +607,26 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return { absPath: req.absPath };
   },
   'file.delete': async (req) => {
-    // shell.trashItem moves to the OS trash — recoverable from Finder.
-    // We deliberately do NOT use rm -rf here: the renderer asks for
-    // confirmation, but accidental clicks happen and OS-trash is
-    // strictly safer.
-    await shell.trashItem(req.absPath);
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    if (fs.isLocal) {
+      // shell.trashItem moves to the OS trash — recoverable.
+      await shell.trashItem(req.absPath);
+    } else {
+      // No portable trash on Linux remote — rm -rf. Caller has already
+      // shown the confirm prompt.
+      await fs.rm(req.absPath, { recursive: true, force: true });
+    }
     return { ok: true };
   },
   'file.revealInFinder': (req) => {
+    // Local-only — the OS doesn't have a "reveal" for a remote path.
+    // The renderer suppresses this menu item for remote sessions.
+    if (req.sessionId) {
+      const fs = getFsForSession(req.sessionId);
+      if (fs && !fs.isLocal) {
+        throw new Error("Reveal in Finder isn't available for remote projects.");
+      }
+    }
     shell.showItemInFolder(req.absPath);
     return { ok: true };
   },
@@ -616,32 +713,43 @@ function splitGlobs(s: string): string[] {
   return s.split(',').map((x) => x.trim()).filter((x) => x.length > 0);
 }
 
+/** Double-quote a path for `sh -c`, with `~` → `$HOME` rewriting so it
+ *  expands inside the quotes. POSIX shells DO NOT expand `~` inside
+ *  double quotes (it only expands as the unquoted first character of a
+ *  word) — but `$HOME` DOES expand, so the substitution gets us the
+ *  same end state without losing safe-quoting of embedded spaces. */
+function shellQuoteWithTilde(p: string): string {
+  const esc = (s: string): string => s.replace(/"/g, '\\"');
+  if (p === '~') return '"$HOME"';
+  if (p.startsWith('~/')) return `"$HOME/${esc(p.slice(2))}"`;
+  return `"${esc(p)}"`;
+}
+
 /** Run `git grep` with the given options and return matches in the
  *  shape WorktreeSearchResponse wants. Uses --line-number --column
  *  --null so we can split on NUL and not get tripped up by colons in
  *  paths or content. Stops at maxMatches; sets `truncated` to true if
  *  it did. */
 async function runGitGrep(
+  fs: import('../services/fs/types.js').BatonFs,
   cwd: string,
   req: RequestOf<'worktree.search'>,
 ): Promise<ResponseOf<'worktree.search'>> {
   const maxMatches = req.maxMatches ?? 2000;
-  const args = [
+  const args: string[] = [
     'grep',
     '--no-color',
     '--line-number',
     '--column',
-    '--null',         // NUL between fields → safe split
-    '--full-name',    // paths relative to repo root
-    '-I',             // skip binaries
-    '--untracked',    // honour .gitignore but include untracked files
+    '--null',
+    '--full-name',
+    '-I',
+    '--untracked',
   ];
   if (!req.caseSensitive) args.push('--ignore-case');
   if (req.wholeWord)      args.push('--word-regexp');
   if (req.regex) args.push('--extended-regexp');
   else           args.push('--fixed-strings');
-  // Patterns terminated with `--` so anything in includeGlob isn't
-  // mistaken for a flag.
   args.push('-e', req.query, '--');
   const includes = splitGlobs(req.includeGlob);
   const excludes = splitGlobs(req.excludeGlob);
@@ -652,23 +760,14 @@ async function runGitGrep(
   let stderr = '';
   let exitCode: number | null = null;
   try {
-    const child = await new Promise<{ stdout: string; stderr: string; code: number | null }>((resolve) => {
-      const proc: ChildProcessWithoutNullStreams = spawn('git', args, {
-        cwd,
-        env: process.env,
-      });
-      let out = '';
-      let err = '';
-      proc.stdout.setEncoding('utf-8');
-      proc.stderr.setEncoding('utf-8');
-      proc.stdout.on('data', (d: string) => { out += d; });
-      proc.stderr.on('data', (d: string) => { err += d; });
-      proc.on('error', (e) => resolve({ stdout: out, stderr: String(e), code: 1 }));
-      proc.on('close', (code) => resolve({ stdout: out, stderr: err, code }));
+    const res = await fs.exec('git', args, {
+      cwd,
+      timeoutMs: 30_000,
+      maxStdoutBytes: 32 * 1024 * 1024,
     });
-    stdout = child.stdout;
-    stderr = child.stderr;
-    exitCode = child.code;
+    stdout = res.stdout;
+    stderr = res.stderr;
+    exitCode = res.code;
   } catch (err) {
     return { matches: [], truncated: false, error: String(err) };
   }
@@ -711,32 +810,22 @@ async function runGitGrep(
 /** Pick a non-conflicting destination name for `file.copy` when the
  *  caller didn't supply one. Tries "<stem> copy<ext>" first, then
  *  numbered suffixes. Mirrors macOS Finder's duplicate behaviour. */
-async function pickSiblingCopyName(srcAbs: string): Promise<string> {
-  const dir = path.dirname(srcAbs);
-  const base = path.basename(srcAbs);
+async function pickSiblingCopyName(fs: { exists(p: string): Promise<boolean> }, srcAbs: string): Promise<string> {
+  // POSIX-style basename / dirname — both remote and local-on-macOS use
+  // `/` separators. (path.posix.* would do the same thing.)
+  const dir = srcAbs.replace(/\/+[^/]+\/?$/, '') || '/';
+  const base = srcAbs.split('/').pop() ?? srcAbs;
   const dot = base.lastIndexOf('.');
   const stem = dot > 0 ? base.slice(0, dot) : base;
   const ext = dot > 0 ? base.slice(dot) : '';
   for (let i = 1; i < 1000; i++) {
     const suffix = i === 1 ? ' copy' : ` copy ${i}`;
-    const candidate = path.join(dir, `${stem}${suffix}${ext}`);
-    try { await fsp.access(candidate); } catch { return candidate; }
+    const candidate = dir === '/'
+      ? `/${stem}${suffix}${ext}`
+      : `${dir}/${stem}${suffix}${ext}`;
+    if (!(await fs.exists(candidate))) return candidate;
   }
   throw new Error('Could not find a non-conflicting copy name within 1000 attempts.');
-}
-
-/** Walk up from `absPath` to find a directory containing `.git`.
- *  Returns null if none — caller treats the file as non-repo. */
-function findRepoRoot(absPath: string): string | null {
-  let dir = path.dirname(path.resolve(absPath));
-  // Bound the walk so we never loop on weird filesystems.
-  for (let i = 0; i < 64; i++) {
-    if (fs.existsSync(path.join(dir, '.git'))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) return null;
-    dir = parent;
-  }
-  return null;
 }
 
 /** Cheap extension-based MIME lookup. Only handles the types we

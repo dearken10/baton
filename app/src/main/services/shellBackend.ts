@@ -13,6 +13,12 @@ import type {
   AgentHandle,
   AgentSpawnOpts,
 } from './agentBackend.js';
+import type { BatonFs } from './fs/types.js';
+import { RemoteFs } from './fs/remoteFs.js';
+
+export interface ShellSpawnOpts extends AgentSpawnOpts {
+  fs?: BatonFs;
+}
 
 export class ShellBackend implements AgentBackend {
   readonly id = 'shell' as const;
@@ -22,7 +28,10 @@ export class ShellBackend implements AgentBackend {
     return true;
   }
 
-  async spawn(opts: AgentSpawnOpts): Promise<AgentHandle> {
+  async spawn(opts: ShellSpawnOpts): Promise<AgentHandle> {
+    if (opts.fs && !opts.fs.isLocal) {
+      return this.spawnRemote(opts, opts.fs as RemoteFs);
+    }
     const shellPath = process.env['SHELL'] ?? '/bin/zsh';
 
     // Strip env vars npm + Electron inject into us so the user's
@@ -54,6 +63,30 @@ export class ShellBackend implements AgentBackend {
     });
 
     return wrap(ptyProcess);
+  }
+
+  /** Spawn a login shell on the remote. The user's `~/.profile` etc.
+   *  loads naturally because `bash -l` is what runs at the other end
+   *  of the SSH session. */
+  private async spawnRemote(opts: ShellSpawnOpts, remoteFs: RemoteFs): Promise<AgentHandle> {
+    const remoteEnv: Record<string, string> = {
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      ...(opts.env ?? {}),
+    };
+    // `bash -il` = interactive login. The user is dropping into a real
+    // terminal so they want the full interactive setup (prompt, aliases,
+    // nvm, …). Login + interactive both being set also matches what
+    // ssh'ing directly into the box gives them.
+    const handle = await remoteFs.spawnPty({
+      command: 'bash',
+      args: ['-il'],
+      cwd: opts.cwd,
+      env: remoteEnv,
+      cols: opts.cols,
+      rows: opts.rows,
+    });
+    return handle;
   }
 }
 

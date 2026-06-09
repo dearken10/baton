@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
-import type { Project, Session } from '@shared/ipc.js';
+import type { ConnectionProfile, Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
@@ -20,6 +20,7 @@ export function LeftColumn(): JSX.Element {
   const sessionsRecord = useAppStore((s) => s.sessions);
   const projectOrder = useAppStore((s) => s.projectOrder);
   const sessionOrder = useAppStore((s) => s.sessionOrder);
+  const connections = useAppStore((s) => s.connections);
   const selectedId = useAppStore((s) => s.selectedSessionId);
   const selectSession = useAppStore((s) => s.selectSession);
 
@@ -155,10 +156,17 @@ export function LeftColumn(): JSX.Element {
   const [worktreeDefault, setWorktreeDefault] = useState('');
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
 
+  // Spawn-in-flight markers live in the store (see store.ts) so the
+  // sidebar row and the MiddleColumn "Start fresh…" button reflect
+  // the same pending state. Read here, write via `setSessionPending`.
+  const pendingSessionIds = useAppStore((s) => s.pendingSessionIds);
+  const setSessionPending = useAppStore((s) => s.setSessionPending);
+  const markPending = useCallback((sid: string, on: boolean): void => {
+    setSessionPending(sid, on);
+  }, [setSessionPending]);
+
   async function onProjectAdded(project: Project): Promise<void> {
     setShowAddProjectDialog(false);
-    // Default: spawn an agent in the new project and focus it in
-    // the middle pane so the user can start working immediately.
     setBusy(true);
     try {
       const { session } = await window.baton.call('session.spawn', {
@@ -167,7 +175,19 @@ export function LeftColumn(): JSX.Element {
       });
       selectSession(session.id);
     } catch (spawnErr) {
-      console.warn('[baton] auto-spawn after project add failed:', spawnErr);
+      // Remote spawns can fail when the master can't reach the host or
+      // claude isn't installed there. Surface so the user knows their
+      // project was added but no session came up.
+      const conn = connections[project.connectionId];
+      const isRem = !!conn && conn.kind !== 'local';
+      if (isRem) {
+        alert(
+          `Project added, but auto-spawn failed:\n\n${String(spawnErr)}\n\n` +
+          `Use the project menu's "New session" once you've fixed it.`
+        );
+      } else {
+        console.warn('[baton] auto-spawn after project add failed:', spawnErr);
+      }
     } finally {
       setBusy(false);
     }
@@ -261,39 +281,45 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  /** Auto-start the session: prefer resume (preserves conversation
+   *  history), fall back silently to respawn if there's nothing to
+   *  resume from. Replaces the old "show Session-ended panel → user
+   *  clicks button" two-step. Bound to row clicks for any ended
+   *  session — local or remote — so the user just clicks once.
+   *
+   *  The previous "do you want to start fresh?" confirm dialog is
+   *  intentionally gone. For remote sessions where the transcript was
+   *  never written, the dialog was just an extra click for an answer
+   *  ("yes, start fresh") that's always what the user wanted. */
   async function resumeSession(sessionId: string): Promise<void> {
-    setBusy(true);
+    if (pendingSessionIds.has(sessionId)) return;
+    markPending(sessionId, true);
     try {
-      const { session } = await window.baton.call('session.resume', { sessionId });
-      selectSession(session.id);
-    } catch (err) {
-      const msg = String(err);
-      // Common race / data path: the session row no longer has a
-      // claude_session_id (cleared during boot reconcile because the
-      // transcript is missing). Resume can't restore the conversation,
-      // but a fresh respawn in the same worktree is usually what the
-      // user wanted — offer it instead of a dead-end alert.
-      const noHistory =
-        msg.includes('no Claude session id') ||
-        msg.includes('no transcript');
-      if (noHistory) {
-        const ok = window.confirm(
-          "This session's prior conversation can't be restored "
-          + '(it likely ended before any user message was sent).\n\n'
-          + 'Start a fresh Claude session in the same worktree instead?'
-        );
-        if (!ok) return;
+      const sess = sessionsRecord[sessionId];
+      const hasHistory = !!sess?.claudeSessionId;
+      let res: { session: Session };
+      if (hasHistory) {
         try {
-          const { session } = await window.baton.call('session.respawn', { sessionId });
-          selectSession(session.id);
-        } catch (respErr) {
-          alert(`Spawn failed: ${String(respErr)}`);
+          res = await window.baton.call('session.resume', { sessionId });
+        } catch (err) {
+          const msg = String(err);
+          const noHistory =
+            msg.includes('no Claude session id') ||
+            msg.includes('no transcript');
+          if (!noHistory) throw err;
+          // Fall through to a fresh spawn in the same cwd.
+          res = await window.baton.call('session.respawn', { sessionId });
         }
-        return;
+      } else {
+        // No captured claude_session_id (cleared, shell session, etc.)
+        // — go straight to a fresh spawn.
+        res = await window.baton.call('session.respawn', { sessionId });
       }
-      alert(`Resume failed: ${msg}`);
+      selectSession(res.session.id);
+    } catch (err) {
+      alert(`Start failed: ${String(err)}`);
     } finally {
-      setBusy(false);
+      markPending(sessionId, false);
     }
   }
 
@@ -461,6 +487,7 @@ export function LeftColumn(): JSX.Element {
             <ProjectBlock
               key={p.id}
               project={p}
+              connection={connections[p.connectionId]}
               sessions={sessionsByProject[p.id] ?? []}
               selectedId={selectedId}
               onSelect={selectSession}
@@ -474,7 +501,19 @@ export function LeftColumn(): JSX.Element {
               onRename={renameSession}
               onDelete={deleteSession}
               onToggleSessionSnooze={toggleSnoozeSession}
-              onGetInfo={() => window.alert(`${p.name}\n\n${p.path}`)}
+              onGetInfo={() => {
+                const conn = connections[p.connectionId];
+                const isRem = !!conn && conn.kind !== 'local';
+                const lines = [
+                  p.name,
+                  '',
+                  isRem && conn
+                    ? `Remote: ${conn.name} (${conn.user}@${conn.host}${conn.port && conn.port !== 22 ? `:${conn.port}` : ''})`
+                    : 'Local Mac',
+                  p.path,
+                ];
+                window.alert(lines.join('\n'));
+              }}
               onNewTerminal={() => void spawnTerminal(p.id)}
               onRenameProject={() => renameProjectInList(p)}
               onRemoveProject={() => void removeProjectFromList(p)}
@@ -484,6 +523,7 @@ export function LeftColumn(): JSX.Element {
                 reorderSessionsForProject(p.id, fromId, beforeId)
               }
               busy={busy}
+              pendingSessionIds={pendingSessionIds}
             />
           ))
         )}
@@ -518,6 +558,7 @@ export function LeftColumn(): JSX.Element {
 
 interface ProjectBlockProps {
   project: Project;
+  connection: ConnectionProfile | undefined;
   sessions: Session[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -535,6 +576,9 @@ interface ProjectBlockProps {
   onReorderProjects: (fromId: string, beforeId: string) => void;
   onReorderSessions: (fromId: string, beforeId: string) => void;
   busy: boolean;
+  /** Session ids whose resume/respawn is in flight. Rows in this set
+   *  render a "Starting…" indicator and swallow clicks. */
+  pendingSessionIds: Set<string>;
 }
 
 /** HTML5 drag id markers used so we can tell project drags from
@@ -544,13 +588,17 @@ const DRAG_SESSION = 'application/x-baton-session';
 
 function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
-    project, sessions, selectedId,
+    project, connection, sessions, selectedId,
     onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onToggleSessionSnooze,
     onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
-    busy,
+    busy, pendingSessionIds,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
   const isSnoozed = project.snoozedAt != null;
+  const isRemote = !!connection && connection.kind !== 'local';
+  const remoteSublabel = isRemote && connection
+    ? `${connection.user ?? ''}@${connection.host ?? ''}${connection.port && connection.port !== 22 ? `:${connection.port}` : ''}:${project.path}`
+    : project.path;
 
   return (
     <div
@@ -578,7 +626,16 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
       }}
     >
       <div className="project-head">
-        <span className="project-name" title={project.path}>
+        <span className="project-name" title={remoteSublabel}>
+          {isRemote ? (
+            <span
+              className="project-conn-chip"
+              title={connection ? `Remote: ${connection.name}` : 'Remote'}
+              aria-label="Remote project"
+            >
+              🛰
+            </span>
+          ) : null}
           {project.name}
           {isSnoozed ? <span className="snooze-meta">snoozed</span> : null}
         </span>
@@ -598,10 +655,20 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
         <div className="sessions-list">
           {sessions.map((s) => {
             const isEnded = s.status === 'done' || s.status === 'errored';
-            const canResume = isEnded && !!s.claudeSessionId;
-            const onClick = canResume
-              ? () => onResume(s.id)   // resume by default
-              : () => onSelect(s.id);  // live OR ended-without-id → just select
+            const isPending = pendingSessionIds.has(s.id);
+            // Click on an ended row auto-starts the session (resume if
+            // claude_session_id is around, respawn otherwise). The user
+            // doesn't have to chase a "Start fresh session here" button
+            // in the middle column anymore — one click brings the
+            // session back up. Pending rows absorb clicks so rapid
+            // double-clicks don't queue duplicate spawns. Live rows
+            // just select (the click selects the row for the
+            // right-column inspector to follow).
+            const onClick = isPending
+              ? () => onSelect(s.id)
+              : isEnded
+                ? () => onResume(s.id)
+                : () => onSelect(s.id);
             const isWorktreeSession =
               s.worktreePath !== project.path &&
               s.worktreePath.startsWith(project.path);
@@ -614,32 +681,36 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
               s.backendId === 'shell' ? { glyph: '❯',  cls: 'badge-shell' }
               : isWorktreeSession    ? { glyph: '🌿', cls: 'badge-worktree' }
               :                        { glyph: '💬', cls: 'badge-session' };
-            // We only want the chip to draw attention when something
-            // worth noting is happening:
-            //   - shell sessions → never (their "done" on restart is
-            //     just "the previous shell exited" — not interesting)
-            //   - Claude sessions at `idle` → no chip (boring default state)
-            //   - `paused` is a baton-internal SIGSTOP optimisation on
-            //     idle sessions; it auto-resumes on user keystroke and
-            //     isn't a state the user should be nagged about.
-            //   - everything else (running / needs-input / done /
-            //     errored / disconnected) → chip stays so the user sees it.
+            // Only three chips render in the sidebar:
+            //   1. running       — agent is actively working
+            //   2. needs-input   — agent is blocked on a tool prompt
+            //   3. starting      — spawn/resume IPC is in flight
+            //                      (driven by `isPending`, not s.status)
+            // Everything else (idle, done, errored, paused, disconnected)
+            // stays unchipped — the row's other affordances (ended-row
+            // styling, the middle column's "Session ended" view) carry
+            // that information without piling it onto every list row.
             const isShell = s.backendId === 'shell';
             const isSnoozed = s.snoozedAt != null;
-            // Snoozed rows behave exactly like idle ones — no chip.
-            // The user has told us they don't want to be nagged about
-            // this session's status until they unsnooze it.
             const showStatusChip =
-              !isShell && !isSnoozed && s.status !== 'idle' && s.status !== 'paused';
+              !isShell && !isSnoozed &&
+              (s.status === 'running' || s.status === 'needs-input');
             // Rename is shown for ALL worktree sessions; for live ones
             // the handler will offer to stop the session first.
             const canRename = isWorktreeSession;
             return (
               <div
                 key={s.id}
-                className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}`}
+                className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}${isPending ? ' pending' : ''}`}
                 onClick={onClick}
-                title={canResume ? 'Click to resume this Claude session' : `session ${s.id}`}
+                title={
+                  isPending
+                    ? 'Starting…'
+                    : isEnded
+                      ? 'Click to start this session'
+                      : `session ${s.id}`
+                }
+                aria-busy={isPending || undefined}
                 draggable={true}
                 onDragStart={(e) => {
                   e.stopPropagation(); // don't trigger project drag
@@ -680,7 +751,12 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                     {formatTokens(s.tokensIn + s.tokensOut)}
                   </span>
                 ) : null}
-                {showStatusChip ? (
+                {isPending ? (
+                  <span className="status status-starting" aria-live="polite">
+                    <span className="status-spinner" aria-hidden />
+                    starting
+                  </span>
+                ) : showStatusChip ? (
                   <span className={`status status-${s.status}`}>{s.status}</span>
                 ) : null}
                 <SessionRowMenu

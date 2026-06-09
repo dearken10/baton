@@ -37,6 +37,57 @@ export type SessionStatus = z.infer<typeof SessionStatus>;
 export const AgentBackendId = z.enum(['claude-code', 'codex', 'mock', 'shell']);
 export type AgentBackendId = z.infer<typeof AgentBackendId>;
 
+export const ConnectionKind = z.enum(['local', 'ssh']);
+export type ConnectionKind = z.infer<typeof ConnectionKind>;
+
+export const SshAuthMethod = z.enum(['key', 'agent', 'password']);
+export type SshAuthMethod = z.infer<typeof SshAuthMethod>;
+
+export const ClaudeCredsMode = z.enum(['remote', 'forward']);
+export type ClaudeCredsMode = z.infer<typeof ClaudeCredsMode>;
+
+/** Test-connection result codes. `success` = SSH up + daemon probe OK;
+ *  `daemon_missing` = SSH ok but `node`/`git` not available on remote;
+ *  other codes are pre-handshake failures. Stage 1 only emits
+ *  `success` / `auth_failed` / `unreachable` / `timeout` / `error` —
+ *  `daemon_missing` is reserved for when the F14 daemon probe lands. */
+export const ConnectionProbeStatus = z.enum([
+  'success',
+  'auth_failed',
+  'unreachable',
+  'timeout',
+  'daemon_missing',
+  'error',
+]);
+export type ConnectionProbeStatus = z.infer<typeof ConnectionProbeStatus>;
+
+/** A saved connection target. The built-in row with id="local" always
+ *  exists and represents this Mac; it can't be renamed or deleted. */
+export const ConnectionProfile = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1).max(80),
+  kind: ConnectionKind,
+  // SSH-only fields. Null for kind="local".
+  host: z.string().nullable(),
+  user: z.string().nullable(),
+  port: z.number().int().positive().nullable(),
+  authMethod: SshAuthMethod.nullable(),
+  /** Absolute path to the private key file on the Mac. Only meaningful
+   *  when authMethod="key". Kept off-the-wire — we just need to point
+   *  ssh at it via -i. */
+  authKeyPath: z.string().nullable(),
+  /** "remote" = use the remote's existing ~/.claude/credentials.
+   *  "forward" = pass an env-forwarded token from the Mac per session. */
+  claudeCredsMode: ClaudeCredsMode.nullable(),
+  /** Last test-connection result, for the dropdown's status badge.
+   *  Null on a freshly created profile that hasn't been probed yet. */
+  lastStatus: ConnectionProbeStatus.nullable(),
+  /** Wall-clock ms when lastStatus was written. Null when never probed. */
+  lastProbedAt: z.number().nullable(),
+  createdAt: z.number(),
+});
+export type ConnectionProfile = z.infer<typeof ConnectionProfile>;
+
 export const Project = z.object({
   id: ProjectId,
   path: z.string(),
@@ -46,6 +97,10 @@ export const Project = z.object({
    *  active. Snoozed projects render in the left column's "Snoozed"
    *  view instead of the default "Active" list. */
   snoozedAt: z.number().nullable(),
+  /** Which connection profile owns this project's filesystem. "local"
+   *  for projects on this Mac (the default); a profile id for remote
+   *  projects. */
+  connectionId: z.string().min(1),
 });
 export type Project = z.infer<typeof Project>;
 
@@ -93,6 +148,8 @@ const ProjectAddRequest = z.object({
   path: z.string().min(1),
   /** Optional display-name override. Defaults to basename(path). */
   name: z.string().trim().min(1).max(120).optional(),
+  /** Connection profile id. Defaults to "local" — the built-in row. */
+  connectionId: z.string().min(1).optional(),
 });
 const ProjectAddResponse = z.object({ project: Project });
 
@@ -105,8 +162,112 @@ const ProjectCreateRequest = z.object({
    *  create — e.g. `~/baton/my-project` or `/Users/x/code/my-project`. */
   path: z.string().trim().min(1),
   initGit: z.boolean().optional(),
+  /** Connection profile id. Defaults to "local". For non-local
+   *  connections in Stage 1, mkdir/git-init happen lazily on first
+   *  use; the project is registered as metadata-only. */
+  connectionId: z.string().min(1).optional(),
 });
 const ProjectCreateResponse = z.object({ project: Project });
+
+/* ─── Connection profile CRUD + probes ─── */
+
+const ConnectionListResponse = z.object({
+  profiles: z.array(ConnectionProfile),
+});
+
+/** Fields a renderer can supply when creating a new SSH connection. The
+ *  built-in `local` profile is seeded once at boot and isn't created
+ *  through this verb. */
+const ConnectionCreateRequest = z.object({
+  name: z.string().trim().min(1).max(80),
+  host: z.string().trim().min(1),
+  user: z.string().trim().min(1),
+  port: z.number().int().positive().default(22),
+  authMethod: SshAuthMethod,
+  /** Required when authMethod="key". Stored as-is; ssh resolves it. */
+  authKeyPath: z.string().trim().min(1).optional(),
+  claudeCredsMode: ClaudeCredsMode.default('remote'),
+});
+const ConnectionCreateResponse = z.object({ profile: ConnectionProfile });
+
+const ConnectionUpdateRequest = z.object({
+  id: z.string().min(1),
+  name: z.string().trim().min(1).max(80).optional(),
+  host: z.string().trim().min(1).optional(),
+  user: z.string().trim().min(1).optional(),
+  port: z.number().int().positive().optional(),
+  authMethod: SshAuthMethod.optional(),
+  authKeyPath: z.string().trim().min(1).nullable().optional(),
+  claudeCredsMode: ClaudeCredsMode.optional(),
+});
+const ConnectionUpdateResponse = z.object({ profile: ConnectionProfile });
+
+const ConnectionDeleteRequest = z.object({ id: z.string().min(1) });
+const ConnectionDeleteResponse = z.object({ ok: z.literal(true) });
+
+/** Probe an SSH connection. Always reachable for kind="local". The
+ *  result is also persisted to lastStatus/lastProbedAt on the profile
+ *  so the dropdown badge survives a relaunch. */
+const ConnectionTestRequest = z.object({ id: z.string().min(1) });
+const ConnectionTestResponse = z.object({
+  status: ConnectionProbeStatus,
+  /** Round-trip ms for `success`; null otherwise. */
+  rttMs: z.number().int().nonnegative().nullable(),
+  /** Human-readable detail surfaced inline in the dialog (e.g. ssh
+   *  stderr). Empty string when nothing useful to show. */
+  detail: z.string(),
+});
+
+/** Probe a path on a connection — runs `test -d <path> && pwd` over
+ *  SSH (or stat locally) and returns the resolved absolute path. Used
+ *  by AddProjectDialog's Validate button. */
+const ConnectionTestPathRequest = z.object({
+  connectionId: z.string().min(1),
+  /** May include a leading `~/`. */
+  path: z.string().trim().min(1),
+});
+const ConnectionTestPathResponse = z.object({
+  ok: z.boolean(),
+  /** Resolved absolute path on the target host when ok=true. Empty
+   *  string otherwise. */
+  resolvedPath: z.string(),
+  /** Human-readable failure detail when ok=false. */
+  detail: z.string(),
+});
+
+/** Force an immediate reconnect of the long-lived SSH master for a
+ *  remote profile. Powers the "Reconnect now" button in the disconnect
+ *  banner. Local profiles always resolve immediately. */
+const ConnectionReconnectRequest = z.object({ id: z.string().min(1) });
+const ConnectionReconnectResponse = z.object({ ok: z.literal(true) });
+
+/** List one level of a directory on a connection. Powers the
+ *  RemoteFolderPicker at add-project time, before a session exists.
+ *  Path may include a leading `~` — resolvedPath echoes back the
+ *  absolute path we ended up at so the renderer can show a breadcrumb. */
+const ConnectionListDirRequest = z.object({
+  connectionId: z.string().min(1),
+  /** May be empty or `~` to land at the target's home directory. */
+  path: z.string(),
+});
+const ConnectionListDirEntry = z.object({
+  name: z.string(),
+  kind: z.union([
+    z.literal('file'),
+    z.literal('dir'),
+    z.literal('symlink'),
+    z.literal('other'),
+  ]),
+});
+const ConnectionListDirResponse = z.object({
+  /** Absolute path of the directory we actually read. */
+  resolvedPath: z.string(),
+  /** Listing, sorted dirs first then files, alphabetical. Hidden
+   *  entries (leading dot) are kept — the picker dims them. */
+  entries: z.array(ConnectionListDirEntry),
+  /** Empty string on success; a human-readable error otherwise. */
+  error: z.string(),
+});
 
 const ProjectListResponse = z.object({ projects: z.array(Project) });
 const ProjectPickResponse = z.object({ path: z.string().nullable() });
@@ -134,7 +295,15 @@ const ProjectSetSnoozedResponse = z.object({ project: Project });
 const SessionReorderRequest = z.object({ orderedIds: z.array(SessionId).min(1) });
 const SessionReorderResponse = z.object({ ok: z.literal(true) });
 
-const SessionListResponse = z.object({ sessions: z.array(Session) });
+const SessionListResponse = z.object({
+  sessions: z.array(Session),
+  /** Ids that boot auto-resume is about to bring back up. Renderer
+   *  flips these to a "Starting…" indicator atomically with loading
+   *  the sessions, so the row doesn't briefly flash `done`/`errored`
+   *  while we wait for the actual `session.starting` event to arrive
+   *  from the slower per-session spawn loop. */
+  startingIds: z.array(SessionId),
+});
 
 /** Rolling token usage windows for the plan-usage indicator (F11.3).
  *  Returns absolute totals for the last 5h and 7d; the renderer
@@ -322,6 +491,10 @@ const EditorOpenInResponse = z.object({
 const FileReadRequest = z.object({
   absPath: z.string().min(1),
   maxBytes: z.number().int().positive().optional(),
+  /** Session that owns this path. Determines which Fs (local vs SSH)
+   *  the read uses. When omitted, defaults to LocalFs for back-compat
+   *  with one-off renderer call sites. */
+  sessionId: SessionId.optional(),
 });
 const FileReadResponse = z.object({
   content: z.string(),
@@ -348,6 +521,7 @@ const FileWriteRequest = z.object({
    *  unless `force: true`. */
   knownMtimeMs: z.number().optional(),
   force: z.boolean().optional(),
+  sessionId: SessionId.optional(),
 });
 const FileWriteResponse = z.object({
   ok: z.boolean(),
@@ -359,7 +533,10 @@ const FileWriteResponse = z.object({
 
 /** Read both the HEAD version (`head`) and the working-copy version
  *  (`working`) of a file for the Monaco DiffEditor. PRD F7.3. */
-const FileReadGitDiffRequest = z.object({ absPath: z.string().min(1) });
+const FileReadGitDiffRequest = z.object({
+  absPath: z.string().min(1),
+  sessionId: SessionId.optional(),
+});
 const FileReadGitDiffResponse = z.object({
   /** HEAD contents, or empty if the file is new/untracked. */
   head: z.string(),
@@ -384,6 +561,7 @@ const FileReadGitDiffResponse = z.object({
 const FileReadBinaryRequest = z.object({
   absPath: z.string().min(1),
   maxBytes: z.number().int().positive().optional(),
+  sessionId: SessionId.optional(),
 });
 const FileReadBinaryResponse = z.object({
   /** Base64-encoded bytes. Empty when `tooLarge`. */
@@ -404,6 +582,7 @@ const FileCopyRequest = z.object({
   /** Explicit destination. When omitted main generates a sibling
    *  like "<stem> copy<ext>" (and "<stem> copy 2<ext>" if taken). */
   destAbsPath: z.string().min(1).optional(),
+  sessionId: SessionId.optional(),
 });
 const FileCopyResponse = z.object({ destAbsPath: z.string() });
 
@@ -411,6 +590,7 @@ const FileRenameRequest = z.object({
   absPath: z.string().min(1),
   /** New basename — must not contain path separators. */
   newName: z.string().min(1),
+  sessionId: SessionId.optional(),
 });
 const FileRenameResponse = z.object({ newAbsPath: z.string() });
 
@@ -418,13 +598,22 @@ const FileRenameResponse = z.object({ newAbsPath: z.string() });
  *  file. Parent directories are created as needed (mkdir -p), so paths
  *  like "src/new/foo.ts" relative to the worktree root work without
  *  the caller pre-creating the folders. */
-const FileCreateRequest = z.object({ absPath: z.string().min(1) });
+const FileCreateRequest = z.object({
+  absPath: z.string().min(1),
+  sessionId: SessionId.optional(),
+});
 const FileCreateResponse = z.object({ absPath: z.string() });
 
-const FileDeleteRequest = z.object({ absPath: z.string().min(1) });
+const FileDeleteRequest = z.object({
+  absPath: z.string().min(1),
+  sessionId: SessionId.optional(),
+});
 const FileDeleteResponse = z.object({ ok: z.literal(true) });
 
-const FileRevealInFinderRequest = z.object({ absPath: z.string().min(1) });
+const FileRevealInFinderRequest = z.object({
+  absPath: z.string().min(1),
+  sessionId: SessionId.optional(),
+});
 const FileRevealInFinderResponse = z.object({ ok: z.literal(true) });
 
 /** Full-text search across a session's worktree. Backed by `git grep`
@@ -582,6 +771,15 @@ export const ControlVerbs = {
   'project.setSnoozed': { request: ProjectSetSnoozedRequest, response: ProjectSetSnoozedResponse },
   'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
+  'connection.list':     { request: Empty,                     response: ConnectionListResponse },
+  'connection.create':   { request: ConnectionCreateRequest,   response: ConnectionCreateResponse },
+  'connection.update':   { request: ConnectionUpdateRequest,   response: ConnectionUpdateResponse },
+  'connection.delete':   { request: ConnectionDeleteRequest,   response: ConnectionDeleteResponse },
+  'connection.test':     { request: ConnectionTestRequest,     response: ConnectionTestResponse },
+  'connection.testPath': { request: ConnectionTestPathRequest, response: ConnectionTestPathResponse },
+  'connection.reconnect': { request: ConnectionReconnectRequest, response: ConnectionReconnectResponse },
+  'connection.listDir':   { request: ConnectionListDirRequest,   response: ConnectionListDirResponse },
+
   'session.list':   { request: Empty, response: SessionListResponse },
   'usage.getStats':      { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.getCodexStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
@@ -680,6 +878,17 @@ const SessionSpawnedEvent = EventEnvelope.extend({
   session: Session,
 });
 
+/** Fired the moment main decides to (re)spawn a session, BEFORE the
+ *  actual pty round-trip (which can take seconds over SSH). Renderer
+ *  uses this to flip the row to a "Starting…" indicator immediately,
+ *  so the user isn't staring at a stale `done`/`errored` chip during
+ *  boot auto-resume. Cleared on `session.spawned` (success) or
+ *  `session.exited` (failed before main returned). */
+const SessionStartingEvent = EventEnvelope.extend({
+  type: z.literal('session.starting'),
+  sessionId: SessionId,
+});
+
 const SessionStatusChangedEvent = EventEnvelope.extend({
   type: z.literal('session.status_changed'),
   sessionId: SessionId,
@@ -727,6 +936,21 @@ const SessionRefreshedEvent = EventEnvelope.extend({
   session: Session,
 });
 
+const ConnectionAddedEvent = EventEnvelope.extend({
+  type: z.literal('connection.added'),
+  profile: ConnectionProfile,
+});
+
+const ConnectionUpdatedEvent = EventEnvelope.extend({
+  type: z.literal('connection.updated'),
+  profile: ConnectionProfile,
+});
+
+const ConnectionRemovedEvent = EventEnvelope.extend({
+  type: z.literal('connection.removed'),
+  id: z.string().min(1),
+});
+
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   ProjectRemovedEvent,
@@ -735,6 +959,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ProjectSnoozeChangedEvent,
   SessionReorderedEvent,
   SessionSpawnedEvent,
+  SessionStartingEvent,
   SessionStatusChangedEvent,
   SessionSummarizedEvent,
   SessionExitedEvent,
@@ -742,6 +967,9 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionRenamedEvent,
   SessionTokensUpdatedEvent,
   SessionRefreshedEvent,
+  ConnectionAddedEvent,
+  ConnectionUpdatedEvent,
+  ConnectionRemovedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 

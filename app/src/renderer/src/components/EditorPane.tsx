@@ -174,6 +174,9 @@ export function EditorPane(): JSX.Element {
   const selectTab = useAppStore((s) => s.selectTab);
   const closeFile = useAppStore((s) => s.closeFile);
   const promoteToSticky = useAppStore((s) => s.promoteToSticky);
+  // Sessions own a connection; file ops need that sessionId so main
+  // can route through LocalFs vs RemoteFs.
+  const selectedSessionId = useAppStore((s) => s.selectedSessionId);
   // Monaco's built-in theme ids. 'vs' = light, 'vs-dark' = dark.
   const theme = useTheme();
   const monacoTheme = theme === 'light' ? 'vs' : 'vs-dark';
@@ -252,7 +255,10 @@ export function EditorPane(): JSX.Element {
           // the raw HTML stashed in `baseline`. No Monaco model.
           if (isBrowserTab(p)) {
             const realPath = pathOf(p);
-            const res = await window.baton.call('file.read', { absPath: realPath });
+            const res = await window.baton.call('file.read', {
+              absPath: realPath,
+              ...(selectedSessionId ? { sessionId: selectedSessionId } : {}),
+            });
             if (cancelled) return;
             if (res.binary || res.tooLarge) {
               updateMeta(p, {
@@ -283,7 +289,10 @@ export function EditorPane(): JSX.Element {
           // DiffEditor — we fetch HEAD + working sides from git.
           if (isDiffTab(p)) {
             const realPath = pathOf(p);
-            const res = await window.baton.call('file.readGitDiff', { absPath: realPath });
+            const res = await window.baton.call('file.readGitDiff', {
+              absPath: realPath,
+              ...(selectedSessionId ? { sessionId: selectedSessionId } : {}),
+            });
             if (cancelled) return;
             updateMeta(p, {
               status: 'diff',
@@ -305,7 +314,10 @@ export function EditorPane(): JSX.Element {
           // Images bypass the text-read path entirely: we fetch them
           // as base64 and render with <img> (PRD F6.2).
           if (isImage(p)) {
-            const res = await window.baton.call('file.readBinary', { absPath: p });
+            const res = await window.baton.call('file.readBinary', {
+              absPath: p,
+              ...(selectedSessionId ? { sessionId: selectedSessionId } : {}),
+            });
             if (cancelled) return;
             if (res.tooLarge) {
               updateMeta(p, {
@@ -333,7 +345,10 @@ export function EditorPane(): JSX.Element {
             return;
           }
 
-          const res = await window.baton.call('file.read', { absPath: p });
+          const res = await window.baton.call('file.read', {
+            absPath: p,
+            ...(selectedSessionId ? { sessionId: selectedSessionId } : {}),
+          });
           if (cancelled) return;
           if (res.binary || res.tooLarge) {
             updateMeta(p, {
@@ -466,6 +481,7 @@ export function EditorPane(): JSX.Element {
         absPath: activeFilePath,
         content,
         knownMtimeMs: meta.mtimeMs,
+        ...(selectedSessionId ? { sessionId: selectedSessionId } : {}),
       });
       if (res.stale) {
         const ok = window.confirm(
@@ -477,6 +493,7 @@ export function EditorPane(): JSX.Element {
           content,
           knownMtimeMs: meta.mtimeMs,
           force: true,
+          ...(selectedSessionId ? { sessionId: selectedSessionId } : {}),
         });
         updateMeta(activeFilePath, {
           mtimeMs: forced.mtimeMs,

@@ -12,7 +12,16 @@ export function RightColumn(): JSX.Element {
   const [tab, setTab] = useState<Tab>('files');
   const selectedId = useAppStore((s) => s.selectedSessionId);
   const sessionsRecord = useAppStore((s) => s.sessions);
+  const projectsRecord = useAppStore((s) => s.projects);
+  const connectionsRecord = useAppStore((s) => s.connections);
   const selected = selectedId ? sessionsRecord[selectedId] ?? null : null;
+  const selectedProject = selected ? projectsRecord[selected.projectId] : null;
+  const selectedConnection = selectedProject ? connectionsRecord[selectedProject.connectionId] : null;
+  const isRemote = !!selectedConnection && selectedConnection.kind !== 'local';
+  // Remote sessions track an extra `disconnected` state surfaced by
+  // the SSH master's health check. We treat anything other than
+  // `success` as "show the disconnect banner".
+  const remoteHealthy = !isRemote || selectedConnection?.lastStatus === 'success';
 
   // Tick on a timer so the panel reflects whatever the agent (or the
   // user) has been doing in the worktree. Cheap: each tick is one
@@ -23,6 +32,15 @@ export function RightColumn(): JSX.Element {
     const id = window.setInterval(() => setTick((t) => t + 1), REFRESH_MS);
     return () => window.clearInterval(id);
   }, [selected?.id]);
+
+  async function reconnect(): Promise<void> {
+    if (!selectedConnection) return;
+    try {
+      await window.baton.call('connection.reconnect', { id: selectedConnection.id });
+    } catch (err) {
+      alert(`Reconnect failed: ${String(err)}`);
+    }
+  }
 
   return (
     <aside className="col col-right">
@@ -45,7 +63,35 @@ export function RightColumn(): JSX.Element {
         >
           ⎇ Git
         </button>
+        {isRemote && selectedConnection ? (
+          <span
+            className={`conn-chip ${remoteHealthy ? 'ok' : 'warn'}`}
+            title={remoteHealthy
+              ? `Connected to ${selectedConnection.user}@${selectedConnection.host}`
+              : `Status: ${selectedConnection.lastStatus ?? 'unknown'}`}
+          >
+            <span className="conn-chip-dot" />
+            🛰 {selectedConnection.name}
+          </span>
+        ) : null}
       </div>
+      {isRemote && !remoteHealthy && selectedConnection ? (
+        <div className="right-banner">
+          <div className="right-banner-head">
+            <span className="right-banner-dot" />
+            <span>Connection lost · {selectedConnection.name}</span>
+          </div>
+          <div className="right-banner-sub">
+            Showing the last known state of files / git / search.
+            Edits made on the remote since the drop will appear once we reconnect.
+          </div>
+          <div className="right-banner-actions">
+            <button className="btn btn-small primary" onClick={() => void reconnect()}>
+              Reconnect now
+            </button>
+          </div>
+        </div>
+      ) : null}
       <div className="panel">
         {!selected ? (
           <div className="empty">

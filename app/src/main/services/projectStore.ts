@@ -15,40 +15,59 @@ import { getDatabase } from '../database/index.js';
 import type { Project } from '../../shared/ipc.js';
 import { emit } from './eventBus.js';
 
-function projectIdFromPath(path: string): string {
-  return createHash('sha256').update(path).digest('hex').slice(0, 16);
+interface ProjectRow {
+  id: string;
+  path: string;
+  name: string;
+  added_at: number;
+  connection_id: string;
+  snoozed_at: number | null;
 }
 
-export function addProject(absolutePath: string, nameOverride?: string): Project {
-  const id = projectIdFromPath(absolutePath);
+function rowToProject(r: ProjectRow): Project {
+  return {
+    id: r.id,
+    path: r.path,
+    name: r.name,
+    addedAt: r.added_at,
+    connectionId: r.connection_id,
+    snoozedAt: r.snoozed_at,
+  };
+}
+
+/** ID is keyed on (connectionId, path) so the same path on two
+ *  different hosts gets two distinct rows. Older rows seeded before
+ *  the connection model used the path alone — we keep that exact shape
+ *  for the local path so existing IDs stay stable across the migration. */
+function projectIdFromPath(absolutePath: string, connectionId: string): string {
+  const input = connectionId === 'local' ? absolutePath : `${connectionId}::${absolutePath}`;
+  return createHash('sha256').update(input).digest('hex').slice(0, 16);
+}
+
+export function addProject(
+  absolutePath: string,
+  nameOverride?: string,
+  connectionId: string = 'local',
+): Project {
+  const id = projectIdFromPath(absolutePath, connectionId);
   const name = (nameOverride?.trim() || basename(absolutePath));
   const addedAt = Date.now();
 
   getDatabase()
     .prepare(
-      `INSERT INTO projects (id, path, name, added_at) VALUES (?, ?, ?, ?)
+      `INSERT INTO projects (id, path, name, added_at, connection_id)
+       VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(id) DO NOTHING`
     )
-    .run(id, absolutePath, name, addedAt);
+    .run(id, absolutePath, name, addedAt, connectionId);
 
   const row = getDatabase()
-    .prepare('SELECT id, path, name, added_at, snoozed_at FROM projects WHERE id = ?')
-    .get(id) as {
-    id: string;
-    path: string;
-    name: string;
-    added_at: number;
-    snoozed_at: number | null;
-  };
+    .prepare(
+      'SELECT id, path, name, added_at, connection_id, snoozed_at FROM projects WHERE id = ?'
+    )
+    .get(id) as ProjectRow;
 
-  const project: Project = {
-    id: row.id,
-    path: row.path,
-    name: row.name,
-    addedAt: row.added_at,
-    snoozedAt: row.snoozed_at,
-  };
-
+  const project = rowToProject(row);
   emit({ type: 'project.added', project });
   return project;
 }
@@ -56,24 +75,12 @@ export function addProject(absolutePath: string, nameOverride?: string): Project
 export function listProjects(): Project[] {
   const rows = getDatabase()
     .prepare(
-      `SELECT id, path, name, added_at, snoozed_at
+      `SELECT id, path, name, added_at, connection_id, snoozed_at
          FROM projects
         ORDER BY display_order ASC, added_at ASC`
     )
-    .all() as {
-    id: string;
-    path: string;
-    name: string;
-    added_at: number;
-    snoozed_at: number | null;
-  }[];
-  return rows.map((r) => ({
-    id: r.id,
-    path: r.path,
-    name: r.name,
-    addedAt: r.added_at,
-    snoozedAt: r.snoozed_at,
-  }));
+    .all() as ProjectRow[];
+  return rows.map(rowToProject);
 }
 
 /** Remove a project. Sessions cascade-delete via the FK. Caller is
@@ -103,10 +110,21 @@ function expandTilde(p: string): string {
   return p;
 }
 
-export function createProject(opts: {
+export async function createProject(opts: {
   path: string;
   initGit?: boolean;
-}): Project {
+  connectionId?: string;
+}): Promise<Project> {
+  const connectionId = opts.connectionId ?? 'local';
+
+  if (connectionId !== 'local') {
+    return createRemoteProject({
+      path: opts.path,
+      connectionId,
+      initGit: opts.initGit ?? true,
+    });
+  }
+
   const target = resolve(expandTilde(opts.path.trim()));
   const parent = resolve(target, '..');
   const folder = basename(target);
@@ -132,7 +150,75 @@ export function createProject(opts: {
       console.warn('[baton] git init failed for new project:', err);
     }
   }
-  return addProject(target);
+  return addProject(target, undefined, 'local');
+}
+
+/** Remote variant: mkdir + (optionally) `git init` on the remote
+ *  before registering the row. We use the connection's BatonFs so the
+ *  same code runs against any remote, and so we benefit from the
+ *  ControlMaster connection reuse.
+ *
+ *  Done after Stage 1 (where remote create was metadata-only) — that
+ *  left a hole where the folder didn't exist on the remote and
+ *  auto-spawn's `cd <path>` failed with a misleading "claude not
+ *  found" error. */
+async function createRemoteProject(opts: {
+  path: string;
+  connectionId: string;
+  initGit: boolean;
+}): Promise<Project> {
+  // Lazy require avoids a circular import (registry → projectStore).
+  const { getFs } = await import('./fs/registry.js');
+  const fs = getFs(opts.connectionId);
+  const target = opts.path.trim();
+  if (!target) throw new Error('Path is required.');
+
+  // Resolve the user-typed path to an absolute one on the remote so
+  // future calls don't have to re-handle `~`. We use `bash -lc` for
+  // the resolve so `~` expands.
+  const resolveCmd = await fs.exec('bash', ['-lc',
+    `mkdir -p ${shellQuote(target.replace(/\/+[^/]+\/?$/, '') || '/')} && ` +
+    `cd ${shellQuote(target.replace(/\/+[^/]+\/?$/, '') || '/')} && pwd -P`,
+  ], { cwd: '/', timeoutMs: 10_000 });
+  if (resolveCmd.code !== 0) {
+    throw new Error(
+      `Could not prepare parent on remote: ${resolveCmd.stderr.trim() || `exit ${resolveCmd.code}`}`
+    );
+  }
+  const parentAbs = resolveCmd.stdout.trim();
+  const folder = target.replace(/\/+$/, '').split('/').pop() ?? '';
+  if (!folder || folder === '.' || folder === '..') {
+    throw new Error('Path must end in a folder name.');
+  }
+  const absTarget = `${parentAbs}/${folder}`;
+  if (await fs.exists(absTarget)) {
+    throw new Error(`"${absTarget}" already exists on the remote. Use "Add existing" instead.`);
+  }
+  await fs.mkdir(absTarget, { recursive: false });
+
+  if (opts.initGit) {
+    const gitRes = await fs.exec('git', ['init', '-q'], {
+      cwd: absTarget,
+      timeoutMs: 15_000,
+    });
+    if (gitRes.code !== 0) {
+      // Folder exists; git init failed (maybe git not installed). Log
+      // and continue — same as the local branch's behaviour.
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[baton] git init failed on remote for ${absTarget}:`,
+        gitRes.stderr.trim()
+      );
+    }
+  }
+  return addProject(absTarget, undefined, opts.connectionId);
+}
+
+/** POSIX single-quote with embedded-quote escape via `'\''`. Kept
+ *  private to this file — different from the bus.ts helper which
+ *  double-quotes for `sh -c` argument bodies. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 /** Update a project's display name. The on-disk path is untouched —
@@ -165,18 +251,12 @@ export function reorderProjects(orderedIds: string[]): void {
 
 export function getProject(id: string): Project | undefined {
   const row = getDatabase()
-    .prepare('SELECT id, path, name, added_at, snoozed_at FROM projects WHERE id = ?')
-    .get(id) as
-    | { id: string; path: string; name: string; added_at: number; snoozed_at: number | null }
-    | undefined;
+    .prepare(
+      'SELECT id, path, name, added_at, connection_id, snoozed_at FROM projects WHERE id = ?'
+    )
+    .get(id) as ProjectRow | undefined;
   if (!row) return undefined;
-  return {
-    id: row.id,
-    path: row.path,
-    name: row.name,
-    addedAt: row.added_at,
-    snoozedAt: row.snoozed_at,
-  };
+  return rowToProject(row);
 }
 
 /** Toggle snooze state. `snoozed=true` stamps snoozed_at = now;

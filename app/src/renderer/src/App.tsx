@@ -32,6 +32,7 @@ export function App(): JSX.Element {
   const ingestEvent = useAppStore((s) => s.ingestEvent);
   const loadProjects = useAppStore((s) => s.loadProjects);
   const loadSessions = useAppStore((s) => s.loadSessions);
+  const loadConnections = useAppStore((s) => s.loadConnections);
   const selectSession = useAppStore((s) => s.selectSession);
   const selectedSessionId = useAppStore((s) => s.selectedSessionId);
   const [meta, setMeta] = useState<{ version: string } | null>(null);
@@ -74,13 +75,17 @@ export function App(): JSX.Element {
       window.baton.call('app.meta', {}),
       window.baton.call('project.list', {}),
       window.baton.call('session.list', {}),
+      window.baton.call('connection.list', {}),
     ]).then((results) => {
-      const [m, p, s] = results;
-      if (m.status === 'fulfilled') {
+      const [m, p, s, c] = results;
+      if (m && m.status === 'fulfilled') {
         setMeta({ version: m.value.version });
       }
-      if (p.status === 'fulfilled') loadProjects(p.value.projects);
-      if (s.status === 'fulfilled') loadSessions(s.value.sessions);
+      if (p && p.status === 'fulfilled') loadProjects(p.value.projects);
+      if (s && s.status === 'fulfilled') {
+        loadSessions(s.value.sessions, s.value.startingIds);
+      }
+      if (c && c.status === 'fulfilled') loadConnections(c.value.profiles);
     });
 
     // Single subscription to the event stream (PRD F10.4).
@@ -94,7 +99,7 @@ export function App(): JSX.Element {
       offEvents();
       offSelect();
     };
-  }, [ingestEvent, loadProjects, loadSessions, selectSession]);
+  }, [ingestEvent, loadProjects, loadSessions, loadConnections, selectSession]);
 
   // Tell main which session is in focus so the notifier can suppress
   // pop-ups for the session the user is already looking at.
