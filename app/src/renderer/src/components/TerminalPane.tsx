@@ -254,10 +254,14 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     if (internal) {
       paths.push(internal);
     } else {
-      // OS-level drag (Finder, etc). Electron exposes .path on each File.
+      // OS-level drag (Finder, etc). Electron 32 removed `File.path`
+      // from the renderer; `webUtils.getPathForFile` (exposed via the
+      // preload bridge) is the only supported way to resolve a drag-
+      // dropped File to a filesystem path.
       for (let i = 0; i < e.dataTransfer.files.length; i++) {
-        const f = e.dataTransfer.files[i] as File & { path?: string };
-        if (f.path) paths.push(f.path);
+        const f = e.dataTransfer.files[i];
+        const p = window.baton.getPathForFile(f);
+        if (p) paths.push(p);
       }
     }
     if (paths.length === 0) return;

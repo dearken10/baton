@@ -6,7 +6,7 @@
  * No raw `ipcRenderer` in the renderer code.
  */
 
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import {
   Channels,
   type ControlVerb,
@@ -38,6 +38,16 @@ const api = {
     return (): void => {
       ipcRenderer.removeListener(Channels.events, listener);
     };
+  },
+
+  /** Resolve a drag-and-dropped `File` to its absolute filesystem
+   *  path. Electron 32 removed renderer-side `File.path`; the only
+   *  supported way to get the path is `webUtils.getPathForFile`
+   *  from the preload. Returns '' if the file has no on-disk path
+   *  (e.g. a drag of an in-memory blob). */
+  getPathForFile(file: File): string {
+    try { return webUtils.getPathForFile(file); }
+    catch { return ''; }
   },
 
   /** Main asks the renderer to select a session (e.g. user clicked a
