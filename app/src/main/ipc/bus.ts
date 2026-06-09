@@ -107,10 +107,30 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
+    if (req.newWorktreeBranch && req.existingWorktreePath) {
+      throw new Error(
+        'Cannot set both newWorktreeBranch and existingWorktreePath.'
+      );
+    }
+    // Default cwd is the project root; an existing worktree path
+    // overrides it (must belong to this project's worktree list — we
+    // verify against listWorktrees so the renderer can't sneak in an
+    // arbitrary directory).
+    let cwd = project.path;
+    if (req.existingWorktreePath) {
+      const wts = await listWorktrees(project.path);
+      const ok = wts.some((w) => w.path === req.existingWorktreePath);
+      if (!ok) {
+        throw new Error(
+          `Worktree not found for project ${project.name}: ${req.existingWorktreePath}`
+        );
+      }
+      cwd = req.existingWorktreePath;
+    }
     const session = await getSessionManager().spawn({
       projectId: project.id,
       backendId: req.backendId,
-      cwd: project.path,
+      cwd,
       ...(req.newWorktreeBranch
         ? { newWorktreeBranch: req.newWorktreeBranch }
         : {}),
@@ -176,6 +196,17 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     }
     const report = await readGitStatus(worktreePath);
     return report;
+  },
+  'worktree.list': async (req) => {
+    const project = getProject(req.projectId);
+    if (!project) throw new Error(`Unknown project: ${req.projectId}`);
+    const entries = await listWorktrees(project.path);
+    // Same `.git/...` filter we apply to orphan detection: skip
+    // submodule gitdirs that masquerade as worktrees.
+    const worktrees = entries
+      .filter((e) => !e.path.includes(`${path.sep}.git${path.sep}`))
+      .map((e) => ({ path: e.path, branch: e.branch }));
+    return { worktrees };
   },
   'worktree.listOrphans': async () => {
     const projects = listProjects();

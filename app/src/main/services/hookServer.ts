@@ -29,14 +29,44 @@ export class HookServer {
   private server: net.Server | null = null;
   private handler: HookHandler | null = null;
 
-  /** Path to the unix socket main listens on. */
+  /** Path to the unix socket main listens on.
+   *
+   *  Includes our pid so two baton instances (e.g. an installed build
+   *  and a dev `electron-vite dev` running out of a worktree) don't
+   *  fight over the same socket path. Without this, the later starter
+   *  would `unlink()` the earlier one's socket and steal all of its
+   *  Claude sessions' hooks, leaving the earlier instance's chips
+   *  permanently stuck at `running`. */
   sockPath(): string {
-    return path.join(app.getPath('home'), '.baton', 'hooks.sock');
+    return path.join(app.getPath('home'), '.baton', `hooks-${process.pid}.sock`);
   }
 
   /** Path of the hook-forwarder.js script on disk. */
   forwarderPath(): string {
     return path.join(app.getPath('home'), '.baton', 'hook-forwarder.js');
+  }
+
+  /** Best-effort: remove `hooks-*.sock` files whose owner process is
+   *  gone. Stops the directory from accumulating dead sockets when
+   *  baton crashes or is force-killed. Never throws — a leaked socket
+   *  is harmless; aborting startup over it would be worse. */
+  private sweepStaleSockets(dir: string): void {
+    let entries: string[];
+    try { entries = fs.readdirSync(dir); } catch { return; }
+    for (const name of entries) {
+      const m = /^hooks-(\d+)\.sock$/.exec(name);
+      if (!m) continue;
+      const pid = Number(m[1]);
+      if (pid === process.pid) continue;
+      let alive = false;
+      try {
+        // Signal 0 just tests for liveness without delivering one.
+        process.kill(pid, 0);
+        alive = true;
+      } catch { /* ESRCH — no such process */ }
+      if (alive) continue;
+      try { fs.unlinkSync(path.join(dir, name)); } catch { /* ignore */ }
+    }
   }
 
   /** Write the forwarder script and start listening. Safe to call multiple times. */
@@ -49,7 +79,12 @@ export class HookServer {
     // Write (or rewrite) the forwarder script and make it executable.
     fs.writeFileSync(this.forwarderPath(), HOOK_FORWARDER_SCRIPT, { mode: 0o755 });
 
+    this.sweepStaleSockets(dir);
+
     const sockPath = this.sockPath();
+    // Our pid is unique to this process, so any file at this path is a
+    // leftover from a prior crashed run with the same pid — safe to
+    // remove. (sweepStaleSockets handles other pids.)
     try { fs.unlinkSync(sockPath); } catch { /* no prior socket */ }
 
     this.server = net.createServer((client) => this.onClient(client));

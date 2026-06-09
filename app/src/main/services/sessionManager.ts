@@ -41,7 +41,7 @@ import {
   removeWorktree,
   renameWorktree,
 } from './worktreeManager.js';
-import { getProject } from './projectStore.js';
+import { getProject, setProjectSnoozed } from './projectStore.js';
 import { trace, shortSid } from './statusTrace.js';
 import { readTranscriptUsage } from './transcriptReader.js';
 import { runSetupScript } from './setupScript.js';
@@ -1314,6 +1314,19 @@ export class SessionManager {
             try { this.setSnoozed(event.sessionId, false); }
             catch { /* best-effort */ }
           }
+          // Same logic at the project level: if the parent project is
+          // snoozed, the user is engaging with it again, so move it back
+          // to the Active tab.
+          try {
+            const project = getProject(live.meta.projectId);
+            if (project?.snoozedAt != null) {
+              trace('AUTO_UNSNOOZE_PROJECT', {
+                sid: shortSid(event.sessionId),
+                projectId: project.id.slice(0, 8),
+              });
+              setProjectSnoozed(project.id, false);
+            }
+          } catch { /* best-effort */ }
           this.setStatus(event.sessionId, 'running', 'hook:UserPromptSubmit');
           // Refresh the intent summary right away so the left-column
           // chip reflects what the user JUST asked, not what they were

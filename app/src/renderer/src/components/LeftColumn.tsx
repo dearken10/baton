@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
+import { WorktreeTerminalDialog } from './WorktreeTerminalDialog.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
@@ -153,6 +154,8 @@ export function LeftColumn(): JSX.Element {
   const [worktreeDialogProject, setWorktreeDialogProject] =
     useState<{ id: string; name: string } | null>(null);
   const [worktreeDefault, setWorktreeDefault] = useState('');
+  const [worktreeTerminalProject, setWorktreeTerminalProject] =
+    useState<{ id: string; name: string } | null>(null);
 
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
 
@@ -201,6 +204,27 @@ export function LeftColumn(): JSX.Element {
       const { session } = await window.baton.call('session.spawn', {
         projectId,
         backendId: 'shell',
+      });
+      selectSession(session.id);
+    } catch (err) {
+      alert(`Terminal spawn failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Spawn a shell session in an existing worktree directory. */
+  async function spawnWorktreeTerminal(
+    projectId: string,
+    worktreePath: string,
+  ): Promise<void> {
+    setWorktreeTerminalProject(null);
+    setBusy(true);
+    try {
+      const { session } = await window.baton.call('session.spawn', {
+        projectId,
+        backendId: 'shell',
+        existingWorktreePath: worktreePath,
       });
       selectSession(session.id);
     } catch (err) {
@@ -452,6 +476,9 @@ export function LeftColumn(): JSX.Element {
               onToggleSessionSnooze={toggleSnoozeSession}
               onGetInfo={() => window.alert(`${p.name}\n\n${p.path}`)}
               onNewTerminal={() => void spawnTerminal(p.id)}
+              onNewWorktreeTerminal={() =>
+                setWorktreeTerminalProject({ id: p.id, name: p.name })
+              }
               onRenameProject={() => renameProjectInList(p)}
               onRemoveProject={() => void removeProjectFromList(p)}
               onToggleSnooze={() => void toggleSnoozeProject(p)}
@@ -469,6 +496,15 @@ export function LeftColumn(): JSX.Element {
         defaultBranch={worktreeDefault}
         onCancel={() => setWorktreeDialogProject(null)}
         onCreate={(branch) => void createWorktreeFromDialog(branch)}
+        busy={busy}
+      />
+      <WorktreeTerminalDialog
+        project={worktreeTerminalProject}
+        onCancel={() => setWorktreeTerminalProject(null)}
+        onChoose={(path) => {
+          const p = worktreeTerminalProject;
+          if (p) void spawnWorktreeTerminal(p.id, path);
+        }}
         busy={busy}
       />
       {renamingProject ? (
@@ -505,6 +541,7 @@ interface ProjectBlockProps {
   onToggleSessionSnooze: (s: Session) => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
+  onNewWorktreeTerminal: () => void;
   onRenameProject: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
@@ -522,7 +559,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, sessions, selectedId,
     onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete, onToggleSessionSnooze,
-    onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
+    onGetInfo, onNewTerminal, onNewWorktreeTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
     busy,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -564,6 +601,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           onSpawnInWorktree={onSpawnInWorktree}
           onGetInfo={onGetInfo}
           onNewTerminal={onNewTerminal}
+          onNewWorktreeTerminal={onNewWorktreeTerminal}
           onRename={onRenameProject}
           onRemoveProject={onRemoveProject}
           onToggleSnooze={onToggleSnooze}
@@ -592,16 +630,17 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
               :                        { glyph: '💬', cls: 'badge-session' };
             // We only want the chip to draw attention when something
             // worth noting is happening:
-            //   - shell sessions while live → no chip (they're just open)
+            //   - shell sessions → never (their "done" on restart is
+            //     just "the previous shell exited" — not interesting)
             //   - Claude sessions at `idle` → no chip (boring default state)
             //   - everything else (running / needs-input / paused / done /
             //     errored / disconnected) → chip stays so the user sees it.
-            const shellLive = s.backendId === 'shell' && !isEnded;
+            const isShell = s.backendId === 'shell';
             const isSnoozed = s.snoozedAt != null;
             // Snoozed rows behave exactly like idle ones — no chip.
             // The user has told us they don't want to be nagged about
             // this session's status until they unsnooze it.
-            const showStatusChip = !shellLive && !isSnoozed && s.status !== 'idle';
+            const showStatusChip = !isShell && !isSnoozed && s.status !== 'idle';
             // Rename is shown for ALL worktree sessions; for live ones
             // the handler will offer to stop the session first.
             const canRename = isWorktreeSession;
@@ -752,6 +791,7 @@ function SpawnMenu(props: {
   onSpawnInWorktree: () => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
+  onNewWorktreeTerminal: () => void;
   onRename: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
@@ -820,6 +860,16 @@ function SpawnMenu(props: {
             <span className="spawn-menu-title">New Terminal</span>
             <span className="spawn-menu-sub">
               Open the project folder in your system terminal app.
+            </span>
+          </button>
+          <button
+            className="spawn-menu-item"
+            role="menuitem"
+            onClick={() => { setOpen(false); props.onNewWorktreeTerminal(); }}
+          >
+            <span className="spawn-menu-title">New worktree terminal</span>
+            <span className="spawn-menu-sub">
+              Pick an existing worktree and open a shell in it.
             </span>
           </button>
           <button

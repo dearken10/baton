@@ -176,6 +176,11 @@ const SessionSpawnRequest = z.object({
    *  spawn the agent inside it. When omitted, spawn in the project
    *  root (sessions share a working tree, F2.2 default off). */
   newWorktreeBranch: z.string().optional(),
+  /** When set, spawn in this existing worktree directory (must be a
+   *  worktree of the given project). Used by "New worktree terminal"
+   *  to drop a shell into an existing branch without creating a new
+   *  one. Mutually exclusive with `newWorktreeBranch`. */
+  existingWorktreePath: z.string().optional(),
   /** When true, launch Claude with --dangerously-skip-permissions.
    *  Defaults to false; the user can flip it later from the middle
    *  column. */
@@ -465,6 +470,19 @@ const WorktreeListOrphansResponse = z.object({
   orphans: z.array(OrphanWorktree),
 });
 
+/** A worktree entry surfaced to the renderer for the "pick a worktree"
+ *  modal. Mirrors `WorktreeListEntry` in worktreeManager but with the
+ *  fields the UI actually needs. */
+const WorktreeEntry = z.object({
+  path: z.string(),
+  branch: z.string().nullable(),
+});
+const WorktreeListRequest = z.object({ projectId: ProjectId });
+const WorktreeListResponse = z.object({
+  worktrees: z.array(WorktreeEntry),
+});
+export type WorktreeEntry = z.infer<typeof WorktreeEntry>;
+
 const WorktreeRemoveOrphanRequest = z.object({
   projectId: ProjectId,
   path: z.string().min(1),
@@ -571,6 +589,7 @@ export const ControlVerbs = {
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
   'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },
   'worktree.gitStatus':    { request: WorktreeGitStatusRequest,   response: WorktreeGitStatusResponse },
+  'worktree.list':         { request: WorktreeListRequest,        response: WorktreeListResponse },
   'worktree.listOrphans':  { request: WorktreeListOrphansRequest, response: WorktreeListOrphansResponse },
   'worktree.removeOrphan': { request: WorktreeRemoveOrphanRequest, response: WorktreeRemoveOrphanResponse },
   'worktree.search':       { request: WorktreeSearchRequest,      response: WorktreeSearchResponse },

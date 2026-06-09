@@ -77,6 +77,14 @@ export function emit(initial: EventInit): void {
       seq: event.seq,
       winCount,
     });
+  } else if (event.type === 'session.refreshed') {
+    const winCount = BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length;
+    trace('EMIT_REFRESHED', {
+      sid: shortSid(event.session.id),
+      summary: (event.session.lastSummary ?? '∅').slice(0, 40).replace(/\s+/g, '_'),
+      seq: event.seq,
+      winCount,
+    });
   }
 
   for (const win of BrowserWindow.getAllWindows()) {

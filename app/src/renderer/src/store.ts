@@ -224,6 +224,14 @@ export const useAppStore = create<AppState>()(
             break;
           }
           case 'session.refreshed': {
+            const prev = s.sessions[event.session.id];
+            // eslint-disable-next-line no-console
+            console.debug(
+              `[status-trace] RENDERER_REFRESH sid=${event.session.id.slice(0, 8)} ` +
+              `prevSummary="${prev?.lastSummary ?? '∅'}" ` +
+              `incomingSummary="${event.session.lastSummary ?? '∅'}" ` +
+              `seq=${event.seq} ageMs=${Date.now() - event.ts}`
+            );
             s.sessions[event.session.id] = event.session;
             break;
           }

@@ -72,6 +72,7 @@ describe('control verb registry', () => {
         "usage.getStats",
         "worktree.fileTree",
         "worktree.gitStatus",
+        "worktree.list",
         "worktree.listOrphans",
         "worktree.readDir",
         "worktree.removeOrphan",
