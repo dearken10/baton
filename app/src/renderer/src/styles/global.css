@@ -1152,7 +1152,11 @@ button {
 .terminal-host {
   flex: 1;
   min-height: 0;
-  padding: 6px;
+  /* No right padding: the xterm-viewport's scrollbar lives at its
+     right edge, and a right gutter on `.terminal-host` would push
+     the scrollbar inward — on macOS overlay scrollbars that looks
+     like the scrollbar is half-clipped. */
+  padding: 6px 0 6px 6px;
   /* Matches xterm's theme.background, which is also `--bg`. The
      xterm viewport/screen are intentionally transparent (rules
      below), so this is what shows through behind the glyphs. */

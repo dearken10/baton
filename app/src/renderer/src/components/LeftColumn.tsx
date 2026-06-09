@@ -633,14 +633,18 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
             //   - shell sessions → never (their "done" on restart is
             //     just "the previous shell exited" — not interesting)
             //   - Claude sessions at `idle` → no chip (boring default state)
-            //   - everything else (running / needs-input / paused / done /
+            //   - `paused` is a baton-internal SIGSTOP optimisation on
+            //     idle sessions; it auto-resumes on user keystroke and
+            //     isn't a state the user should be nagged about.
+            //   - everything else (running / needs-input / done /
             //     errored / disconnected) → chip stays so the user sees it.
             const isShell = s.backendId === 'shell';
             const isSnoozed = s.snoozedAt != null;
             // Snoozed rows behave exactly like idle ones — no chip.
             // The user has told us they don't want to be nagged about
             // this session's status until they unsnooze it.
-            const showStatusChip = !isShell && !isSnoozed && s.status !== 'idle';
+            const showStatusChip =
+              !isShell && !isSnoozed && s.status !== 'idle' && s.status !== 'paused';
             // Rename is shown for ALL worktree sessions; for live ones
             // the handler will offer to stop the session first.
             const canRename = isWorktreeSession;

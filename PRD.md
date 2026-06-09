@@ -240,10 +240,13 @@ project on different branches.
   F4), time-in-current-status, **accumulated token spend**, and (if
   configured) **Claude plan 5h-window usage %**.
   **Chip suppression rules:** (a) `idle` Claude sessions show no chip
-  (boring default state); (b) `ShellBackend` sessions never show a
-  chip (their "running" is just a live login shell, their "done" on
+  (boring default state); (b) `paused` sessions show no chip (it's a
+  baton-internal SIGSTOP optimisation on idle sessions that
+  auto-resumes on the next keystroke — not a state the user should
+  be nagged about); (c) `ShellBackend` sessions never show a chip
+  (their "running" is just a live login shell, their "done" on
   restart is just "the previous shell exited" — neither is
-  interesting); (c) snoozed sessions show no chip per F2.9.
+  interesting); (d) snoozed sessions show no chip per F2.9.
 - **F3.4** Clicking a chip focuses that session in the main area. Chips
   are addressable by **stable UUID**, not by index — deep links survive
   relaunch (`baton://session/<uuid>`). *(Source: cmux #5486.)*
