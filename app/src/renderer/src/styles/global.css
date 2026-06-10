@@ -1320,6 +1320,13 @@ button {
   font-size: 12px;
   line-height: 1.5;
 }
+.file-tree-toolbar {
+  display: flex;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.file-tree-new { font-size: 11px; padding: 3px 8px; }
 .tree-row {
   display: flex;
   align-items: center;

@@ -414,6 +414,13 @@ const FileRenameRequest = z.object({
 });
 const FileRenameResponse = z.object({ newAbsPath: z.string() });
 
+/** Create a new empty file at `absPath`. Refuses to clobber an existing
+ *  file. Parent directories are created as needed (mkdir -p), so paths
+ *  like "src/new/foo.ts" relative to the worktree root work without
+ *  the caller pre-creating the folders. */
+const FileCreateRequest = z.object({ absPath: z.string().min(1) });
+const FileCreateResponse = z.object({ absPath: z.string() });
+
 const FileDeleteRequest = z.object({ absPath: z.string().min(1) });
 const FileDeleteResponse = z.object({ ok: z.literal(true) });
 
@@ -608,6 +615,7 @@ export const ControlVerbs = {
   'file.write':            { request: FileWriteRequest,           response: FileWriteResponse },
   'file.copy':             { request: FileCopyRequest,            response: FileCopyResponse },
   'file.rename':           { request: FileRenameRequest,          response: FileRenameResponse },
+  'file.create':           { request: FileCreateRequest,          response: FileCreateResponse },
   'file.delete':           { request: FileDeleteRequest,          response: FileDeleteResponse },
   'file.revealInFinder':   { request: FileRevealInFinderRequest,  response: FileRevealInFinderResponse },
 

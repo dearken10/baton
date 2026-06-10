@@ -35,7 +35,7 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   const [root, setRoot] = useState<FileTreeNodeT | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [openPaths, setOpenPaths] = useState<Set<string>>(new Set(['']));
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; absPath: string; isDir: boolean } | null>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; absPath: string; isDir: boolean; isRoot: boolean } | null>(null);
   // Bumped after a file op (rename / duplicate / delete) to re-read
   // the tree without waiting for the parent's refreshKey to tick.
   const [localNonce, setLocalNonce] = useState(0);
@@ -48,10 +48,18 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   // Rename dialog state — Electron's renderer doesn't support
   // window.prompt(), so the menu's "Rename…" routes here.
   const [renameTarget, setRenameTarget] = useState<{ absPath: string; currentName: string } | null>(null);
+  // "New file" dialog target — `parentAbsPath` is the directory the
+  // new file will be created inside. Defaults to the worktree root
+  // when triggered from the toolbar; set to a subdir when triggered
+  // from a directory's context menu.
+  const [newFileParent, setNewFileParent] = useState<string | null>(null);
   const openInEditor = useAppStore((s) => s.openFile);
   const onChanged = useCallback(() => setLocalNonce((n) => n + 1), []);
   const onRequestRename = useCallback((absPath: string, currentName: string) => {
     setRenameTarget({ absPath, currentName });
+  }, []);
+  const onRequestNewFile = useCallback((parentAbsPath: string) => {
+    setNewFileParent(parentAbsPath);
   }, []);
 
   const loadChildren = useCallback(async (relPath: string): Promise<void> => {
@@ -87,9 +95,49 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
     }
   }
 
-  function openContextMenu(e: React.MouseEvent, absPath: string, isDir: boolean): void {
+  async function submitNewFile(name: string): Promise<void> {
+    const parent = newFileParent;
+    setNewFileParent(null);
+    if (!parent) return;
+    // Allow forward-slash segments so "src/foo.ts" creates the parent
+    // dirs too — main does mkdir -p. We reject backslashes and leading
+    // slashes (would escape the worktree) and reserved segments.
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.startsWith('/') || trimmed.includes('\\') ||
+        trimmed.split('/').some((s) => s === '' || s === '.' || s === '..')) {
+      alert('Invalid file name.');
+      return;
+    }
+    const absPath = `${parent}/${trimmed}`;
+    try {
+      await window.baton.call('file.create', { absPath });
+      // Open the path that contains the new file so the user sees it.
+      const dirsToOpen = trimmed.split('/').slice(0, -1);
+      if (dirsToOpen.length > 0) {
+        const parentRel = parent === worktreePath
+          ? ''
+          : parent.slice(worktreePath.length + 1);
+        setOpenPaths((prev) => {
+          const next = new Set(prev);
+          let acc = parentRel;
+          next.add(acc);
+          for (const seg of dirsToOpen) {
+            acc = acc ? `${acc}/${seg}` : seg;
+            next.add(acc);
+          }
+          return next;
+        });
+      }
+      onChanged();
+      openInEditor(absPath, 'sticky');
+    } catch (err) {
+      alert(`Create failed: ${String(err)}`);
+    }
+  }
+
+  function openContextMenu(e: React.MouseEvent, absPath: string, isDir: boolean, isRoot: boolean): void {
     e.preventDefault();
-    setCtxMenu({ x: e.clientX, y: e.clientY, absPath, isDir });
+    setCtxMenu({ x: e.clientX, y: e.clientY, absPath, isDir, isRoot });
   }
 
   // Drop the lazy-load cache only when the worktree actually changes
@@ -144,6 +192,16 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
 
   return (
     <div className="file-tree">
+      <div className="file-tree-toolbar">
+        <button
+          type="button"
+          className="btn ghost file-tree-new"
+          onClick={() => setNewFileParent(worktreePath)}
+          title="Create a new file in the worktree root"
+        >
+          + New File
+        </button>
+      </div>
       <TreeNode
         node={root}
         depth={0}
@@ -163,9 +221,11 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
           items={buildFileMenuItems({
             absPath: ctxMenu.absPath,
             isDir: ctxMenu.isDir,
+            isRoot: ctxMenu.isRoot,
             openFile: openInEditor,
             onChanged,
             onRequestRename,
+            onRequestNewFile,
           })}
           onClose={() => setCtxMenu(null)}
         />
@@ -178,6 +238,19 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
           confirmLabel="Rename"
           onCancel={() => setRenameTarget(null)}
           onConfirm={(v) => void submitRename(v)}
+        />
+      ) : null}
+      {newFileParent ? (
+        <PromptDialog
+          title="New File"
+          label={newFileParent === worktreePath
+            ? 'File name (relative to worktree root)'
+            : `File name in ${newFileParent.split('/').pop() ?? ''}`}
+          placeholder="untitled.txt"
+          initialValue=""
+          confirmLabel="Create"
+          onCancel={() => setNewFileParent(null)}
+          onConfirm={(v) => void submitNewFile(v)}
         />
       ) : null}
     </div>
@@ -193,7 +266,7 @@ interface NodeProps {
   onToggle: (node: FileTreeNodeT) => void;
   onPreview: (path: string) => void;
   onPin: (path: string) => void;
-  onContextMenu: (e: React.MouseEvent, absPath: string, isDir: boolean) => void;
+  onContextMenu: (e: React.MouseEvent, absPath: string, isDir: boolean, isRoot: boolean) => void;
   worktreePath: string;
 }
 
@@ -210,8 +283,10 @@ function TreeNode({
     const cached = extraChildren[node.path];
     const children: FileTreeNodeT[] | undefined = cached ?? node.children;
     const isLoading = loadingPaths.has(node.path);
-    // The worktree root is `node.path === ''` — skip the menu there
-    // so users can't rename/delete the project root from inside.
+    // The worktree root is `node.path === ''`. We allow the context
+    // menu on it but the menu builder hides rename/delete/duplicate
+    // when `isRoot`, so destructive ops on the project root stay
+    // impossible from the tree.
     const isRoot = node.path === '';
     const absDir = isRoot ? worktreePath : `${worktreePath}/${node.path}`;
     return (
@@ -221,7 +296,7 @@ function TreeNode({
           className="tree-row"
           style={{ paddingLeft: 8 + indent }}
           onClick={() => onToggle(node)}
-          onContextMenu={isRoot ? undefined : (e) => onContextMenu(e, absDir, true)}
+          onContextMenu={(e) => onContextMenu(e, absDir, true, isRoot)}
         >
           <span className="tree-caret">{isOpen ? '▾' : '▸'}</span>
           <span className="tree-icon">📁</span>
@@ -265,7 +340,7 @@ function TreeNode({
       style={{ paddingLeft: 8 + indent }}
       onClick={() => onPreview(node.path)}
       onDoubleClick={() => onPin(node.path)}
-      onContextMenu={(e) => onContextMenu(e, abs, false)}
+      onContextMenu={(e) => onContextMenu(e, abs, false, false)}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_FILE_PATH, abs);

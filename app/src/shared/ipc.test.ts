@@ -33,6 +33,7 @@ describe('control verb registry', () => {
         "app.setSelectedSession",
         "editor.openIn",
         "file.copy",
+        "file.create",
         "file.delete",
         "file.read",
         "file.readBinary",

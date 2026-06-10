@@ -509,6 +509,18 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     await fsp.rename(req.absPath, newAbs);
     return { newAbsPath: newAbs };
   },
+  'file.create': async (req) => {
+    const base = path.basename(req.absPath);
+    if (!base || base === '.' || base === '..') {
+      throw new Error('Invalid name.');
+    }
+    await fsp.mkdir(path.dirname(req.absPath), { recursive: true });
+    // wx = create + exclusive: fails with EEXIST if the path is taken,
+    // so we never silently truncate an existing file.
+    const handle = await fsp.open(req.absPath, 'wx');
+    await handle.close();
+    return { absPath: req.absPath };
+  },
   'file.delete': async (req) => {
     // shell.trashItem moves to the OS trash — recoverable from Finder.
     // We deliberately do NOT use rm -rf here: the renderer asks for
