@@ -33,7 +33,7 @@ export interface ClaudeCodeSpawnOpts extends AgentSpawnOpts {
   sessionId: string;
   /** When set, spawn with `claude --resume <id>` to reload the
    *  previous conversation. */
-  resumeClaudeSessionId?: string;
+  resumeAgentSessionId?: string;
   /** When true, also pass `--dangerously-skip-permissions` so Claude
    *  auto-approves every tool use (YOLO mode). */
   skipPermissions?: boolean;
@@ -122,8 +122,8 @@ export class ClaudeCodeBackend implements AgentBackend {
     } as Record<string, string>;
 
     const args: string[] = ['--settings', settingsPath];
-    if (opts.resumeClaudeSessionId) {
-      args.push('--resume', opts.resumeClaudeSessionId);
+    if (opts.resumeAgentSessionId) {
+      args.push('--resume', opts.resumeAgentSessionId);
     }
     if (opts.skipPermissions) {
       args.push('--dangerously-skip-permissions');

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
-import { WorktreeTerminalDialog } from './WorktreeTerminalDialog.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
@@ -152,11 +151,8 @@ export function LeftColumn(): JSX.Element {
 
   const [busy, setBusy] = useState(false);
   const [worktreeDialogProject, setWorktreeDialogProject] =
-    useState<{ id: string; name: string } | null>(null);
+    useState<{ id: string; name: string; backendId: 'claude-code' | 'codex' } | null>(null);
   const [worktreeDefault, setWorktreeDefault] = useState('');
-  const [worktreeTerminalProject, setWorktreeTerminalProject] =
-    useState<{ id: string; name: string } | null>(null);
-
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
 
   async function onProjectAdded(project: Project): Promise<void> {
@@ -196,6 +192,24 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  /** Spawn a Codex session in the project root. Same xterm + hook
+   *  plumbing path Claude uses; backend writes a per-session profile
+   *  TOML and spawns `codex -p baton-<sid>`. */
+  async function spawnCodexAgent(projectId: string): Promise<void> {
+    setBusy(true);
+    try {
+      const { session } = await window.baton.call('session.spawn', {
+        projectId,
+        backendId: 'codex',
+      });
+      selectSession(session.id);
+    } catch (err) {
+      alert(`Codex spawn failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Spawn a plain shell session — same xterm + scrollback path as
    *  Claude sessions, just a login shell instead of `claude`. */
   async function spawnTerminal(projectId: string): Promise<void> {
@@ -213,27 +227,6 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
-  /** Spawn a shell session in an existing worktree directory. */
-  async function spawnWorktreeTerminal(
-    projectId: string,
-    worktreePath: string,
-  ): Promise<void> {
-    setWorktreeTerminalProject(null);
-    setBusy(true);
-    try {
-      const { session } = await window.baton.call('session.spawn', {
-        projectId,
-        backendId: 'shell',
-        existingWorktreePath: worktreePath,
-      });
-      selectSession(session.id);
-    } catch (err) {
-      alert(`Terminal spawn failed: ${String(err)}`);
-    } finally {
-      setBusy(false);
-    }
-  }
-
   /**
    * Opens the worktree dialog with a suggested branch name. The
    * actual spawn happens in createWorktreeFromDialog when the user
@@ -241,9 +234,12 @@ export function LeftColumn(): JSX.Element {
    * mounted and animate / take real input rather than being a blocking
    * window.prompt.
    */
-  function openWorktreeDialog(project: Project): void {
+  function openWorktreeDialog(
+    project: Project,
+    backendId: 'claude-code' | 'codex' = 'claude-code',
+  ): void {
     setWorktreeDefault(`wip-${randomHex(6)}`);
-    setWorktreeDialogProject({ id: project.id, name: project.name });
+    setWorktreeDialogProject({ id: project.id, name: project.name, backendId });
   }
 
   async function createWorktreeFromDialog(branch: string): Promise<void> {
@@ -253,7 +249,7 @@ export function LeftColumn(): JSX.Element {
     try {
       const { session } = await window.baton.call('session.spawn', {
         projectId: target.id,
-        backendId: 'claude-code',
+        backendId: target.backendId,
         newWorktreeBranch: branch,
       });
       selectSession(session.id);
@@ -468,17 +464,18 @@ export function LeftColumn(): JSX.Element {
               sessions={sessionsByProject[p.id] ?? []}
               selectedId={selectedId}
               onSelect={selectSession}
-              onSpawn={() => spawnAgent(p.id)}
-              onSpawnInWorktree={() => openWorktreeDialog(p)}
+              onSpawnSession={(backend) =>
+                backend === 'codex'
+                  ? void spawnCodexAgent(p.id)
+                  : void spawnAgent(p.id)
+              }
+              onSpawnNewWorktree={(backend) => openWorktreeDialog(p, backend)}
               onResume={resumeSession}
               onRename={renameSession}
               onDelete={deleteSession}
               onToggleSessionSnooze={toggleSnoozeSession}
               onGetInfo={() => window.alert(`${p.name}\n\n${p.path}`)}
               onNewTerminal={() => void spawnTerminal(p.id)}
-              onNewWorktreeTerminal={() =>
-                setWorktreeTerminalProject({ id: p.id, name: p.name })
-              }
               onRenameProject={() => renameProjectInList(p)}
               onRemoveProject={() => void removeProjectFromList(p)}
               onToggleSnooze={() => void toggleSnoozeProject(p)}
@@ -496,15 +493,6 @@ export function LeftColumn(): JSX.Element {
         defaultBranch={worktreeDefault}
         onCancel={() => setWorktreeDialogProject(null)}
         onCreate={(branch) => void createWorktreeFromDialog(branch)}
-        busy={busy}
-      />
-      <WorktreeTerminalDialog
-        project={worktreeTerminalProject}
-        onCancel={() => setWorktreeTerminalProject(null)}
-        onChoose={(path) => {
-          const p = worktreeTerminalProject;
-          if (p) void spawnWorktreeTerminal(p.id, path);
-        }}
         busy={busy}
       />
       {renamingProject ? (
@@ -533,15 +521,14 @@ interface ProjectBlockProps {
   sessions: Session[];
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onSpawn: () => void;
-  onSpawnInWorktree: () => void;
+  onSpawnSession: (backend: 'claude-code' | 'codex') => void;
+  onSpawnNewWorktree: (backend: 'claude-code' | 'codex') => void;
   onResume: (id: string) => void;
   onRename: (s: Session) => void;
   onDelete: (s: Session) => void;
   onToggleSessionSnooze: (s: Session) => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
-  onNewWorktreeTerminal: () => void;
   onRenameProject: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
@@ -558,8 +545,8 @@ const DRAG_SESSION = 'application/x-baton-session';
 function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, sessions, selectedId,
-    onSelect, onSpawn, onSpawnInWorktree, onResume, onRename, onDelete, onToggleSessionSnooze,
-    onGetInfo, onNewTerminal, onNewWorktreeTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
+    onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onToggleSessionSnooze,
+    onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
     busy,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -597,11 +584,10 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
         </span>
         <SpawnMenu
           isSnoozed={isSnoozed}
-          onSpawn={onSpawn}
-          onSpawnInWorktree={onSpawnInWorktree}
+          onSpawnSession={onSpawnSession}
+          onSpawnNewWorktree={onSpawnNewWorktree}
           onGetInfo={onGetInfo}
           onNewTerminal={onNewTerminal}
-          onNewWorktreeTerminal={onNewWorktreeTerminal}
           onRename={onRenameProject}
           onRemoveProject={onRemoveProject}
           onToggleSnooze={onToggleSnooze}
@@ -789,29 +775,40 @@ function SessionRowMenu(props: {
   );
 }
 
+type SpawnMenuView = 'main' | 'new' | 'session' | 'worktree';
+
 function SpawnMenu(props: {
   isSnoozed: boolean;
-  onSpawn: () => void;
-  onSpawnInWorktree: () => void;
+  onSpawnSession: (backend: 'claude-code' | 'codex') => void;
+  onSpawnNewWorktree: (backend: 'claude-code' | 'codex') => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
-  onNewWorktreeTerminal: () => void;
   onRename: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  // Nested view stack: main → new → session/worktree. Reset to 'main'
+  // whenever the menu closes so the next open starts at the top.
+  const [view, setView] = useState<SpawnMenuView>('main');
   const ref = useRef<HTMLDivElement | null>(null);
 
-  // Close on outside click / Escape.
+  // Close on outside click / Escape. Escape from a sub-view first
+  // pops back; from main it closes the whole menu.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+        setView('main');
+      }
     };
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key !== 'Escape') return;
+      if (view === 'main') { setOpen(false); return; }
+      if (view === 'session' || view === 'worktree') { setView('new'); return; }
+      setView('main');
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -819,13 +816,15 @@ function SpawnMenu(props: {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, view]);
+
+  const close = (): void => { setOpen(false); setView('main'); };
 
   return (
     <div className="spawn-menu" ref={ref}>
       <button
         className="spawn-icon-btn"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { setOpen((v) => !v); setView('main'); }}
         disabled={props.busy}
         aria-expanded={open}
         aria-haspopup="menu"
@@ -836,93 +835,164 @@ function SpawnMenu(props: {
       </button>
       {open && (
         <div className="spawn-menu-pop" role="menu">
-          <button
-            className="spawn-menu-item"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onSpawn(); }}
-          >
-            <span className="spawn-menu-title">New session</span>
-            <span className="spawn-menu-sub">
-              Run in the project root. Shares files with other sessions.
-            </span>
-          </button>
-          <button
-            className="spawn-menu-item"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onSpawnInWorktree(); }}
-          >
-            <span className="spawn-menu-title">New worktree</span>
-            <span className="spawn-menu-sub">
-              Fresh git worktree on a new branch. Isolated edits.
-            </span>
-          </button>
-          <button
-            className="spawn-menu-item"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onNewTerminal(); }}
-          >
-            <span className="spawn-menu-title">New Terminal</span>
-            <span className="spawn-menu-sub">
-              Open the project folder in your system terminal app.
-            </span>
-          </button>
-          <button
-            className="spawn-menu-item"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onNewWorktreeTerminal(); }}
-          >
-            <span className="spawn-menu-title">New worktree terminal</span>
-            <span className="spawn-menu-sub">
-              Pick an existing worktree and open a shell in it.
-            </span>
-          </button>
-          <button
-            className="spawn-menu-item"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onGetInfo(); }}
-          >
-            <span className="spawn-menu-title">Get Info</span>
-            <span className="spawn-menu-sub">
-              Show the project's folder path.
-            </span>
-          </button>
-          <button
-            className="spawn-menu-item"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onRename(); }}
-          >
-            <span className="spawn-menu-title">Rename…</span>
-            <span className="spawn-menu-sub">
-              Change the display name. Folder on disk isn't renamed.
-            </span>
-          </button>
-          <button
-            className="spawn-menu-item"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onToggleSnooze(); }}
-          >
-            <span className="spawn-menu-title">
-              {props.isSnoozed ? 'Unsnooze' : 'Snooze'}
-            </span>
-            <span className="spawn-menu-sub">
-              {props.isSnoozed
-                ? 'Move back to the Active list.'
-                : 'Hide from the Active list. Sessions are kept.'}
-            </span>
-          </button>
-          <button
-            className="spawn-menu-item danger"
-            role="menuitem"
-            onClick={() => { setOpen(false); props.onRemoveProject(); }}
-          >
-            <span className="spawn-menu-title">Remove project</span>
-            <span className="spawn-menu-sub">
-              Drops the project + its session rows from baton. Files
-              on disk are untouched.
-            </span>
-          </button>
+          {view === 'main' && (
+            <>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => setView('new')}
+              >
+                <span className="spawn-menu-title">New ▸</span>
+                <span className="spawn-menu-sub">
+                  Spawn a Session, Worktree, or Terminal here.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onGetInfo(); }}
+              >
+                <span className="spawn-menu-title">Get Info</span>
+                <span className="spawn-menu-sub">
+                  Show the project's folder path.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onRename(); }}
+              >
+                <span className="spawn-menu-title">Rename…</span>
+                <span className="spawn-menu-sub">
+                  Change the display name. Folder on disk isn't renamed.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onToggleSnooze(); }}
+              >
+                <span className="spawn-menu-title">
+                  {props.isSnoozed ? 'Unsnooze' : 'Snooze'}
+                </span>
+                <span className="spawn-menu-sub">
+                  {props.isSnoozed
+                    ? 'Move back to the Active list.'
+                    : 'Hide from the Active list. Sessions are kept.'}
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item danger"
+                role="menuitem"
+                onClick={() => { close(); props.onRemoveProject(); }}
+              >
+                <span className="spawn-menu-title">Remove project</span>
+                <span className="spawn-menu-sub">
+                  Drops the project + its session rows from baton. Files
+                  on disk are untouched.
+                </span>
+              </button>
+            </>
+          )}
+          {view === 'new' && (
+            <>
+              <BackRow onClick={() => setView('main')} />
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => setView('session')}
+              >
+                <span className="spawn-menu-title">Session ▸</span>
+                <span className="spawn-menu-sub">
+                  Run an agent in the project root. Shared workspace.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => setView('worktree')}
+              >
+                <span className="spawn-menu-title">Worktree ▸</span>
+                <span className="spawn-menu-sub">
+                  Fresh git worktree on a new branch. Isolated edits.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onNewTerminal(); }}
+              >
+                <span className="spawn-menu-title">Terminal</span>
+                <span className="spawn-menu-sub">
+                  A plain login shell in the project root.
+                </span>
+              </button>
+            </>
+          )}
+          {view === 'session' && (
+            <>
+              <BackRow onClick={() => setView('new')} />
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onSpawnSession('claude-code'); }}
+              >
+                <span className="spawn-menu-title">Claude Code</span>
+                <span className="spawn-menu-sub">
+                  Spawn the `claude` CLI in the project root.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onSpawnSession('codex'); }}
+              >
+                <span className="spawn-menu-title">Codex</span>
+                <span className="spawn-menu-sub">
+                  Spawn the OpenAI `codex` CLI in the project root.
+                </span>
+              </button>
+            </>
+          )}
+          {view === 'worktree' && (
+            <>
+              <BackRow onClick={() => setView('new')} />
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onSpawnNewWorktree('claude-code'); }}
+              >
+                <span className="spawn-menu-title">Claude Code</span>
+                <span className="spawn-menu-sub">
+                  New worktree + Claude session.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onSpawnNewWorktree('codex'); }}
+              >
+                <span className="spawn-menu-title">Codex</span>
+                <span className="spawn-menu-sub">
+                  New worktree + Codex session.
+                </span>
+              </button>
+            </>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function BackRow(props: { onClick: () => void }): JSX.Element {
+  return (
+    <button
+      className="spawn-menu-item back"
+      role="menuitem"
+      onClick={props.onClick}
+    >
+      <span className="spawn-menu-title">← Back</span>
+    </button>
   );
 }

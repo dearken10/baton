@@ -119,18 +119,22 @@ export function MiddleColumn(): JSX.Element {
     if (skipPermBusy) return;
     const turningOn = !s.skipPermissions;
     const isLive = s.status !== 'done' && s.status !== 'errored';
+    const agentName = s.backendId === 'codex' ? 'Codex' : 'Claude';
+    const flagName = s.backendId === 'codex'
+      ? '--dangerously-bypass-approvals-and-sandbox'
+      : '--dangerously-skip-permissions';
     const lines = turningOn
       ? [
           'Turn ON "Skip Permission" for this session?',
           '',
-          'Claude will be relaunched with --dangerously-skip-permissions,',
+          `${agentName} will be relaunched with ${flagName},`,
           'which auto-approves every tool call (file edits, shell commands,',
           'package installs, …) with no prompt.',
         ]
       : [
           'Turn OFF "Skip Permission" for this session?',
           '',
-          'Claude will be relaunched without --dangerously-skip-permissions',
+          `${agentName} will be relaunched without ${flagName}`,
           'and will ask before each tool call again.',
         ];
     if (isLive) lines.push('', 'The session will restart briefly to apply the change.');
@@ -156,7 +160,7 @@ export function MiddleColumn(): JSX.Element {
             <span className="title">
               {selectedProject?.name ?? 'project'} · {sessionLabel(selected)}
             </span>
-            {selected.backendId === 'claude-code' ? (
+            {(selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
               <button
                 type="button"
                 className={`skip-perm-chip ${selected.skipPermissions ? 'on' : 'off'}`}
@@ -164,8 +168,8 @@ export function MiddleColumn(): JSX.Element {
                 disabled={skipPermBusy}
                 title={
                   selected.skipPermissions
-                    ? '"Skip Permission" ON — Claude auto-approves every tool. Click to turn off (restarts session).'
-                    : '"Skip Permission" OFF — Claude asks before each tool. Click to turn on (restarts session).'
+                    ? '"Skip Permission" ON — the agent auto-approves every tool. Click to turn off (restarts session).'
+                    : '"Skip Permission" OFF — the agent asks before each tool. Click to turn on (restarts session).'
                 }
               >
                 {selected.skipPermissions ? '⚠️ Skip Permission ON' : '🛡️ Skip Permission OFF'}
@@ -222,7 +226,7 @@ export function MiddleColumn(): JSX.Element {
               ) : (
                 <p className="dim">
                   No conversation history was saved for this session.
-                  You can still start a new Claude here — the worktree
+                  You can still start a new agent here — the worktree
                   and branch are untouched.
                 </p>
               )}

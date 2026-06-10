@@ -31,6 +31,7 @@ import {
 import { getDatabase } from '../database/index.js';
 import type { AgentBackend, AgentHandle } from './agentBackend.js';
 import { ClaudeCodeBackend } from './claudeCodeBackend.js';
+import { CodexBackend } from './codexBackend.js';
 import { ShellBackend } from './shellBackend.js';
 import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
@@ -145,6 +146,7 @@ export class SessionManager {
   constructor() {
     this.backends = {
       'claude-code': new ClaudeCodeBackend(),
+      'codex':       new CodexBackend(),
       'shell':       new ShellBackend(),
     } as unknown as Record<AgentBackendId, AgentBackend>;
   }
@@ -198,12 +200,17 @@ export class SessionManager {
       //    .jsonl). Clear the dead id and flip back to done so the
       //    chip stops shouting "error" and we don't try resuming
       //    again on the next boot.
+      // Scoped to claude-code rows because the transcript-existence
+      // check below uses the Claude transcript path. Codex rows store
+      // their own session id and have a separate transcript layout
+      // (~/.codex/sessions/…); we leave them alone here.
       const orphans = getDatabase()
         .prepare(
           `SELECT id, claude_session_id, worktree_path
              FROM sessions
             WHERE status = 'errored'
-              AND claude_session_id IS NOT NULL`
+              AND claude_session_id IS NOT NULL
+              AND backend_id = 'claude-code'`
         )
         .all() as {
           id: string; claude_session_id: string; worktree_path: string;
@@ -294,10 +301,15 @@ export class SessionManager {
     for (const r of rows) {
       // Shell sessions have nothing to restore — just respawn a fresh
       // pty at the same cwd. Same for Claude sessions whose transcript
-      // is gone (the conversation can't be reloaded).
+      // is gone (the conversation can't be reloaded). Codex sessions
+      // fall back to a fresh spawn until we wire `codex resume` here
+      // (Phase 3): the session id is preserved on the row so we can
+      // pick it up later, but the auto-resume path always respawns.
       const shellSession = r.backend_id === 'shell';
+      const codexSession = r.backend_id === 'codex';
       const needsRespawn =
         shellSession ||
+        codexSession ||
         !r.claude_session_id ||
         !claudeTranscriptExists(r.worktree_path, r.claude_session_id);
       if (needsRespawn) {
@@ -399,8 +411,11 @@ export class SessionManager {
     /** When set, reuse this baton session row (the user clicked
      *  "Resume" on an ended row) instead of inserting a fresh one. */
     reuseSessionId?: string;
-    /** When set, spawn Claude with `--resume <id>`. */
-    resumeClaudeSessionId?: string;
+    /** When set, ask the backend to resume a prior agent session by
+     *  that backend's own session id. For Claude → `claude --resume
+     *  <id>`; for Codex → `codex resume <id>`. Backend-agnostic at
+     *  this layer; each backend interprets per its CLI. */
+    resumeAgentSessionId?: string;
     /** When set, create a new git worktree at this branch FIRST,
      *  then spawn the agent inside it. The session's `cwd` will be
      *  the new worktree path, not the project root. */
@@ -465,7 +480,7 @@ export class SessionManager {
         cwd: string;
         cols: number;
         rows: number;
-        resumeClaudeSessionId?: string;
+        resumeAgentSessionId?: string;
         skipPermissions?: boolean;
       } = {
         sessionId,
@@ -473,8 +488,8 @@ export class SessionManager {
         cols: 100,
         rows: 32,
       };
-      if (opts.resumeClaudeSessionId) {
-        spawnOpts.resumeClaudeSessionId = opts.resumeClaudeSessionId;
+      if (opts.resumeAgentSessionId) {
+        spawnOpts.resumeAgentSessionId = opts.resumeAgentSessionId;
       }
       if (skipPermissions) spawnOpts.skipPermissions = true;
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
@@ -519,7 +534,7 @@ export class SessionManager {
         tokensIn: savedTokensIn,
         tokensOut: savedTokensOut,
         lastSummary: savedSummary,
-        claudeSessionId: opts.resumeClaudeSessionId ?? null,
+        claudeSessionId: opts.resumeAgentSessionId ?? null,
         skipPermissions,
         snoozedAt: savedSnoozedAt,
       };
@@ -594,7 +609,7 @@ export class SessionManager {
         sid: shortSid(session.id),
         backend: session.backendId,
         reuse: !!opts.reuseSessionId,
-        resumeClaude: !!opts.resumeClaudeSessionId,
+        resumeClaude: !!opts.resumeAgentSessionId,
       });
       emit({ type: 'session.spawned', session });
       return session;
@@ -658,14 +673,20 @@ export class SessionManager {
     if (this.live.has(sessionId)) throw new Error(`Already live: ${sessionId}`);
     if (!row.claude_session_id) {
       throw new Error(
-        'Cannot resume — no Claude session id was captured for this session.'
+        'Cannot resume — no agent session id was captured for this session.'
       );
     }
-    if (!claudeTranscriptExists(row.worktree_path, row.claude_session_id)) {
-      // Claude only writes the transcript after the first user
-      // prompt. If the session ended before that, there's nothing
-      // to resume from — surface a clean message instead of letting
-      // claude fail and the chip go red.
+    // Pre-flight: Claude only writes its transcript after the first
+    // user prompt, so if it's missing the `--resume` call will fail.
+    // We catch that upstream of pty.spawn so the chip doesn't go red.
+    // Codex stores rollouts under a different layout
+    // (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl); we currently
+    // skip the pre-flight there and trust `codex resume` to surface
+    // its own error if the session id is no longer on disk.
+    if (
+      row.backend_id === 'claude-code' &&
+      !claudeTranscriptExists(row.worktree_path, row.claude_session_id)
+    ) {
       throw new Error(
         'Cannot resume — Claude has no transcript for this session ' +
         '(it likely ended before any user message was sent). ' +
@@ -677,7 +698,7 @@ export class SessionManager {
       backendId: row.backend_id as AgentBackendId,
       cwd: row.worktree_path,
       reuseSessionId: row.id,
-      resumeClaudeSessionId: row.claude_session_id,
+      resumeAgentSessionId: row.claude_session_id,
       skipPermissions: row.skip_permissions === 1,
     });
   }
@@ -773,7 +794,7 @@ export class SessionManager {
       reuseSessionId: row.id,
       skipPermissions: next,
       ...(useResume && row.claude_session_id
-        ? { resumeClaudeSessionId: row.claude_session_id }
+        ? { resumeAgentSessionId: row.claude_session_id }
         : {}),
     });
   }
