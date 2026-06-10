@@ -35,6 +35,7 @@ import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
 import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
+import { getCodexUsage } from '../services/codexUsageApi.js';
 import { getDatabase } from '../database/index.js';
 
 type Handler<V extends ControlVerb> = (
@@ -104,6 +105,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
 
   'session.list': () => ({ sessions: getSessionManager().listAll() }),
   'usage.getStats': async () => getUsage(),
+  'usage.getCodexStats': () => getCodexUsage(),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);

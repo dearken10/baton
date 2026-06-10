@@ -576,7 +576,8 @@ export const ControlVerbs = {
   'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
   'session.list':   { request: Empty, response: SessionListResponse },
-  'usage.getStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
+  'usage.getStats':      { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
+  'usage.getCodexStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },

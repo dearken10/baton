@@ -21,6 +21,7 @@ import * as fs from 'node:fs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { trace, shortSid } from './statusTrace.js';
+import { readRecentCodexTurn } from './codexTranscriptReader.js';
 
 const execFileP = promisify(execFile);
 
@@ -129,6 +130,11 @@ async function callHaiku(sessionId: string, prompt: string): Promise<string | nu
 export interface SummarizeArgs {
   sessionId: string;
   transcriptPath: string;
+  /** Which backend's transcript format the file is in. We dispatch to
+   *  the right reader: Claude's is `~/.claude/projects/<slug>/<id>.jsonl`
+   *  with `message.role` lines; Codex's is `~/.codex/sessions/…` with
+   *  `response_item` lines. */
+  backendId: 'claude-code' | 'codex';
   /** Skip the per-session throttle. Used by user-initiated triggers
    *  (UserPromptSubmit) where we want the chip to update the moment
    *  the user hits enter, not 90 s later. Doesn't update the throttle
@@ -167,7 +173,9 @@ export async function summarizeSession(
     lastRunBySession.set(args.sessionId, now);
   }
 
-  const turn = readRecentTurn(args.transcriptPath);
+  const turn = args.backendId === 'codex'
+    ? readRecentCodexTurn(args.transcriptPath, CONTEXT_CHARS)
+    : readRecentTurn(args.transcriptPath);
   if (!turn) {
     let exists = false;
     let size = -1;

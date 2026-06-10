@@ -14,7 +14,8 @@ export function Titlebar({ version }: Props): JSX.Element {
       <div className="brand">baton</div>
       <div className="meta">v{version}</div>
       <div className="spacer" />
-      <UsageBars />
+      <UsageBars source="claude" />
+      <UsageBars source="codex" />
       <ThemeToggle />
     </header>
   );

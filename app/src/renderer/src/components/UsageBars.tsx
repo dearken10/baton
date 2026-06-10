@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ResponseOf } from '@shared/ipc.js';
+import type { ControlVerb, ResponseOf } from '@shared/ipc.js';
 
 /**
  * Plan-usage chip + popup, modeled on Nimbalyst. The chip is a small
@@ -7,19 +7,58 @@ import type { ResponseOf } from '@shared/ipc.js';
  * binding constraint at a glance). Click → popup with both windows,
  * each showing % + bar + a live "Resets in Xh Ym" countdown.
  *
- * Data is the real Anthropic OAuth-usage API response, fetched
- * server-side. No more local approximation.
+ * Data sources:
+ *   - source="claude" → Anthropic OAuth-usage API (via main process)
+ *   - source="codex"  → rate_limits embedded in Codex rollout JSONL
+ *
+ * Both come back in the same shape, so the UI is identical; the only
+ * differences are the verb to call, the popup title, and the support
+ * link in the footer.
  */
 
 type Stats = ResponseOf<'usage.getStats'>;
 type Win = Stats['fiveH'];
 
-/** Poll the API at most once per minute from the renderer — the main
- *  process caches at 5 minutes anyway, so this is mostly chosen so the
- *  "Resets in X" label stays approximately fresh. */
+interface Source {
+  /** IPC verb that returns a UsageGetStatsResponse. */
+  verb: Extract<ControlVerb, `usage.${string}`>;
+  /** Title shown in the popup. */
+  title: string;
+  /** Link in the popup footer. */
+  statusUrl: string;
+  /** When true, render nothing if the source has no data yet. Used
+   *  so a user without a Codex setup doesn't see an empty chip. */
+  hideWhenEmpty: boolean;
+}
+
+const SOURCES: Record<'claude' | 'codex', Source> = {
+  claude: {
+    verb: 'usage.getStats',
+    title: 'Claude Usage',
+    statusUrl: 'https://status.anthropic.com',
+    hideWhenEmpty: false,
+  },
+  codex: {
+    verb: 'usage.getCodexStats',
+    title: 'Codex Usage',
+    statusUrl: 'https://status.openai.com',
+    hideWhenEmpty: true,
+  },
+};
+
+/** Poll the API at most once per minute from the renderer — main
+ *  caches its result so this is mostly chosen so the "Resets in X"
+ *  label stays approximately fresh. */
 const POLL_MS = 60_000;
 
-export function UsageBars(): JSX.Element {
+interface Props {
+  /** Which backend to show usage for. Defaults to Claude for backward
+   *  compatibility with the original single-indicator call site. */
+  source?: 'claude' | 'codex';
+}
+
+export function UsageBars({ source = 'claude' }: Props = {}): JSX.Element | null {
+  const cfg = SOURCES[source];
   const [stats, setStats] = useState<Stats | null>(null);
   const [open, setOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -28,11 +67,11 @@ export function UsageBars(): JSX.Element {
   const refresh = useCallback(async (): Promise<void> => {
     setRefreshing(true);
     try {
-      const s = await window.baton.call('usage.getStats', {});
+      const s = await window.baton.call(cfg.verb, {});
       setStats(s);
     } catch { /* leave previous reading */ }
     finally { setRefreshing(false); }
-  }, []);
+  }, [cfg.verb]);
 
   useEffect(() => {
     void refresh();
@@ -56,6 +95,7 @@ export function UsageBars(): JSX.Element {
   }, [open]);
 
   if (!stats) {
+    if (cfg.hideWhenEmpty) return null;
     return <div className="usage-wrapper usage-loading">…</div>;
   }
 
@@ -70,21 +110,30 @@ export function UsageBars(): JSX.Element {
     : chipPct >= 70 ? 'warn'
     : 'ok';
 
+  // Codex: when both windows are zero AND there's an error (e.g. "no
+  // rate_limits recorded yet"), the indicator carries no signal — hide
+  // it instead of showing an empty ring next to the Claude chip.
+  if (cfg.hideWhenEmpty && stats.error && fiveHPct === 0 && sevenDPct === 0) {
+    return null;
+  }
+
   return (
-    <div className="usage-wrapper" ref={ref}>
+    <div className={`usage-wrapper usage-source-${source}`} ref={ref}>
       <button
         type="button"
         className={`usage-chip usage-${tone}`}
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={stats.error ?? `${chipPct.toFixed(0)}% of plan used — click for detail`}
+        title={stats.error ?? `${cfg.title}: ${chipPct.toFixed(0)}% of plan used — click for detail`}
       >
         <CircleProgress pct={chipPct} tone={tone} error={!!stats.error} />
       </button>
       {open ? (
         <UsagePopup
           stats={stats}
+          title={cfg.title}
+          statusUrl={cfg.statusUrl}
           refreshing={refreshing}
           onRefresh={() => void refresh()}
         />
@@ -127,11 +176,13 @@ function CircleProgress(
 
 interface PopupProps {
   stats: Stats;
+  title: string;
+  statusUrl: string;
   refreshing: boolean;
   onRefresh: () => void;
 }
 
-function UsagePopup({ stats, refreshing, onRefresh }: PopupProps): JSX.Element {
+function UsagePopup({ stats, title, statusUrl, refreshing, onRefresh }: PopupProps): JSX.Element {
   // Recompute "Resets in" every 30s so the labels don't go stale
   // while the popup is open.
   const [now, setNow] = useState(() => Date.now());
@@ -141,9 +192,9 @@ function UsagePopup({ stats, refreshing, onRefresh }: PopupProps): JSX.Element {
   }, []);
 
   return (
-    <div className="usage-popup" role="dialog" aria-label="Claude usage">
+    <div className="usage-popup" role="dialog" aria-label={title}>
       <div className="usage-popup-head">
-        <span className="usage-popup-title">Claude Usage</span>
+        <span className="usage-popup-title">{title}</span>
         <button
           type="button"
           className="usage-popup-refresh"
@@ -185,7 +236,7 @@ function UsagePopup({ stats, refreshing, onRefresh }: PopupProps): JSX.Element {
 
       <div className="usage-popup-foot">
         <span className="dim">Updated {fmtRelative(now - stats.lastUpdated)}</span>
-        <a href="https://status.anthropic.com" target="_blank" rel="noopener noreferrer">
+        <a href={statusUrl} target="_blank" rel="noopener noreferrer">
           Status
         </a>
       </div>

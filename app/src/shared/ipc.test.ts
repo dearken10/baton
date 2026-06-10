@@ -69,6 +69,7 @@ describe('control verb registry', () => {
         "session.toggleYolo",
         "shell.openPath",
         "shell.openTerminal",
+        "usage.getCodexStats",
         "usage.getStats",
         "worktree.fileTree",
         "worktree.gitStatus",

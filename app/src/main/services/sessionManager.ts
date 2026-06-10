@@ -47,6 +47,10 @@ import { trace, shortSid } from './statusTrace.js';
 import { readTranscriptUsage } from './transcriptReader.js';
 import { runSetupScript } from './setupScript.js';
 import { summarizeSession, summarizeTerminal } from './intentSummarizer.js';
+import {
+  codexTranscriptExists,
+  findCodexTranscript,
+} from './codexTranscriptReader.js';
 
 interface LiveSession {
   meta: Session;
@@ -200,23 +204,32 @@ export class SessionManager {
       //    .jsonl). Clear the dead id and flip back to done so the
       //    chip stops shouting "error" and we don't try resuming
       //    again on the next boot.
-      // Scoped to claude-code rows because the transcript-existence
-      // check below uses the Claude transcript path. Codex rows store
-      // their own session id and have a separate transcript layout
-      // (~/.codex/sessions/…); we leave them alone here.
+      // Errored agent rows whose transcript is gone on disk — left
+      // over from a failed auto-resume (typically a worktree session
+      // that was never used before being closed, so the agent never
+      // wrote a transcript). Clear the dead id and flip back to done
+      // so the chip stops shouting "error" and we don't try resuming
+      // again on the next boot. Per-backend transcript layout:
+      //   claude-code → ~/.claude/projects/<slug>/<id>.jsonl
+      //   codex       → ~/.codex/sessions/YYYY/MM/DD/rollout-*-<id>.jsonl
       const orphans = getDatabase()
         .prepare(
-          `SELECT id, claude_session_id, worktree_path
+          `SELECT id, claude_session_id, worktree_path, backend_id
              FROM sessions
             WHERE status = 'errored'
               AND claude_session_id IS NOT NULL
-              AND backend_id = 'claude-code'`
+              AND backend_id IN ('claude-code', 'codex')`
         )
         .all() as {
-          id: string; claude_session_id: string; worktree_path: string;
+          id: string;
+          claude_session_id: string;
+          worktree_path: string;
+          backend_id: string;
         }[];
       const orphanIds = orphans
-        .filter((o) => !claudeTranscriptExists(o.worktree_path, o.claude_session_id))
+        .filter((o) => o.backend_id === 'codex'
+          ? !codexTranscriptExists(o.claude_session_id)
+          : !claudeTranscriptExists(o.worktree_path, o.claude_session_id))
         .map((o) => o.id);
       if (orphanIds.length > 0) {
         const ph = orphanIds.map(() => '?').join(',');
@@ -300,18 +313,20 @@ export class SessionManager {
 
     for (const r of rows) {
       // Shell sessions have nothing to restore — just respawn a fresh
-      // pty at the same cwd. Same for Claude sessions whose transcript
-      // is gone (the conversation can't be reloaded). Codex sessions
-      // fall back to a fresh spawn until we wire `codex resume` here
-      // (Phase 3): the session id is preserved on the row so we can
-      // pick it up later, but the auto-resume path always respawns.
+      // pty at the same cwd. Agent sessions try to resume if their
+      // transcript still exists on disk (Claude under
+      // ~/.claude/projects, Codex under ~/.codex/sessions); otherwise
+      // fall back to a fresh respawn at the same cwd.
       const shellSession = r.backend_id === 'shell';
-      const codexSession = r.backend_id === 'codex';
-      const needsRespawn =
-        shellSession ||
-        codexSession ||
-        !r.claude_session_id ||
-        !claudeTranscriptExists(r.worktree_path, r.claude_session_id);
+      let hasTranscript = false;
+      if (r.claude_session_id) {
+        if (r.backend_id === 'claude-code') {
+          hasTranscript = claudeTranscriptExists(r.worktree_path, r.claude_session_id);
+        } else if (r.backend_id === 'codex') {
+          hasTranscript = codexTranscriptExists(r.claude_session_id);
+        }
+      }
+      const needsRespawn = shellSession || !r.claude_session_id || !hasTranscript;
       if (needsRespawn) {
         try {
           await this.respawn(r.id);
@@ -676,19 +691,19 @@ export class SessionManager {
         'Cannot resume — no agent session id was captured for this session.'
       );
     }
-    // Pre-flight: Claude only writes its transcript after the first
-    // user prompt, so if it's missing the `--resume` call will fail.
-    // We catch that upstream of pty.spawn so the chip doesn't go red.
-    // Codex stores rollouts under a different layout
-    // (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl); we currently
-    // skip the pre-flight there and trust `codex resume` to surface
-    // its own error if the session id is no longer on disk.
-    if (
-      row.backend_id === 'claude-code' &&
-      !claudeTranscriptExists(row.worktree_path, row.claude_session_id)
-    ) {
+    // Pre-flight: the agent only writes its transcript after the
+    // first user prompt, so if it's missing the `--resume` (Claude)
+    // / `resume <id>` (Codex) call will fail. Catch upstream of
+    // pty.spawn so the chip doesn't go red.
+    const transcriptOk = row.backend_id === 'codex'
+      ? codexTranscriptExists(row.claude_session_id)
+      : row.backend_id === 'claude-code'
+        ? claudeTranscriptExists(row.worktree_path, row.claude_session_id)
+        : true; // shells / unknown — let the spawn path decide.
+    if (!transcriptOk) {
+      const label = row.backend_id === 'codex' ? 'Codex' : 'Claude';
       throw new Error(
-        'Cannot resume — Claude has no transcript for this session ' +
+        `Cannot resume — ${label} has no transcript for this session ` +
         '(it likely ended before any user message was sent). ' +
         'Start a new session instead.'
       );
@@ -1008,6 +1023,16 @@ export class SessionManager {
    */
   private updateTokenUsage(sessionId: string): void {
     const live = this.live.get(sessionId);
+    // Token totals are sourced from Claude's per-turn usage object;
+    // Codex's rollout doesn't include a comparable field at the line
+    // level, so we skip it for Codex sessions. The chip will show 0
+    // tokens — acceptable until we add a Codex usage source.
+    const backendId = live?.meta.backendId
+      ?? (getDatabase()
+            .prepare('SELECT backend_id FROM sessions WHERE id = ?')
+            .get(sessionId) as { backend_id: string } | undefined)
+              ?.backend_id;
+    if (backendId !== 'claude-code') return;
     const claudeSid = live?.meta.claudeSessionId
       ?? (getDatabase()
             .prepare('SELECT claude_session_id FROM sessions WHERE id = ?')
@@ -1078,40 +1103,60 @@ export class SessionManager {
 
   private async updateIntentSummary(sessionId: string, opts?: { force?: boolean }): Promise<void> {
     const live = this.live.get(sessionId);
-    const claudeSid = live?.meta.claudeSessionId
-      ?? (getDatabase()
-            .prepare('SELECT claude_session_id FROM sessions WHERE id = ?')
-            .get(sessionId) as { claude_session_id: string | null } | undefined)
-              ?.claude_session_id;
+    const dbRow = getDatabase()
+      .prepare(
+        'SELECT claude_session_id, worktree_path, last_summary, backend_id ' +
+        'FROM sessions WHERE id = ?'
+      )
+      .get(sessionId) as
+      | {
+          claude_session_id: string | null;
+          worktree_path: string;
+          last_summary: string | null;
+          backend_id: string;
+        }
+      | undefined;
+    const agentSid = live?.meta.claudeSessionId ?? dbRow?.claude_session_id;
+    const backendId =
+      live?.meta.backendId ?? (dbRow?.backend_id as AgentBackendId | undefined);
     trace('SUMM_START', {
       sid: shortSid(sessionId),
       force: !!opts?.force,
       hasLive: !!live,
-      claudeSid: claudeSid ? claudeSid.slice(0, 8) : '∅',
+      claudeSid: agentSid ? agentSid.slice(0, 8) : '∅',
     });
-    if (!claudeSid) {
+    if (!agentSid) {
       trace('SUMM_SKIP_NO_CLAUDESID', { sid: shortSid(sessionId) });
       return;
     }
-    const cwd = live?.meta.worktreePath
-      ?? (getDatabase()
-            .prepare('SELECT worktree_path FROM sessions WHERE id = ?')
-            .get(sessionId) as { worktree_path: string } | undefined)
-              ?.worktree_path;
+    if (backendId !== 'claude-code' && backendId !== 'codex') {
+      // Shells and unknown backends don't have a transcript-style
+      // summariser — they go through updateTerminalSummary instead.
+      trace('SUMM_SKIP_BACKEND', { sid: shortSid(sessionId), backendId: backendId ?? '∅' });
+      return;
+    }
+    const cwd = live?.meta.worktreePath ?? dbRow?.worktree_path;
     if (!cwd) {
       trace('SUMM_SKIP_NO_CWD', { sid: shortSid(sessionId) });
       return;
     }
 
-    const transcriptPath = claudeTranscriptPath(cwd, claudeSid);
-    const previousSummary = live?.meta.lastSummary
-      ?? ((getDatabase()
-            .prepare('SELECT last_summary FROM sessions WHERE id = ?')
-            .get(sessionId) as { last_summary: string | null } | undefined)
-              ?.last_summary
-          ?? null);
+    // Claude's transcript path is deterministic from the cwd; Codex
+    // stores rollouts by date so we have to scan.
+    const transcriptPath = backendId === 'codex'
+      ? findCodexTranscript(agentSid)
+      : claudeTranscriptPath(cwd, agentSid);
+    if (!transcriptPath) {
+      trace('SUMM_SKIP_NO_TRANSCRIPT', {
+        sid: shortSid(sessionId),
+        backendId,
+      });
+      return;
+    }
+    const previousSummary = live?.meta.lastSummary ?? dbRow?.last_summary ?? null;
     const summary = await summarizeSession({
       sessionId,
+      backendId,
       transcriptPath,
       previousSummary,
       ...(opts?.force ? { force: true } : {}),
