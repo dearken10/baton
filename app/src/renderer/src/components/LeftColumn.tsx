@@ -918,7 +918,7 @@ function SpawnMenu(props: {
                 role="menuitem"
                 onClick={() => setView('new')}
               >
-                <span className="spawn-menu-title">New ▸</span>
+                <span className="spawn-menu-title">New Session ▸</span>
                 <span className="spawn-menu-sub">
                   Spawn a Session, Worktree, or Terminal here.
                 </span>
