@@ -37,6 +37,7 @@ import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
 import { readCurrentBranch } from './gitReader.js';
+import { startWatch, stopWatch, stopAllWatches } from './gitWatcher.js';
 import {
   createWorktree,
   removeWorktree,
@@ -757,6 +758,14 @@ export class SessionManager {
         resumeClaude: !!opts.resumeAgentSessionId,
       });
       emit({ type: 'session.spawned', session });
+
+      // Event-driven git refresh: watch the worktree for local sessions
+      // so the renderer's Files/Git panels update on real change instead
+      // of polling. Remote sessions have no local FS to watch.
+      if (isLocalSessionProject(session.projectId) && session.worktreePath) {
+        startWatch(session.id, session.worktreePath);
+      }
+
       return session;
     });
   }
@@ -944,16 +953,26 @@ export class SessionManager {
         row.project_id, row.worktree_path, row.claude_session_id,
       ));
 
-    return this.spawn({
-      projectId: row.project_id,
-      backendId: row.backend_id as AgentBackendId,
-      cwd: row.worktree_path,
-      reuseSessionId: row.id,
-      skipPermissions: next,
-      ...(useResume && row.claude_session_id
-        ? { resumeAgentSessionId: row.claude_session_id }
-        : {}),
-    });
+    try {
+      return await this.spawn({
+        projectId: row.project_id,
+        backendId: row.backend_id as AgentBackendId,
+        cwd: row.worktree_path,
+        reuseSessionId: row.id,
+        skipPermissions: next,
+        ...(useResume && row.claude_session_id
+          ? { resumeAgentSessionId: row.claude_session_id }
+          : {}),
+      });
+    } catch (err) {
+      // The old pty was killed (intentional) but the replacement spawn
+      // failed — the session is no longer live. Clear the intentional-kill
+      // marker (the exit may not have consumed it) and release the watcher
+      // so it doesn't leak until app quit.
+      this.intentionalKills.delete(sessionId);
+      stopWatch(sessionId);
+      throw err;
+    }
   }
 
   async kill(sessionId: string): Promise<void> {
@@ -1105,6 +1124,8 @@ export class SessionManager {
         }
       }
 
+      // Stop watching before we drop the row / remove the worktree.
+      stopWatch(sessionId);
       // Drop the row and tell the renderer to forget it.
       getDatabase().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
       // Best-effort: clean up the per-session scrollback file (F8.8).
@@ -1471,6 +1492,11 @@ export class SessionManager {
     emit({ type: 'session.exited', sessionId, exitCode });
 
     this.live.delete(sessionId);
+    // Stop watching the worktree — the session is no longer live. The
+    // Git/Files panels for a done/errored session refresh on demand
+    // (on-select + manual). Intentional kills (above) keep the watch so
+    // the imminent respawn reuses it without a flicker.
+    stopWatch(sessionId);
   }
 
   /**
@@ -1611,6 +1637,7 @@ export class SessionManager {
       clearInterval(this.idleSweeperHandle);
       this.idleSweeperHandle = null;
     }
+    stopAllWatches();
     for (const { handle } of this.live.values()) {
       try {
         handle.kill('SIGTERM');
