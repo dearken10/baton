@@ -1,14 +1,16 @@
 /**
  * Worktree readers — file tree + git status for the right column.
  *
- * Local path (Fs.isLocal): `isomorphic-git`'s `statusMatrix` for git
- * status and `fs.readdir` for the tree. Same code as before the Stage 2
- * refactor — no subprocess on the steady-state polling path.
+ * Git status (both local and remote) shells `git status --porcelain=v2
+ * --branch -z` and parses the result via the shared parsePorcelainV2.
+ * ahead/behind comes from the branch.ab line in the porcelain v2 header.
+ * Native git uses the index stat-cache and prunes .gitignore'd dirs, so
+ * it's bounded and fast — unlike the old isomorphic-git statusMatrix,
+ * which walked the whole tree into the heap (see
+ * claudedocs/perf-cpu-ram-investigation.md).
  *
- * Remote path: SSH via the BatonFs. The tree walk uses Fs.readdir;
- * git status shells `git -C <dir> status --porcelain=v2 --branch -z`
- * and parses the result. ahead/behind comes from the branch.ab line in
- * the porcelain v2 header.
+ * The file tree (Fs.readdir) is independent of git and works with or
+ * without git present.
  *
  * Per PRD F7.6, the file tree is intentionally bounded — depth and
  * fanout caps stop runaway scans on monorepo trees.
@@ -16,12 +18,14 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import * as git from 'isomorphic-git';
 import { readCurrentBranch } from './gitReader.js';
+import { getFs } from './fs/registry.js';
+import { trace } from './statusTrace.js';
 import type { BatonFs } from './fs/types.js';
 
-/** Directories we always skip — large, derived, or noisy. */
-const SKIP_DIRS = new Set([
+/** Directories we always skip — large, derived, or noisy. Shared with
+ *  the git watcher so the watch set matches the tree walk. */
+export const SKIP_DIRS = new Set([
   '.git',
   'node_modules',
   '.baton',
@@ -165,102 +169,74 @@ export async function readGitStatus(batonFs: BatonFs, dir: string): Promise<GitS
   return readGitStatusRemote(batonFs, dir);
 }
 
+const EMPTY_STATUS: GitStatusReport = {
+  branch: null, ahead: 0, behind: 0, files: [], dirty: false,
+};
+
 /**
- * Local path: isomorphic-git's statusMatrix. This is the original
- * implementation — kept for parity / no-regression on local projects.
+ * Local path: native `git status --porcelain=v2 --branch -z` via a
+ * subprocess — the same command + parser the remote path uses.
+ *
+ * Why native git instead of isomorphic-git's statusMatrix: statusMatrix
+ * walks the entire working tree in JS and inflates every blob into the
+ * V8 heap. With overlapping refreshes that drove the main process to a
+ * 15GB heap and a 100%-CPU GC death-spiral (see
+ * claudedocs/perf-cpu-ram-investigation.md). Native git uses the index
+ * stat-cache and prunes .gitignore'd dirs (node_modules) without ever
+ * reading them — bounded memory, near-instant, and it's the source of
+ * truth the user's own `git status` reports.
+ *
+ * git is a hard dependency of this tool (it drives coding agents). If
+ * git is absent or the dir is not a repo we return empty status — the
+ * file tree (plain readdir) still works, change-tracking is just silent,
+ * mirroring how an IDE treats a non-git folder.
  */
 async function readGitStatusLocal(dir: string): Promise<GitStatusReport> {
-  const empty: GitStatusReport = {
-    branch: null, ahead: 0, behind: 0, files: [], dirty: false,
-  };
   try {
-    if (!fs.existsSync(path.join(dir, '.git'))) return empty;
+    if (!fs.existsSync(path.join(dir, '.git'))) return EMPTY_STATUS;
   } catch {
-    return empty;
+    return EMPTY_STATUS;
   }
 
-  // Note: readCurrentBranch needs an Fs param now; we build a
-  // pseudo-LocalFs reference by importing the singleton.
-  const branch = await readCurrentBranchLocal(dir);
-
-  let matrix: Array<[string, number, number, number]> = [];
-  try {
-    matrix = (await git.statusMatrix({ fs, dir })) as Array<
-      [string, number, number, number]
-    >;
-  } catch {
-    return { ...empty, branch };
-  }
-
-  const files: GitStatusFile[] = [];
-  for (const [filepath, head, workdir, stage] of matrix) {
-    if (head === 1 && workdir === 1 && stage === 1) continue;
-    let state: GitStatusFile['state'];
-    if (head === 0 && workdir === 2 && stage === 0) state = 'untracked';
-    else if (workdir === 0 && head === 1) state = 'deleted';
-    else if (stage === 2 || stage === 3) state = 'staged';
-    else state = 'modified';
-    files.push({ path: filepath, state });
-  }
-
-  let ahead = 0;
-  let behind = 0;
-  try {
-    if (branch) {
-      const cfg = await git.getConfig({ fs, dir, path: `branch.${branch}.remote` });
-      const remoteBranch = await git.getConfig({
-        fs, dir, path: `branch.${branch}.merge`,
-      });
-      if (cfg && remoteBranch) {
-        const remoteName = String(cfg);
-        const remoteRefShort = String(remoteBranch).replace('refs/heads/', '');
-        const local = await git.resolveRef({ fs, dir, ref: branch });
-        const remote = await git.resolveRef({
-          fs, dir, ref: `refs/remotes/${remoteName}/${remoteRefShort}`,
-        }).catch(() => null);
-        if (remote) {
-          ahead = await countAhead(dir, local, remote, 50);
-          behind = await countAhead(dir, remote, local, 50);
-        }
-      }
+  const res = await getFs('local').exec(
+    'git', ['status', '--porcelain=v2', '--branch', '-z'],
+    { cwd: dir, timeoutMs: 15_000 }
+  );
+  // ENOENT (git not installed) surfaces as code !== 0 with empty stdout.
+  // Distinguish a missing binary from a genuine git error for diagnostics.
+  if (res.code !== 0) {
+    if (/ENOENT|not found|command not found/i.test(res.stderr)) {
+      trace('GIT_ABSENT', { dir });
     }
-  } catch {
-    // best-effort
+    return EMPTY_STATUS;
   }
-
-  return { branch, ahead, behind, files, dirty: files.length > 0 };
-}
-
-async function readCurrentBranchLocal(dir: string): Promise<string | null> {
-  try {
-    if (!fs.existsSync(path.join(dir, '.git'))) return null;
-    const b = await git.currentBranch({ fs, dir, fullname: false });
-    return b ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function countAhead(
-  dir: string, from: string, until: string, cap: number
-): Promise<number> {
-  try {
-    const log = await git.log({ fs, dir, ref: from, depth: cap });
-    let n = 0;
-    for (const commit of log) {
-      if (commit.oid === until) break;
-      n++;
-    }
-    return n;
-  } catch {
-    return 0;
-  }
+  return parsePorcelainV2(res.stdout);
 }
 
 /**
- * Remote path: shell `git status --porcelain=v2 --branch -z`. The v2
- * porcelain format is stable, machine-readable, and includes the
- * branch + ahead/behind line in the header.
+ * Remote path: shell `git status --porcelain=v2 --branch -z` over SSH.
+ * Same command + parser as local now.
+ */
+async function readGitStatusRemote(batonFs: BatonFs, dir: string): Promise<GitStatusReport> {
+  const branchProbe = await readCurrentBranch(batonFs, dir);
+  if (branchProbe == null) {
+    // not a git repo, or detached — but detached we still want status
+    const isRepo = await batonFs.exists(`${dir.replace(/\/$/, '')}/.git`);
+    if (!isRepo) return EMPTY_STATUS;
+  }
+  const res = await batonFs.exec(
+    'git', ['status', '--porcelain=v2', '--branch', '-z'],
+    { cwd: dir, timeoutMs: 15_000 }
+  );
+  if (res.code !== 0) return { ...EMPTY_STATUS, branch: branchProbe };
+  const report = parsePorcelainV2(res.stdout);
+  // Fall back to the branch probe if the porcelain header didn't name one.
+  return report.branch ? report : { ...report, branch: branchProbe };
+}
+
+/**
+ * Parse `git status --porcelain=v2 --branch -z` output into a
+ * GitStatusReport. Shared by the local and remote paths.
  *
  * Format (NUL-terminated records):
  *   # branch.oid <oid>|(initial)
@@ -272,30 +248,15 @@ async function countAhead(
  *   u <XY> ... <path>\0             (conflicted)
  *   ? <path>\0                      (untracked)
  */
-async function readGitStatusRemote(batonFs: BatonFs, dir: string): Promise<GitStatusReport> {
-  const empty: GitStatusReport = {
-    branch: null, ahead: 0, behind: 0, files: [], dirty: false,
-  };
-  const branchProbe = await readCurrentBranch(batonFs, dir);
-  if (branchProbe == null) {
-    // not a git repo, or detached — but detached we still want status
-    const isRepo = await batonFs.exists(`${dir.replace(/\/$/, '')}/.git`);
-    if (!isRepo) return empty;
-  }
-  const res = await batonFs.exec(
-    'git', ['status', '--porcelain=v2', '--branch', '-z'],
-    { cwd: dir, timeoutMs: 15_000 }
-  );
-  if (res.code !== 0) return { ...empty, branch: branchProbe };
-
-  let branch: string | null = branchProbe;
+export function parsePorcelainV2(stdout: string): GitStatusReport {
+  let branch: string | null = null;
   let ahead = 0;
   let behind = 0;
   const files: GitStatusFile[] = [];
 
   // `-z` separates ENTRIES with NUL. Headers are still newline-prefixed.
   // We split on NUL first, then handle multi-record entries (renames).
-  const records = res.stdout.split('\0');
+  const records = stdout.split('\0');
   let i = 0;
   while (i < records.length) {
     const rec = records[i] ?? '';
@@ -319,17 +280,17 @@ async function readGitStatusRemote(batonFs: BatonFs, dir: string): Promise<GitSt
       if (parsed) files.push(parsed);
       i++;
     } else if (tag === '2') {
-      // "2 XY sub ... <new>" followed by a separate NUL-terminated <orig>
-      const parsed = parseEntry1(rec);
+      // "2 XY sub mH mI mW hH hI <Xscore> <path>" — a rename/copy has an
+      // extra score field, so the path starts at index 9 (not 8). The
+      // <orig> path follows as its own NUL-terminated record — skip it.
+      const parsed = parseRenameEntry2(rec);
       if (parsed) files.push(parsed);
-      // skip the rename source path too
       i += 2;
     } else if (tag === 'u') {
-      // unmerged
-      const m = /^u\s+(\S+)\s+/.exec(rec);
-      void m;
+      // "u XY sub m1 m2 m3 mW h1 h2 h3 <path>" — three stage modes + three
+      // hashes, so the path starts at index 10.
       const parts = rec.split(' ');
-      const filePath = parts.slice(8).join(' ');
+      const filePath = parts.slice(10).join(' ');
       if (filePath) files.push({ path: filePath, state: 'conflicted' });
       i++;
     } else if (tag === '?') {
@@ -349,14 +310,28 @@ async function readGitStatusRemote(batonFs: BatonFs, dir: string): Promise<GitSt
 
 /** Parse a porcelain v2 "1" line: `1 XY sub mH mI mW hH hI <path>`. */
 function parseEntry1(rec: string): GitStatusFile | null {
-  // Fields are space-separated except the last one, which is the path
+  return parseChangedEntry(rec, 8);
+}
+
+/** Parse a porcelain v2 "2" (rename/copy) line:
+ *  `2 XY sub mH mI mW hH hI <Xscore> <path>`. The extra <Xscore> field
+ *  pushes the path to index 9. */
+function parseRenameEntry2(rec: string): GitStatusFile | null {
+  return parseChangedEntry(rec, 9);
+}
+
+/** Shared body for "1" and "2" entries — they differ only in where the
+ *  path starts. XY decides the bucket: X is the staged column, Y the
+ *  worktree column. */
+function parseChangedEntry(rec: string, pathIndex: number): GitStatusFile | null {
+  // Fields are space-separated except the path, which is the tail
   // (paths with spaces are allowed; -z prevents NUL issues per record).
   const parts = rec.split(' ');
-  if (parts.length < 9) return null;
+  if (parts.length <= pathIndex) return null;
   const xy = parts[1] ?? '';
   const x = xy[0];
   const y = xy[1];
-  const filePath = parts.slice(8).join(' ');
+  const filePath = parts.slice(pathIndex).join(' ');
   if (!filePath) return null;
   let state: GitStatusFile['state'];
   if (y === 'D') state = 'deleted';
