@@ -54,6 +54,12 @@
     "electron-vite": "^2.3.0",
     "typescript": "^5.6.2",
     "vite": "^5.4.8",
-    "vitest": "^4.1.8"
+    "vitest": "^3.2.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
   }
 }
