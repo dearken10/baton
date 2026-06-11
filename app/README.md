@@ -5,22 +5,31 @@ dogfoodable; HITL, Codex, Onboarding, Remote SSH are still pending.
 
 ## Dev
 
+Requires Node >= 22.12 (`.nvmrc` says 26) and pnpm (version pinned via
+`packageManager` in `package.json`).
+
 ```bash
 cd app
-npm install
-npm run rebuild   # builds better-sqlite3 + node-pty against Electron's Node
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 Native modules (`better-sqlite3`, `node-pty`) need an Electron-aware
-rebuild. The `postinstall` script attempts it; if it fails on your
-machine, run `npm run rebuild` explicitly.
+rebuild. The `postinstall` script (`electron-builder install-app-deps`)
+does it automatically; if it fails on your machine, run
+`pnpm run rebuild` explicitly (uses `@electron/rebuild`).
+
+pnpm is configured with `node-linker=hoisted` (see `.npmrc`) because the
+Electron rebuild tooling expects an npm-style flat `node_modules`. Build
+scripts of dependencies are blocked by default in pnpm 10; the allowlist
+lives in `pnpm.onlyBuiltDependencies` (`electron` must stay there or its
+binary never downloads).
 
 ## Typecheck and tests
 
 ```bash
-npm run typecheck
-npm test
+pnpm run typecheck
+pnpm test
 ```
 
 ## Layout

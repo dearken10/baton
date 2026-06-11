@@ -72,8 +72,8 @@ dark theme, no build step.
 
 ```bash
 cd app
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
 See [`app/README.md`](app/README.md) for the rebuild-native-modules
