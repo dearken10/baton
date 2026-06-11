@@ -4,8 +4,9 @@
   "private": true,
   "description": "Desktop supervisor for many parallel AI coding agents.",
   "main": "out/main/index.js",
+  "packageManager": "pnpm@10.4.0",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "ELECTRON_DISABLE_SECURITY_WARNINGS=true electron-vite dev",
