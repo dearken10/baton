@@ -43,6 +43,7 @@ describe('control verb registry', () => {
         "file.copy",
         "file.create",
         "file.delete",
+        "file.move",
         "file.read",
         "file.readBinary",
         "file.readGitDiff",

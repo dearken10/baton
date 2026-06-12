@@ -594,6 +594,37 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     await fs.rename(req.absPath, newAbs);
     return { newAbsPath: newAbs };
   },
+  'file.move': async (req) => {
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    // Normalise away trailing slashes so the self/descendant check below
+    // doesn't get tripped by "/a/b" vs "/a/b/". POSIX-style throughout —
+    // both local (macOS) and remote (Linux) paths use forward slashes.
+    const src = req.absPath.replace(/\/+$/, '') || req.absPath;
+    const destDir = req.destDirAbsPath.replace(/\/+$/, '') || req.destDirAbsPath;
+    const base = src.replace(/^.*\/+/, '');
+    if (!base || base === '.' || base === '..') {
+      throw new Error('Invalid source path.');
+    }
+    const srcDir = src.replace(/\/+[^/]+\/?$/, '') || '/';
+    // Moving onto its current parent is a silent no-op — the user dragged
+    // the row back where it was, no reason to error.
+    if (destDir === srcDir) return { newAbsPath: src };
+    // Reject moving a directory into itself or one of its descendants:
+    // the resulting tree would be unreachable and `rename` may corrupt it.
+    if (destDir === src || destDir.startsWith(src + '/')) {
+      throw new Error("Can't move a folder into itself.");
+    }
+    const newAbs = destDir === '/' ? `/${base}` : `${destDir}/${base}`;
+    if (await fs.exists(newAbs)) {
+      throw new Error(`"${base}" already exists in the destination folder.`);
+    }
+    const destStat = await fs.stat(destDir);
+    if (!destStat || destStat.kind !== 'dir') {
+      throw new Error('Destination is not a directory.');
+    }
+    await fs.rename(src, newAbs);
+    return { newAbsPath: newAbs };
+  },
   'file.create': async (req) => {
     const base = path.basename(req.absPath);
     if (!base || base === '.' || base === '..') {
