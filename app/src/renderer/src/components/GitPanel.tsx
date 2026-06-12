@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
-import { diffTabId } from './EditorPane.js';
+import { diffTabId } from './tabIds.js';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { FileContextMenu } from './FileContextMenu.js';
 import { PromptDialog } from './PromptDialog.js';

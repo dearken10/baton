@@ -5,6 +5,9 @@ import { marked } from 'marked';
 import '../lib/monacoWorkers.js';
 import { JsonTreeView } from './JsonTreeView.js';
 import {
+  isDiffTab, isBrowserTab, isWebUrlTab, pathOf, labelForUrl,
+} from './tabIds.js';
+import {
   useAppStore,
   selectOpenFiles,
   selectActiveFilePath,
@@ -42,48 +45,6 @@ function previewModeLabel(absPath: string, mode: 'source' | 'rendered'): string 
 // Configure marked once for the whole renderer. GFM tables + line
 // breaks match the rendering most users have seen in GitHub READMEs.
 marked.setOptions({ gfm: true, breaks: false });
-
-/** Diff tabs are encoded with this prefix so they coexist with normal
- *  edit tabs for the same file. Callers go through {@link diffTabId}
- *  and {@link pathOf}/{@link isDiffTab}. */
-const DIFF_TAB_PREFIX = 'diff://';
-export function diffTabId(absPath: string): string { return `${DIFF_TAB_PREFIX}${absPath}`; }
-function isDiffTab(id: string): boolean { return id.startsWith(DIFF_TAB_PREFIX); }
-
-/** "Open in browser" tabs for HTML files. Rendered as an <iframe srcdoc>
- *  using the file's contents — relative asset URLs (./style.css etc)
- *  won't resolve. For multi-file sites, use the external "Open in"
- *  path instead. */
-const BROWSER_TAB_PREFIX = 'browser://';
-export function browserTabId(absPath: string): string { return `${BROWSER_TAB_PREFIX}${absPath}`; }
-function isBrowserTab(id: string): boolean { return id.startsWith(BROWSER_TAB_PREFIX); }
-
-/** Navigable URL tabs — used by clicks on links inside the terminal.
- *  Rendered as a navigable <iframe src=URL>, so relative assets and
- *  navigation away from the initial URL work like a real browser. */
-const WEBURL_TAB_PREFIX = 'weburl://';
-export function webUrlTabId(url: string): string { return `${WEBURL_TAB_PREFIX}${url}`; }
-function isWebUrlTab(id: string): boolean { return id.startsWith(WEBURL_TAB_PREFIX); }
-
-function pathOf(id: string): string {
-  if (isDiffTab(id)) return id.slice(DIFF_TAB_PREFIX.length);
-  if (isBrowserTab(id)) return id.slice(BROWSER_TAB_PREFIX.length);
-  if (isWebUrlTab(id)) return id.slice(WEBURL_TAB_PREFIX.length);
-  return id;
-}
-
-/** Short label for a URL tab — "localhost:5180" instead of the full
- *  href — so the tab doesn't blow up the strip. Falls back to the
- *  raw string if URL parsing fails. */
-function labelForUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    const tail = u.pathname === '/' ? '' : u.pathname;
-    return `${u.host}${tail}`;
-  } catch {
-    return url;
-  }
-}
 
 // Use the locally-bundled monaco — no CDN, offline-capable.
 loader.config({ monaco });

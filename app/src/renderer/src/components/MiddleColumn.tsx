@@ -1,10 +1,18 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore, selectOpenFiles } from '../store.js';
 import { TerminalPane } from './TerminalPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
-import { EditorPane } from './EditorPane.js';
 import { EditorErrorBoundary } from './EditorErrorBoundary.js';
 import type { Session } from '@shared/ipc.js';
+
+// Monaco is ~8MB. Lazy-load the editor so it (and Monaco) are only
+// fetched + parsed when the user first opens a file, not at app startup.
+// The render site below already gates on `hasOpenFile`, so the chunk is
+// requested exactly once, on first open. Helper tab-id functions live in
+// ./tabIds so other components can import them without pulling Monaco.
+const EditorPane = lazy(() =>
+  import('./EditorPane.js').then((m) => ({ default: m.EditorPane })),
+);
 
 const TOP_PCT_MIN = 18;
 const TOP_PCT_MAX = 82;
@@ -199,7 +207,9 @@ export function MiddleColumn(): JSX.Element {
         {hasOpenFile ? (
           <div className="middle-top" key="top">
             <EditorErrorBoundary>
-              <EditorPane />
+              <Suspense fallback={<div className="editor-loading dim">Loading editor…</div>}>
+                <EditorPane />
+              </Suspense>
             </EditorErrorBoundary>
           </div>
         ) : null}

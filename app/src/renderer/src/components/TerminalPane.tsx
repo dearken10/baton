@@ -7,7 +7,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { useAppStore } from '../store.js';
-import { webUrlTabId } from './EditorPane.js';
+import { webUrlTabId } from './tabIds.js';
 import { getTheme, subscribeTheme, type Theme } from '../lib/theme.js';
 
 function xtermThemeFor(t: Theme): {
