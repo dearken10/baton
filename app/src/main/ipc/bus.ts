@@ -38,8 +38,7 @@ import {
 } from '../services/connectionStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
-import { readFileTree, readSubdir, readGitStatus, type GitStatusReport } from '../services/worktreeReader.js';
-import type { BatonFs } from '../services/fs/types.js';
+import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
 import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
@@ -49,31 +48,6 @@ import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnecti
 type Handler<V extends ControlVerb> = (
   req: RequestOf<V>
 ) => Promise<ResponseOf<V>> | ResponseOf<V>;
-
-/** In-flight git-status reads, keyed by SESSION id. The renderer can
- *  fire a refresh faster than a status read completes (e.g. an event
- *  storm during `npm install`); without coalescing, overlapping reads
- *  stack up. Returning the in-flight promise means concurrent refreshes
- *  for one session share a single `git status` subprocess.
- *
- *  Keyed by session, NOT worktree path: two different connections (e.g.
- *  two SSH hosts) can have the same worktree path, and coalescing those
- *  would return one host's status for the other. */
-const inflightGitStatus = new Map<string, Promise<GitStatusReport>>();
-
-function coalescedGitStatus(
-  sessionId: string,
-  fs: BatonFs,
-  worktreePath: string,
-): Promise<GitStatusReport> {
-  const existing = inflightGitStatus.get(sessionId);
-  if (existing) return existing;
-  const p = readGitStatus(fs, worktreePath).finally(() => {
-    inflightGitStatus.delete(sessionId);
-  });
-  inflightGitStatus.set(sessionId, p);
-  return p;
-}
 
 const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'app.ping': () => ({ ok: true as const, ts: Date.now() }),
@@ -320,7 +294,8 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     if (!fs) {
       return { branch: null, ahead: 0, behind: 0, files: [], dirty: false };
     }
-    return await coalescedGitStatus(req.sessionId, fs, worktreePath);
+    const report = await readGitStatus(fs, worktreePath);
+    return report;
   },
   'worktree.list': async (req) => {
     const project = getProject(req.projectId);
