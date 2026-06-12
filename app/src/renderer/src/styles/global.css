@@ -1372,6 +1372,15 @@ button {
   white-space: nowrap;
 }
 .tree-row:hover { background: var(--bg-2); color: var(--text); }
+/* Drop target for drag-and-move: the row glows so the user can see
+   which folder will receive the drop. Stronger contrast than :hover so
+   it reads even when the hover is also active. */
+.tree-row.tree-row-drop {
+  background: rgba(91, 141, 239, 0.22);
+  color: var(--text);
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
 .tree-caret {
   display: inline-block;
   width: 10px;

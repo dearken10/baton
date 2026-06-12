@@ -31,6 +31,14 @@ interface Props {
  *  keep them in sync if you rename it. */
 export const DRAG_FILE_PATH = 'application/x-baton-filepath';
 
+/** Module-level handle on the currently-dragged source path. Set in
+ *  onDragStart, cleared in onDragEnd. We need it during onDragOver to
+ *  decide whether the cursor should show "move allowed" — the
+ *  dataTransfer payload is not readable in dragover for security
+ *  reasons, so we keep our own ref. Scoped to the renderer process so
+ *  it can't leak across windows. */
+let currentDragSource: string | null = null;
+
 export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.Element {
   const session = useAppStore((s) => s.sessions[sessionId]);
   const project = useAppStore((s) => session ? s.projects[session.projectId] : undefined);
@@ -57,8 +65,33 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   // when triggered from the toolbar; set to a subdir when triggered
   // from a directory's context menu.
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
+  // Absolute path of the directory currently being hovered with a drag,
+  // or null if no drag is in progress. Drives the drop-target highlight.
+  const [dragOverDir, setDragOverDir] = useState<string | null>(null);
   const openInEditor = useAppStore((s) => s.openFile);
   const onChanged = useCallback(() => setLocalNonce((n) => n + 1), []);
+
+  const moveInto = useCallback(async (srcAbs: string, destDirAbs: string): Promise<void> => {
+    // Same-parent drop is a silent no-op; the handler also returns
+    // success in that case, but bailing here saves an IPC round-trip
+    // and prevents a needless tree refresh flash.
+    const srcParent = srcAbs.replace(/\/+[^/]+\/?$/, '') || '/';
+    if (srcParent === destDirAbs) return;
+    if (destDirAbs === srcAbs || destDirAbs.startsWith(srcAbs + '/')) {
+      alert("Can't move a folder into itself.");
+      return;
+    }
+    try {
+      await window.baton.call('file.move', {
+        absPath: srcAbs,
+        destDirAbsPath: destDirAbs,
+        sessionId,
+      });
+      onChanged();
+    } catch (err) {
+      alert(`Move failed: ${String(err)}`);
+    }
+  }, [sessionId, onChanged]);
   const onRequestRename = useCallback((absPath: string, currentName: string) => {
     setRenameTarget({ absPath, currentName });
   }, []);
@@ -217,6 +250,9 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
         onPin={openFileSticky}
         onContextMenu={openContextMenu}
         worktreePath={worktreePath}
+        dragOverDir={dragOverDir}
+        setDragOverDir={setDragOverDir}
+        onMoveInto={(src, dest) => void moveInto(src, dest)}
       />
       {ctxMenu ? (
         <FileContextMenu
@@ -274,11 +310,15 @@ interface NodeProps {
   onPin: (path: string) => void;
   onContextMenu: (e: React.MouseEvent, absPath: string, isDir: boolean, isRoot: boolean) => void;
   worktreePath: string;
+  dragOverDir: string | null;
+  setDragOverDir: (p: string | null) => void;
+  onMoveInto: (srcAbs: string, destDirAbs: string) => void;
 }
 
 function TreeNode({
   node, depth, openPaths, extraChildren, loadingPaths,
   onToggle, onPreview, onPin, onContextMenu, worktreePath,
+  dragOverDir, setDragOverDir, onMoveInto,
 }: NodeProps): JSX.Element {
   const isOpen = openPaths.has(node.path);
   const indent = depth * 12;
@@ -295,14 +335,59 @@ function TreeNode({
     // impossible from the tree.
     const isRoot = node.path === '';
     const absDir = isRoot ? worktreePath : `${worktreePath}/${node.path}`;
+    // Disable the drop highlight when this dir is the source or one of
+    // its ancestors of the source — the handler would reject the move
+    // anyway, but the cursor should already say "not allowed".
+    const dragSrc = currentDragSource;
+    const isInvalidDropTarget = dragSrc != null && (
+      dragSrc === absDir || absDir === dragSrc || absDir.startsWith(dragSrc + '/')
+    );
+    const showDropHighlight = dragOverDir === absDir && !isInvalidDropTarget;
     return (
       <div>
         <button
           type="button"
-          className="tree-row"
+          className={`tree-row${showDropHighlight ? ' tree-row-drop' : ''}`}
           style={{ paddingLeft: 8 + indent }}
           onClick={() => onToggle(node)}
           onContextMenu={(e) => onContextMenu(e, absDir, true, isRoot)}
+          // The worktree root is conceptually a folder too, but dragging
+          // it would let the user try to move the entire project — make
+          // it drop-only, not drag-source.
+          draggable={!isRoot}
+          onDragStart={isRoot ? undefined : (e) => {
+            e.dataTransfer.setData(DRAG_FILE_PATH, absDir);
+            e.dataTransfer.setData('text/plain', absDir);
+            e.dataTransfer.effectAllowed = 'copyMove';
+            currentDragSource = absDir;
+          }}
+          onDragEnd={() => { currentDragSource = null; }}
+          onDragEnter={(e) => {
+            if (!e.dataTransfer.types.includes(DRAG_FILE_PATH)) return;
+            e.preventDefault();
+            if (!isInvalidDropTarget) setDragOverDir(absDir);
+          }}
+          onDragOver={(e) => {
+            if (!e.dataTransfer.types.includes(DRAG_FILE_PATH)) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = isInvalidDropTarget ? 'none' : 'move';
+            if (!isInvalidDropTarget && dragOverDir !== absDir) setDragOverDir(absDir);
+          }}
+          onDragLeave={() => {
+            // Only clear if WE were the highlighted target — another
+            // row's dragenter may have already moved the highlight, and
+            // we'd otherwise clobber it.
+            if (dragOverDir === absDir) setDragOverDir(null);
+          }}
+          onDrop={(e) => {
+            if (!e.dataTransfer.types.includes(DRAG_FILE_PATH)) return;
+            e.preventDefault();
+            setDragOverDir(null);
+            const src = e.dataTransfer.getData(DRAG_FILE_PATH);
+            currentDragSource = null;
+            if (!src || isInvalidDropTarget) return;
+            onMoveInto(src, absDir);
+          }}
         >
           <span className="tree-caret">{isOpen ? '▾' : '▸'}</span>
           <span className="tree-icon">📁</span>
@@ -331,6 +416,9 @@ function TreeNode({
                 onPin={onPin}
                 onContextMenu={onContextMenu}
                 worktreePath={worktreePath}
+                dragOverDir={dragOverDir}
+                setDragOverDir={setDragOverDir}
+                onMoveInto={onMoveInto}
               />
             ))}
           </div>
@@ -351,9 +439,13 @@ function TreeNode({
       onDragStart={(e) => {
         e.dataTransfer.setData(DRAG_FILE_PATH, abs);
         e.dataTransfer.setData('text/plain', abs);
-        e.dataTransfer.effectAllowed = 'copy';
+        // copyMove (not copy) so the same drag works for two drop kinds:
+        // the terminal/editor copies the path, a folder row moves the file.
+        e.dataTransfer.effectAllowed = 'copyMove';
+        currentDragSource = abs;
       }}
-      title={`Click to preview · double-click to pin · drag into terminal to paste path  ·  ${node.path}`}
+      onDragEnd={() => { currentDragSource = null; }}
+      title={`Click to preview · double-click to pin · drag onto a folder to move · drag into terminal to paste path  ·  ${node.path}`}
     >
       <span className="tree-caret" />
       <span className="tree-icon">📄</span>

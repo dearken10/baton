@@ -594,6 +594,17 @@ const FileRenameRequest = z.object({
 });
 const FileRenameResponse = z.object({ newAbsPath: z.string() });
 
+/** Move a file or directory into a different parent directory, keeping
+ *  the same basename. Used by drag-and-drop in the file tree. The
+ *  handler refuses to overwrite an existing entry and refuses to move a
+ *  directory into itself or one of its descendants. */
+const FileMoveRequest = z.object({
+  absPath: z.string().min(1),
+  destDirAbsPath: z.string().min(1),
+  sessionId: SessionId.optional(),
+});
+const FileMoveResponse = z.object({ newAbsPath: z.string() });
+
 /** Create a new empty file at `absPath`. Refuses to clobber an existing
  *  file. Parent directories are created as needed (mkdir -p), so paths
  *  like "src/new/foo.ts" relative to the worktree root work without
@@ -813,6 +824,7 @@ export const ControlVerbs = {
   'file.write':            { request: FileWriteRequest,           response: FileWriteResponse },
   'file.copy':             { request: FileCopyRequest,            response: FileCopyResponse },
   'file.rename':           { request: FileRenameRequest,          response: FileRenameResponse },
+  'file.move':             { request: FileMoveRequest,            response: FileMoveResponse },
   'file.create':           { request: FileCreateRequest,          response: FileCreateResponse },
   'file.delete':           { request: FileDeleteRequest,          response: FileDeleteResponse },
   'file.revealInFinder':   { request: FileRevealInFinderRequest,  response: FileRevealInFinderResponse },
