@@ -9,7 +9,7 @@
  */
 
 import { isHtmlPath } from './FilesPanel.js';
-import { browserTabId } from './EditorPane.js';
+import { browserTabId } from './tabIds.js';
 
 type OpenFile = (idOrPath: string, kind: 'preview' | 'sticky') => void;
 
