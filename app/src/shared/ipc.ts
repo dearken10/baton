@@ -936,15 +936,6 @@ const SessionRefreshedEvent = EventEnvelope.extend({
   session: Session,
 });
 
-/** Fired when a filesystem change is detected in a session's worktree
- *  (by the main-process git watcher). The renderer debounces this and
- *  re-fetches worktree.gitStatus + worktree.fileTree. Replaces the old
- *  3s polling timer — refreshes happen on real change, not on a clock. */
-const WorktreeChangedEvent = EventEnvelope.extend({
-  type: z.literal('worktree.changed'),
-  sessionId: SessionId,
-});
-
 const ConnectionAddedEvent = EventEnvelope.extend({
   type: z.literal('connection.added'),
   profile: ConnectionProfile,
@@ -976,7 +967,6 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionRenamedEvent,
   SessionTokensUpdatedEvent,
   SessionRefreshedEvent,
-  WorktreeChangedEvent,
   ConnectionAddedEvent,
   ConnectionUpdatedEvent,
   ConnectionRemovedEvent,

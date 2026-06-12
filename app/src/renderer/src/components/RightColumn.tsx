@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
 import { FilesPanel } from './FilesPanel.js';
 import { GitPanel } from './GitPanel.js';
@@ -6,15 +6,7 @@ import { SearchPanel } from './SearchPanel.js';
 
 type Tab = 'files' | 'search' | 'git';
 
-/** Debounce window for coalescing a burst of worktree.changed events
- *  (the main-process watcher already debounces, this is belt-and-braces
- *  against rapid distinct events). */
-const CHANGE_DEBOUNCE_MS = 150;
-
-/** Remote (SSH) sessions have no local FS watcher, so they fall back to
- *  a slow poll. Far slower than the old 3s because git status over SSH
- *  is comparatively expensive and remote edits are less frequent. */
-const REMOTE_FALLBACK_MS = 8000;
+const REFRESH_MS = 3000;
 
 export function RightColumn(): JSX.Element {
   const [tab, setTab] = useState<Tab>('files');
@@ -31,47 +23,15 @@ export function RightColumn(): JSX.Element {
   // `success` as "show the disconnect banner".
   const remoteHealthy = !isRemote || selectedConnection?.lastStatus === 'success';
 
-  // Refresh the Files/Git panels when the worktree actually changes,
-  // instead of polling on a clock. The main process watches the
-  // worktree (local sessions) and pushes `worktree.changed`; we debounce
-  // and bump `tick`, which the panels consume as `refreshKey`.
+  // Tick on a timer so the panel reflects whatever the agent (or the
+  // user) has been doing in the worktree. Cheap: each tick is one
+  // readdir or one statusMatrix scan.
   const [tick, setTick] = useState(0);
-  const debounceRef = useRef<number | null>(null);
-  const selectedSessionId = selected?.id ?? null;
-
   useEffect(() => {
-    if (!selectedSessionId) return;
-
-    const bump = (): void => {
-      if (debounceRef.current != null) window.clearTimeout(debounceRef.current);
-      debounceRef.current = window.setTimeout(() => {
-        debounceRef.current = null;
-        setTick((t) => t + 1);
-      }, CHANGE_DEBOUNCE_MS);
-    };
-
-    // Local sessions: event-driven via the main-process watcher.
-    const unsub = window.baton.onEvent((event) => {
-      if (event.type === 'worktree.changed' && event.sessionId === selectedSessionId) {
-        bump();
-      }
-    });
-
-    // Remote sessions: no local watcher exists, so fall back to a slow
-    // poll. (Local sessions don't need this — the watcher covers them.)
-    const fallbackId = isRemote
-      ? window.setInterval(() => setTick((t) => t + 1), REMOTE_FALLBACK_MS)
-      : null;
-
-    return () => {
-      unsub();
-      if (fallbackId != null) window.clearInterval(fallbackId);
-      if (debounceRef.current != null) {
-        window.clearTimeout(debounceRef.current);
-        debounceRef.current = null;
-      }
-    };
-  }, [selectedSessionId, isRemote]);
+    if (!selected) return;
+    const id = window.setInterval(() => setTick((t) => t + 1), REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [selected?.id]);
 
   async function reconnect(): Promise<void> {
     if (!selectedConnection) return;
