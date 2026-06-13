@@ -21,6 +21,15 @@ aggregate budget circuit breaker added; per-session cost cap deferred
 to v1.1; F5.4 ripgrep cut; PDF viewer cut; renamed `24code` →
 `baton`, `~/.tfa/` → `~/.baton/`.
 
+**What changed in v2.1:** added F15 **Maestro** — the autonomous
+orchestrator that drains idle 5h / 7d plan capacity into agent runs
+on the user's behalf (heartbeat, two trust modes, backlog-driven
+candidates, tag+stash checkpoint with one-click revert, daily
+autonomy budget). Spec'd here but **deferred to v1.2 alpha** so
+v1's trust foundation (HITL, plan-usage display, daily cap,
+worktree-per-agent) ships and dogfoods first. The conductor's
+baton picks up a hand to wield it.
+
 **Primary ICP:** senior or staff engineers and indie technical founders
 (6–15 YoE) who work on multiple projects simultaneously, run **4+ Claude
 Code agents in parallel**, juggle multiple VS Code windows and terminal
@@ -633,6 +642,144 @@ precedent.
   in `~/.baton/config.json` per F12.3 so first paint after launch
   uses the right theme without flashing.
 
+### Autonomous orchestrator — Maestro (F15.x)
+
+> **Scope.** Maestro is the only baton subsystem that *initiates* work
+> on the user's behalf instead of supervising work the user started.
+> It exists to drain idle capacity (under-utilized 5h / 7d Claude plan
+> windows) into useful agent runs while the user is AFK. v1 ships
+> behind a global off-by-default switch; the entire surface is
+> dormant until the user opts in. The product invariant is
+> **reversibility**: every Maestro action must be undoable in one
+> click, and net-new work must never touch the user's main checkout.
+
+- **F15.1** **Global heartbeat.** A single Maestro tick runs in the
+  Electron main process every `tickIntervalMin` minutes (default
+  `5`, range `1–60`). Each tick reads: F11.3 usage % (5h + 7d),
+  session inventory (state, project, age), autonomy budget
+  remaining (F15.7), and the global enable flag. The tick is a
+  no-op if any of: usage ≥ `idleThresholdPct` (default `30`); no
+  autonomy budget remaining; Maestro globally paused; user is
+  actively typing into any pty within the last 60 s ("don't act
+  while the human is at the keyboard").
+- **F15.2** **Two operating modes**, user-selectable per F12.1:
+  - **`propose-first`** (default on opt-in). Every candidate action
+    is written to the **Maestro Inbox** (F15.8) as a proposal with
+    rationale; nothing runs until the user clicks `Approve` or
+    `Approve & remember`. The remember variant whitelists the
+    action class (e.g. "auto-resume `needs-input` when answer is
+    yes/no") so future ticks bypass review for that class.
+  - **`act-first`** (opt-in to opt-in). Maestro executes the
+    top-ranked candidate above the confidence floor (F15.3) without
+    pre-approval. Every action still appears in the Inbox in the
+    `awaiting-review` state with a one-click revert (F15.6).
+  Modes are a single radio in Settings → Maestro; switching is
+  instant and never strands an in-flight action.
+- **F15.3** **Planner LLM.** Each tick that has candidates calls a
+  small planner: `{usage_pct_5h, usage_pct_7d, session_inventory,
+  recent_transcript_tails (≤20 lines each, capped at 5 sessions),
+  per-project backlog snapshot, autonomy_policy}` → ranked action
+  list with `{kind, target, rationale, confidence ∈ [0,1]}`. Model:
+  **Claude Haiku 4.5** (default; configurable). **Confidence floor
+  `0.7`** — actions below are dropped silently (`foreman.confidence_below_floor`
+  telemetry). Inputs are cached on identical hashes; no call if
+  nothing has changed since the previous tick. Cost is governed by
+  F15.7 like any other action.
+- **F15.4** **Action kinds.** v1 ships exactly three:
+  - **`resume`** — re-engage an existing session that is `idle`,
+    `paused`, or `needs-input` with an inferable continuation. The
+    planner produces the prompt text; the chip flashes a 🤖 origin
+    badge for 10 s on resume.
+  - **`initiate`** — spawn a new agent in a **fresh worktree** (F2.2)
+    on a project from the global project list, seeded with a task
+    from that project's backlog (F15.5). Never targets the main
+    checkout; never targets an existing worktree.
+  - **`defer`** — record an observation the user should see at next
+    focus, but take no action. Used when confidence is below the
+    floor but the candidate is still worth surfacing.
+  Any other action kind (push, merge, branch delete, dependency
+  install, network egress beyond the agent's own tool calls) is
+  **forbidden** — Maestro cannot do them directly; the agent it
+  spawns can, subject to the user's existing HITL policy.
+- **F15.5** **Backlog source — v0/v1.** Per project, a plain-text
+  `.baton/backlog.md` at the repo root. Format is unopinionated:
+  Maestro reads the file and lets the planner pick. Convention
+  (documented, not enforced):
+  ```
+  ## TODO
+  - [ ] short task title — optional one-line context
+  ## DOING
+  - [x] worktree-name — running in `wt-xyz` since 2026-06-12
+  ```
+  Maestro **never writes** to `backlog.md` in v1; promotion of an
+  item to `DOING` is the user's job after they review a Maestro
+  worktree. *(GitHub Issues as a second source is phase 2; the
+  same planner interface accepts either.)*
+- **F15.6** **Checkpoint + one-click revert.** Before any `resume`
+  or `initiate` action, Maestro captures a checkpoint and records
+  it in SQLite (`maestro_actions` table) keyed by action id:
+  - For **`resume`**: (a) `git tag baton/maestro/<action-id>/pre`
+    on the worktree's `HEAD`, (b) `git stash create` of any
+    uncommitted state (stash ref stored, never popped), (c)
+    snapshot of the session's prompt log tail + last summary +
+    pending HITL ids.
+  - For **`initiate`**: trivial — the action is the worktree
+    creation itself, so revert is `git worktree remove --force`
+    of the newly created worktree (after killing the agent).
+  **Revert UX:** every Maestro action row in the Inbox has a
+  `Revert` button. One click → confirm modal showing the diff
+  Maestro produced → on confirm, the engine kills the agent (if
+  running), restores the tag + stash, and emits
+  `foreman.action_reverted`. Revert is always available while the
+  action's worktree still exists; after the user merges or deletes
+  the worktree manually, the button greys out.
+- **F15.7** **Autonomy budget.** Hard caps, set in Settings →
+  Maestro, enforced per UTC day (rolls at the user's local
+  midnight, surfaced in the UI):
+  - `maxConcurrentMaestroAgents` (default `1`).
+  - `maxMaestroActionsPerDay` (default `3`).
+  - `maxTokensPerMaestroAction` (default `50_000`, soft cap —
+    Maestro stops *spawning new* actions when the running day's
+    tokens would exceed this, but does not kill in-flight ones).
+  - **Allowed action kinds** (checkbox list: `resume`, `initiate`).
+    Both checked on opt-in; user can disable `initiate` to run a
+    "resume-only" Maestro.
+  Budget exhaustion is shown on the Maestro titlebar pill:
+  `Maestro: 2/3 today`.
+- **F15.8** **Maestro Inbox.** A left-rail panel reachable via
+  titlebar pill or `Cmd+Shift+M`. Lists every Maestro action in
+  one of four states:
+  - `proposed` (propose-first only, awaiting approval).
+  - `running` (currently executing).
+  - `awaiting-review` (act-first only, completed, ready for human
+    look — the worktree has commits or the session changed state).
+  - `reverted` / `dismissed` (terminal).
+  Each row shows: timestamp, kind, project, target session or
+  worktree, planner rationale (≤200 chars), confidence, one-click
+  `Approve` / `Reject` (propose-first) or `Revert` / `Keep`
+  (act-first). Rows persist across restarts in SQLite.
+- **F15.9** **Origin tagging.** Every chip whose session was
+  spawned or modified by Maestro renders a 🤖 origin badge next to
+  the status badge. Chip context menu shows `Origin: Maestro`,
+  `Action id: <id>`, `Open in Inbox` for traceability. Maestro
+  origin is durable — survives restart, survives session restore.
+- **F15.10** **Kill switches.**
+  - Global pause: titlebar pill becomes `Maestro paused`; ticks
+    are skipped. In-flight actions continue (kill those explicitly
+    via Inbox if desired).
+  - "Stop everything Maestro is doing" (`Cmd+Shift+M`, then `K`):
+    pauses Maestro globally **and** invokes `Revert` on every
+    in-flight action with a single confirm.
+  - HITL precedence: if a Maestro-spawned agent hits a HITL gate
+    (F3.11), the prompt is surfaced normally with `via Maestro`
+    tagged on the card. Maestro **never** auto-approves HITL on
+    the user's behalf.
+- **F15.11** **Notification policy.** Maestro emits a native
+  notification only on: action started (act-first only, opt-out
+  in Settings), action completed in `awaiting-review`, action
+  errored, daily budget exhausted. Suppressed entirely while the
+  app is focused on the Maestro Inbox.
+
 ---
 
 ## 6. Non-functional requirements
@@ -831,6 +978,50 @@ Each criterion is testable.
 - F13.7 onboarding funnel telemetry powers an Activation funnel
   dashboard (metrics-plan §8).
 
+### Maestro (F15.x)
+- F15.1 tick is a no-op when global enable flag is off
+  (architectural lint — zero LLM calls, zero SQLite writes from
+  the Maestro module while disabled).
+- F15.1 tick is a no-op while any pty has received user input in
+  the last 60 s (verified by injecting a keystroke between ticks
+  in an integration test).
+- F15.2 mode switch from `act-first` → `propose-first` mid-flight
+  does not cancel an in-flight action; the next tick observes the
+  new mode.
+- F15.3 planner returns are validated against a Zod schema; malformed
+  output → drop + `summarizer.error`-style telemetry (no exception
+  escapes to the tick loop).
+- F15.3 identical input hash within `tickIntervalMin` × 2 → zero
+  planner calls (cache lint).
+- F15.4 `initiate` action that targets the main checkout, an
+  existing worktree, or a project without `.baton/backlog.md` is
+  rejected at policy time, before LLM call.
+- F15.5 missing `backlog.md` disables `initiate` candidates for
+  that project; `resume` candidates still considered.
+- F15.6 every `resume` writes both a git tag AND a stash ref to
+  SQLite before the agent receives the planner-generated prompt
+  (architectural lint — the prompt write is gated on checkpoint
+  success).
+- F15.6 revert restores tag + stash and emits
+  `foreman.action_reverted` ≤2 s after click on a 200-file
+  changeset.
+- F15.6 revert on an `initiate` action that has been pushed or
+  merged shows the button disabled with a tooltip explaining why.
+- F15.7 the `(N+1)`-th action of the day is blocked even if the
+  planner ranks it above the floor; "Daily Maestro budget reached"
+  shown in the Inbox.
+- F15.8 Inbox row count = sum of SQLite `maestro_actions` rows in
+  non-terminal states; survives app restart.
+- F15.9 chip origin badge persists across crash-recovery (F2.4
+  restore path includes Maestro origin metadata).
+- F15.10 global pause from titlebar takes effect on the next tick
+  boundary; "Stop everything" triggers `Revert` on all in-flight
+  actions atomically (all-or-nothing under crash mid-revert,
+  resumable on next launch).
+- F15.10 a Maestro-spawned agent hitting `PreToolUse` for a risky
+  command surfaces the standard F3.11 HITL card; the card header
+  reads "via Maestro" and the rationale from F15.3 is included.
+
 ---
 
 ## 8. User stories (selected)
@@ -905,6 +1096,43 @@ increments by one.
 in Settings, *when* token-usage hooks fire, *then* the 5h-window
 indicator updates within 60 s; when it crosses 80%, the indicator
 turns amber and the title bar shows `5h: 82%`.
+
+**US-15.1a** *Given* Maestro is enabled in `act-first` mode with
+5h usage at 6%, *when* the heartbeat fires, *then* the planner
+proposes ≥1 action above the confidence floor, the top-ranked
+action runs, a checkpoint row is written to `maestro_actions`
+**before** the agent receives any prompt, and the action appears
+in the Inbox in `awaiting-review` once complete.
+
+**US-15.2a** *Given* Maestro is enabled in `propose-first` mode,
+*when* a tick produces a candidate, *then* nothing executes; the
+Inbox shows the proposal with planner rationale and `Approve` /
+`Approve & remember` / `Reject` buttons.
+
+**US-15.6a** *Given* an `act-first` `initiate` action has produced
+a worktree with two commits, *when* the user clicks `Revert`,
+*then* a confirm modal shows the diff Maestro produced; on
+confirm the agent is killed, the worktree is removed, and the
+Inbox row transitions to `reverted` with `foreman.action_reverted`
+emitted.
+
+**US-15.6b** *Given* a `resume` action wrote a planner-generated
+prompt to an existing session, *when* the user clicks `Revert`,
+*then* the agent is killed, `git reset --hard baton/maestro/<id>/pre`
+runs on the worktree, the stashed uncommitted state is restored,
+the session's prompt-log tail is rewound, and the chip's origin
+badge clears.
+
+**US-15.7a** *Given* the daily Maestro action budget is 3 and the
+user has already accepted 3 actions today, *when* the next
+heartbeat fires, *then* no planner call is made and the titlebar
+pill shows `Maestro: 3/3 today` until midnight local.
+
+**US-15.10a** *Given* Maestro has two in-flight `initiate` actions,
+*when* the user invokes "Stop everything Maestro is doing", *then*
+both agents receive SIGTERM, both worktrees are removed, both
+Inbox rows transition to `reverted`, and Maestro enters the global
+paused state — all under a single confirm.
 
 ---
 
@@ -981,7 +1209,7 @@ send" inspector showing the last 100 outgoing events.
 Code, diff, prompt, summary text, terminal output, command strings,
 file paths (hashed), branch names (bucketed), email/identity.
 
-### Event spec (17 events)
+### Event spec (24 events)
 
 | # | Event | When | Key properties |
 |---|---|---|---|
@@ -1002,6 +1230,13 @@ file paths (hashed), branch names (bucketed), email/identity.
 | 15 | `perf.sample` (30 s) | | `cpu_main, cpu_renderer, rss_main, rss_renderer, xterm_queue_depth_p95, ipc_rtt_p95_ms` |
 | 16 | `summarizer.error` | | `error_class, retry_count` |
 | 17 | `git.commits_authored_by_agent` | commit completes on agent-owned worktree | `count_only` — outcome metric for "shipped" |
+| 18 | `maestro.tick` | heartbeat fires | `usage_pct_5h_bucket, usage_pct_7d_bucket, mode, action_taken (bool), skip_reason?` — **bucketed, never raw %** |
+| 19 | `maestro.action_proposed` | planner returned an action above floor | `action_id, kind, project_id, confidence_bucket, mode` — **no rationale text, no prompt text** |
+| 20 | `maestro.action_started` | execution begins | `action_id, kind, checkpoint_kind (tag_stash / worktree)` |
+| 21 | `maestro.action_completed` | execution reaches terminal state | `action_id, kind, terminal_state (awaiting_review / errored / approved), duration_s, tokens_used_bucket` |
+| 22 | `maestro.action_reverted` | user clicked Revert (or "Stop everything") | `action_id, kind, ms_since_completed, reverted_by (user / stop_all)` |
+| 23 | `maestro.confidence_below_floor` | planner returned but ranked below the floor | `top_confidence_bucket` — **no candidate text** |
+| 24 | `maestro.budget_exhausted` | daily action / token / concurrency cap blocked a tick | `cap_kind` |
 
 ### CLI hook: `tfa feedback`
 
@@ -1160,6 +1395,14 @@ remote-execution stack** (v0 ships Local-only; Remote daemon is a
 separate 2–3 week build that lands in v1 W5–W7 after the v0
 foundation is solid).
 
+**Killed for v1 entirely (spec only, implement v1.2 Maestro alpha):**
+**F15.x autonomous orchestrator.** Spec lives in §5 / §7 / §10 /
+§13 / §14 / §15 so the team builds v1 with Maestro's dependencies
+(plan-usage display F11.3, daily cap F11.5, worktree-per-agent
+F2.2, HITL F3.11) shaped in compatible ways — but Maestro itself
+is not built until after a v1 dogfood validates the trust
+foundation.
+
 **Week-by-week:**
 
 - **W1.** Electron + React + Zustand skeleton. IPC bus + Zod
@@ -1192,6 +1435,8 @@ summary + HITL paths without Claude credentials).
 | 5 | `setup.sh` running malicious user code | First-run trust + hash (F1.5); `--dry-run` (F1.6); log-redact | W3 before F1.4 ships |
 | 6 | Remote-daemon attack surface (F14) — baton ships binary to user's server | Signed binary, SHA256 verified after SCP, bootstrap script visible to user, no root required, daemon runs as the SSH user only | end of v1 W5 |
 | 7 | SSH stream backpressure on noisy agents (1 MB/s × N agents over a 100 Mbps link) | Per-session pty.data rate cap; coalesce frames into 16 ms windows on the daemon side; "Remote bandwidth saturated" banner | v1 W6 |
+| 8 | Maestro (F15) ships a foot-gun — autonomous actions that the user can't easily undo (lost commits, mangled in-flight session state, runaway token spend) | Off by default; `propose-first` is the default opt-in mode; F15.6 checkpoint (tag + stash) gates every `resume`; `initiate` always on a fresh worktree so revert is `worktree remove`; F15.7 daily action cap + per-action token cap; "Stop everything" kill switch; HITL never auto-approved | end of Maestro alpha (post-v1) |
+| 9 | Maestro planner LLM cost runs unbounded — every 5-minute tick × N projects × repeated input could exceed F15.7 caps before the day's circuit breaker trips | Confidence floor `0.7` gates LLM-driven *actions* but not LLM *calls*; need a separate per-tick token budget for the planner itself, mirroring NF3's summarizer ceiling; cache on identical input hash (F15.3); skip-tick rules in F15.1 are the first line of defense | before Maestro alpha |
 
 ---
 
@@ -1221,10 +1466,36 @@ v1.1-deferral footers in §5.
   the dogfood reveals existential summary failure, do we still ship
   v1 (with summary off by default) or hold? Suggest ship anyway —
   tool-name line stands alone.
+- **Maestro resume aggressiveness (F15.4 `resume`).** "Re-engage an
+  idle session" is high value but high risk — the planner is
+  guessing what the user would have typed. Three policy options:
+  (a) `resume` always routes through HITL even in `act-first`
+  mode; (b) `resume` only fires on sessions Maestro itself spawned
+  (origin = maestro); (c) `resume` is gated by a separate
+  confidence floor higher than F15.3's `0.7` (e.g. `0.9`). Suggest
+  (b) for the first dogfood — limits blast radius to actions the
+  user has already opted into Maestro for.
+- **Maestro planner cadence + token ceiling.** F15.1 sets tick at
+  5 min; F15.3 caches on identical input. What's the equivalent of
+  NF3 for the planner — `$/day` ceiling? Suggest mirror NF3 shape:
+  **≤ $0.05/active-hour, alarmable above $0.20/hour** of Maestro
+  planner spend, separate from agent-action token spend (F15.7).
+- **Maestro & Demo mode (F2.8).** Should the Demo mode walkthrough
+  showcase Maestro by spawning a scripted `MockAgentBackend` that
+  Maestro then "resumes" with a canned proposal? Powerful pitch
+  for the "the agents work while you sleep" wedge, but adds
+  scripting complexity to Demo mode. Defer until Maestro alpha.
 
 *(Already-decided items moved to §15 Parked: command palette, CRDT
 collab editing, snapshot-before-destructive, baseline-week mode,
 worktree-per-agent.)*
+
+*(Maestro decisions already locked: trust-mode is a user switch
+(F15.2), backlog source is `.baton/backlog.md` for v1 with GitHub
+issues as phase 2 (F15.5), scope is global (F15.1), reversibility
+is via tag+stash checkpoint with one-click revert (F15.6). Cost
+charging Maestro planner spend separately from agent spend is
+parked — folds into the §11 Settings → Account → Plan view in v1.2.)*
 
 ---
 
@@ -1243,6 +1514,18 @@ worktree-per-agent.)*
 - "Baseline week" mode for measuring pre-baton alt-tab cadence.
 - Worktree-per-agent vs shared-worktree toggle — v1 default per-agent
   with opt-out only; full toggle is v1.1.
+
+**Deferred to v1.2 (Maestro alpha):**
+- F15.x autonomous orchestrator (Maestro). Spec'd in §5 / §7 / §10 /
+  §13 / §14 but **not built in v0 or v1.** Rationale: v1 establishes
+  baton's "supervise what you started" identity; flipping to
+  "initiate work on your behalf" needs the v1 trust foundation
+  (HITL, plan-usage display, daily cap, worktree-per-agent) shipped
+  and dogfood-validated first. Maestro re-uses every one of those
+  systems and adds nothing the user needs on day one.
+- F15.5 GitHub Issues as a second backlog source — phase 2 of the
+  Maestro rollout, after `.baton/backlog.md` proves the planner
+  interface.
 
 **v2 or later:**
 - Codex / Gemini / OpenCode agent backends (trait exists in v1).
@@ -1319,6 +1602,20 @@ For a first engineer joining cold.
   tool name from the last `PreToolUse` hook (always-accurate fallback)
   PLUS an LLM-generated summary line (Haiku, gated on Week-3
   dogfood per F4.7).
+- **Maestro** — baton's autonomous orchestrator (F15.x). A
+  heartbeat-driven planner that, when the user's Claude plan is
+  under-utilized, either *resumes* an idle/paused session or
+  *initiates* a new agent on a fresh worktree from a project's
+  `.baton/backlog.md`. Global, off by default, opt-in to either
+  `propose-first` or `act-first` mode. Every action is checkpointed
+  (git tag + stash) and one-click revertable. Deferred to v1.2
+  alpha so v1's trust primitives (HITL, plan-usage, daily cap,
+  worktree-per-agent) ship first.
+- **Maestro action** — one of `resume`, `initiate`, `defer`. Each
+  carries a planner-generated rationale, a confidence score, a
+  checkpoint id, and a state (`proposed` → `running` →
+  `awaiting-review` → `approved` / `reverted` / `dismissed`).
+  Surfaced in the **Maestro Inbox** (`Cmd+Shift+M`).
 - **HITL (Human-in-the-loop)** — the approval flow for risky agent
   actions. Hook blocks on a semaphore for ≤120 s; UI surfaces a card;
   user approves / denies / reasons. Time-out → empty response → agent
