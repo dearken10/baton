@@ -37,16 +37,24 @@ territory (not built yet).
 ```
 poc/maestro/option3-master-session/
 ├── README.md                you are here
-├── bootstrap-or-tick.sh     entry point: bootstrap OR resume + tick
+├── bootstrap-or-tick.sh     entry point: bootstrap OR resume + (compact +) tick
+├── maestrod.sh              daemon loop; ticks every MAESTRO_TICK_INTERVAL_MIN
+├── migrations/
+│   └── 001-add-session-kind.sql      session_kind column for the F15.1 exemption
+├── baseline-plan.json       committed snapshot from tick 2 (memory-mechanic proof)
 ├── state/                   gitignored
 │   ├── session-id             pinned UUID; survives reboots
 │   ├── tick-count             monotonic int
 │   ├── last-tick.log          stdout/stderr of the most recent tick
-│   └── tick.lock              flock to prevent overlapping ticks
-└── last-plan.json           overwritten each successful tick
+│   ├── tick.lock              mkdir lock (portable; no flock on macOS)
+│   └── plans/
+│       └── tick-NNNN.json       one snapshot per successful tick
+└── last-plan.json           overwritten each successful tick (gitignored)
 ```
 
 ## Usage
+
+### One-shot
 
 ```bash
 # One tick (default). Bootstraps on first call.
@@ -57,12 +65,47 @@ poc/maestro/option3-master-session/
 
 # Drop the pinned session-id (next tick will bootstrap fresh).
 ./poc/maestro/option3-master-session/bootstrap-or-tick.sh --reset
+```
 
-# Cron / launchd: tick every 5 minutes.
-*/5 * * * * cd /path/to/baton && \
+### Daemon (`maestrod.sh`)
+
+```bash
+# Foreground (Ctrl-C to stop). Default 15-minute interval.
+./poc/maestro/option3-master-session/maestrod.sh
+
+# Background, logging to disk.
+nohup ./poc/maestro/option3-master-session/maestrod.sh \
+  > ~/.baton/maestro/daemon.log 2>&1 &
+echo $! > ~/.baton/maestro/daemon.pid
+
+# Custom interval (any of these work).
+MAESTRO_TICK_INTERVAL_MIN=5 ./maestrod.sh
+./maestrod.sh --interval 5
+
+# Stop the backgrounded daemon (clean shutdown).
+kill $(cat ~/.baton/maestro/daemon.pid)
+```
+
+### Cron alternative (no daemon)
+
+```cron
+# Tick every 15 minutes. bootstrap-or-tick.sh's lock handles overlap.
+*/15 * * * * cd /path/to/baton && \
   poc/maestro/option3-master-session/bootstrap-or-tick.sh \
   >> ~/.baton/maestro/tick.log 2>&1
 ```
+
+### Configurable knobs
+
+All env vars; the daemon respects them, and any `bootstrap-or-tick.sh`
+invocation respects the ones that apply to a single tick.
+
+| env var | default | meaning |
+|---|---|---|
+| `MAESTRO_TICK_INTERVAL_MIN` | `15` | Minutes between ticks (daemon only). |
+| `MAESTRO_COMPACT_EVERY`    | `25` | **Threshold, not action.** Every N ticks the script writes `state/bloat-warning` and logs a WARN line. Honest compaction via `/compact` doesn't work in `claude -p` (slash commands are interactive-only; in print mode they ship as literal text). The escape hatch is `--reset`, which drops the pinned session and bootstraps fresh on the next tick — clean window, loses memory. Proper self-summarize-then-reset is a v1.x feature; PoC accepts the gap. |
+| `MAESTRO_TICK_JITTER_SEC`  | `30` | ± random jitter on each daemon sleep. Helps prompt-cache hit reliability when the interval flirts with the 5-minute TTL boundary. |
+| `USAGE_5H` / `USAGE_7D`    | `0.06` | 5h/7d plan usage hints (0..1). The skill uses these to decide whether the tick is allowed to act. |
 
 ## What option 3 buys over option 2
 

@@ -133,14 +133,39 @@ fi
 export USAGE_5H="${USAGE_5H:-0.06}"
 export USAGE_7D="${USAGE_7D:-0.06}"
 
+# Context bloat warning. We can't actually invoke `/compact` from
+# `claude -p` — slash commands are interactive-only; in print mode the
+# CLI ships them as literal text and the model sees a string. So
+# MAESTRO_COMPACT_EVERY here is a SOFT THRESHOLD that emits a warning
+# and writes a marker file the runtime (or a human) can act on. The
+# escape hatch is `--reset`, which drops the pinned session-id and
+# bootstraps fresh on the next tick — losing the JSONL memory but
+# regaining a clean context window.
+# v1.x replacement: build a self-summarize skill that condenses prior
+# ticks into a sidecar note before forced reset. PoC accepts this gap.
+MAESTRO_COMPACT_EVERY="${MAESTRO_COMPACT_EVERY:-25}"
+TC_NOW="$(current_tick_count)"
+if [[ "$TC_NOW" -gt 0 ]] && (( TC_NOW % MAESTRO_COMPACT_EVERY == 0 )); then
+  BLOAT_MARKER="$STATE_DIR/bloat-warning"
+  JSONL_PATH="$HOME/.claude/projects/$(pwd | tr '/._' '-')/${SID}.jsonl"
+  JSONL_SIZE_KB=$(( $(wc -c < "$JSONL_PATH" 2>/dev/null || echo 0) / 1024 ))
+  echo "$(date -Iseconds) WARN: tick $TC_NOW reached MAESTRO_COMPACT_EVERY=$MAESTRO_COMPACT_EVERY threshold" >&2
+  echo "$(date -Iseconds) WARN: conversation log is ${JSONL_SIZE_KB} KB; consider --reset" >&2
+  printf 'tick=%s\njsonl_kb=%s\nat=%s\n' "$TC_NOW" "$JSONL_SIZE_KB" "$(date -Iseconds)" \
+    > "$BLOAT_MARKER"
+fi
+
 # Run from the repo root so the project-level skill is in scope.
 # `--dangerously-skip-permissions` is required for unattended runs;
 # the skill is propose-only (reads inventory, writes one JSON file).
+# `</dev/null` prevents claude's "no stdin received" warning when
+# nothing is piped to us.
 cd "$REPO_ROOT"
 set +e
 claude "${CLAUDE_ARGS[@]}" \
   -p "/maestro-tick" \
   --dangerously-skip-permissions \
+  </dev/null \
   > "$LAST_TICK_LOG" 2>&1
 EXIT=$?
 set -e
