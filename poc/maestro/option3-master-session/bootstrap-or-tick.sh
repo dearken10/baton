@@ -33,7 +33,10 @@ SESSION_ID_FILE="$STATE_DIR/session-id"
 TICK_COUNT_FILE="$STATE_DIR/tick-count"
 LAST_TICK_LOG="$STATE_DIR/last-tick.log"
 LOCK_FILE="$STATE_DIR/tick.lock"
-mkdir -p "$STATE_DIR"
+# Paused flag is shared with the UI (the MaestroChip toggle writes here
+# via the maestro.setPaused IPC). File presence == paused.
+PAUSED_FLAG="$HOME/.baton/maestro/paused"
+mkdir -p "$STATE_DIR" "$HOME/.baton/maestro"
 
 # ------------------------------------------------------------------
 # CLI
@@ -42,9 +45,11 @@ MODE="tick"
 case "${1:-}" in
   --reset)  MODE="reset"  ;;
   --status) MODE="status" ;;
+  --pause)  MODE="pause"  ;;
+  --resume) MODE="resume" ;;
   "")       ;;
   *)
-    echo "Usage: $0 [--reset|--status]" >&2
+    echo "Usage: $0 [--reset|--status|--pause|--resume]" >&2
     exit 64
     ;;
 esac
@@ -85,6 +90,7 @@ if [[ "$MODE" == "status" ]]; then
   tc="$(current_tick_count)"
   echo "session-id : ${sid:-(unset; next tick will bootstrap)}"
   echo "tick-count : $tc"
+  echo "paused     : $([[ -e "$PAUSED_FLAG" ]] && echo "yes ($PAUSED_FLAG)" || echo "no")"
   if [[ -n "$sid" ]]; then
     row="$(sqlite3 "$HOME/.baton/baton.db" \
       "SELECT id, backend_id, status, session_kind FROM sessions WHERE claude_session_id='$sid';")"
@@ -94,8 +100,30 @@ if [[ "$MODE" == "status" ]]; then
 fi
 
 # ------------------------------------------------------------------
+# --pause / --resume
+# ------------------------------------------------------------------
+if [[ "$MODE" == "pause" ]]; then
+  date -Iseconds > "$PAUSED_FLAG"
+  echo "Maestro paused. Ticks will be skipped until --resume (or the UI toggle)."
+  exit 0
+fi
+if [[ "$MODE" == "resume" ]]; then
+  rm -f "$PAUSED_FLAG"
+  echo "Maestro resumed."
+  exit 0
+fi
+
+# ------------------------------------------------------------------
 # tick (default)
 # ------------------------------------------------------------------
+# Paused gate: bail before doing ANY work so a paused Maestro costs
+# zero tokens. The daemon loops calls this script repeatedly; each
+# call hits this check first and skips fast.
+if [[ -e "$PAUSED_FLAG" ]]; then
+  echo "$(date -Iseconds) skip: paused (flag at $PAUSED_FLAG)"
+  exit 0
+fi
+
 # Atomic lock via mkdir (portable; no flock on macOS by default).
 # mkdir fails-loudly if the dir already exists, so we get a clean
 # non-zero return without a race window.

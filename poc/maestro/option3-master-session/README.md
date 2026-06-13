@@ -63,6 +63,12 @@ poc/maestro/option3-master-session/
 # See where things stand.
 ./poc/maestro/option3-master-session/bootstrap-or-tick.sh --status
 
+# Pause / resume. File-based flag at ~/.baton/maestro/paused.
+# Same flag the chip's UI toggle writes to via maestro.setPaused IPC.
+# Paused tick exits in <10 ms — zero tokens spent.
+./poc/maestro/option3-master-session/bootstrap-or-tick.sh --pause
+./poc/maestro/option3-master-session/bootstrap-or-tick.sh --resume
+
 # Drop the pinned session-id (next tick will bootstrap fresh).
 ./poc/maestro/option3-master-session/bootstrap-or-tick.sh --reset
 ```

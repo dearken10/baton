@@ -432,6 +432,80 @@ const UsageGetStatsResponse = z.object({
   error: z.string().nullable(),
 });
 
+/* ────────────────────────────────────────────────────────────────
+ *  Maestro (PRD F15) — autonomous orchestrator state for the chip
+ *  in the titlebar (Direction A from the UI brainstorm).
+ *
+ *  This is a PoC-grade contract that talks to the option 3
+ *  master-mind session via files on disk
+ *  (poc/maestro/option3-master-session/state/) and the latest plan
+ *  JSON. v1.x will move the source of truth into baton's session
+ *  manager + a proper Maestro service.
+ * ──────────────────────────────────────────────────────────────── */
+
+const MaestroAssumption = z.object({
+  question:       z.string(),
+  assumedAnswer:  z.string(),
+  why:            z.string().optional(),
+  ifWrong:        z.string().optional(),
+});
+const MaestroActionKind = z.enum(['resume', 'initiate', 'defer']);
+const MaestroAction = z.object({
+  actionId:           z.string(),
+  kind:               MaestroActionKind,
+  targetSessionId:    z.string().nullable(),
+  targetProjectId:    z.string().nullable(),
+  prompt:             z.string().nullable(),
+  rationale:          z.string(),
+  confidence:         z.number(),
+  assumptionsMade:    z.array(MaestroAssumption).default([]),
+  reversibilityNote:  z.string().optional(),
+});
+
+const MaestroGetStateRequest = z.object({});
+
+const MaestroSetPausedRequest = z.object({
+  paused: z.boolean(),
+});
+const MaestroSetPausedResponse = z.object({
+  /** Echo back the resulting state so the renderer can confirm. */
+  paused: z.boolean(),
+});
+const MaestroGetStateResponse = z.object({
+  /** When false the rest of the response is essentially empty —
+   *  no PoC state on disk. Render the chip in an "uninitialized"
+   *  pose. */
+  installed: z.boolean(),
+  /** PoC session bookkeeping. Nullable when not yet bootstrapped. */
+  sessionId:       z.string().nullable(),
+  tickCount:       z.number().int().nonnegative(),
+  /** Most recent successful tick. Null until the first tick. */
+  lastTickAt:      z.string().nullable(),
+  /** Next tick estimate based on lastTickAt + intervalMin. Null
+   *  when we can't infer (no daemon, no prior tick). */
+  nextTickEtaAt:   z.string().nullable(),
+  /** Daemon cadence, in minutes. Defaults to 15 when no
+   *  MAESTRO_TICK_INTERVAL_MIN was seen yet. */
+  tickIntervalMin: z.number().positive(),
+  /** Is maestrod.sh currently running? PoC checks for a pid file
+   *  and signals to it; v1.x will manage as a baton service. */
+  daemonRunning:   z.boolean(),
+  /** User has paused Maestro via the chip toggle. Daemon + tick
+   *  script both honor this flag (file at ~/.baton/maestro/paused).
+   *  When true the next tick is skipped with an explicit log line. */
+  paused:          z.boolean(),
+  /** True after the bloat threshold was hit and not yet cleared. */
+  bloatWarning:    z.boolean(),
+  /** Latest plan from poc/maestro/option3-master-session/last-plan.json.
+   *  Null when no tick has run yet. */
+  plan: z.object({
+    tickAt:    z.string(),
+    skipReason: z.string().nullable(),
+    reasoning: z.string(),
+    actions:   z.array(MaestroAction),
+  }).nullable(),
+});
+
 /** Renderer tells main which session is currently focused in the UI
  *  so the notifier can suppress redundant pop-ups (and so we know
  *  what to mark "read" when the user is already looking). */
@@ -1208,6 +1282,8 @@ export const ControlVerbs = {
   'usage.getStats':      { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.getCodexStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.list':          { request: UsageListRequest,     response: UsageListResponse },
+  'maestro.getState':    { request: MaestroGetStateRequest, response: MaestroGetStateResponse },
+  'maestro.setPaused':   { request: MaestroSetPausedRequest, response: MaestroSetPausedResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },

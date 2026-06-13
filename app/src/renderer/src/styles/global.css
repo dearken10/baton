@@ -3203,3 +3203,223 @@ button.terminal-tab,
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
+
+/* ── Maestro chip (PRD F15 · UI direction A) ─────────────── */
+.maestro-wrapper {
+  position: relative;
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+  margin-right: 4px;
+}
+.maestro-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px 2px 8px;
+  height: 22px;
+  cursor: pointer;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+.maestro-chip:hover { background: var(--bg-3); border-color: var(--border-2); }
+.maestro-glyph { font-size: 12px; opacity: 0.9; }
+.maestro-label { letter-spacing: 0.02em; }
+.maestro-off  .maestro-chip { color: var(--text-faint); }
+.maestro-idle .maestro-chip { color: var(--text-dim); }
+.maestro-ok   .maestro-chip { color: var(--running); border-color: var(--accent-2); }
+.maestro-warn .maestro-chip { color: var(--needs);   border-color: #5a4626; }
+.maestro-paused .maestro-chip {
+  color: var(--text-faint);
+  background: var(--bg-1);
+  border-style: dashed;
+}
+.maestro-paused .maestro-glyph { opacity: 0.5; }
+
+.maestro-popup {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 380px;
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--bg-1);
+  border: 1px solid var(--border-2);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 40;
+  font-size: 12px;
+  color: var(--text);
+}
+.maestro-popup-head {
+  display: flex; align-items: center; gap: 10px;
+}
+.maestro-popup-title { font-weight: 600; flex: 1; }
+
+/* On/off switch in the popup head. */
+.maestro-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.maestro-toggle:hover { background: var(--bg-2); }
+.maestro-toggle-track {
+  width: 26px; height: 14px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  position: relative;
+  transition: background 0.15s ease;
+}
+.maestro-toggle-thumb {
+  position: absolute;
+  top: 2px; left: 2px;
+  width: 10px; height: 10px;
+  background: var(--text-dim);
+  border-radius: 999px;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.maestro-toggle.is-active .maestro-toggle-track { background: var(--accent-2); }
+.maestro-toggle.is-active .maestro-toggle-thumb {
+  transform: translateX(12px);
+  background: var(--accent);
+}
+.maestro-toggle.is-active .maestro-toggle-label { color: var(--accent); }
+.maestro-toggle.is-paused .maestro-toggle-label { color: var(--text-faint); }
+
+.maestro-dot-paused {
+  background: var(--text-faint);
+  border: 2px dashed var(--text-faint);
+  width: 12px; height: 12px;
+  background: transparent;
+}
+.maestro-popup-meta {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+}
+.maestro-dot {
+  width: 8px; height: 8px; border-radius: 999px; display: inline-block;
+}
+.maestro-dot-on  { background: var(--running); box-shadow: 0 0 6px var(--running); }
+.maestro-dot-off { background: var(--paused); }
+.maestro-popup-bloat {
+  background: rgba(240, 169, 69, 0.12);
+  border: 1px solid #5a4626;
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--needs);
+}
+.maestro-popup-bloat code {
+  background: var(--bg-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.maestro-popup-reasoning {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-style: italic;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.maestro-popup-skip {
+  color: var(--needs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.maestro-popup-stats { font-size: 11px; }
+.maestro-popup-empty { padding: 18px 6px; text-align: center; }
+.maestro-popup-foot {
+  display: flex; justify-content: space-between;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  font-size: 11px;
+}
+
+.maestro-popup-actions {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.maestro-action {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.maestro-action-head {
+  width: 100%;
+  display: flex; align-items: center; gap: 8px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: 6px 8px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+}
+.maestro-action-head:hover { background: var(--bg-3); }
+.maestro-pill {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.maestro-pill-resume   { background: rgba(47, 191, 113, 0.18); color: var(--running); }
+.maestro-pill-initiate { background: rgba(91, 141, 239, 0.18); color: var(--accent); }
+.maestro-pill-defer    { background: var(--bg-3); color: var(--text-faint); }
+.maestro-action-target {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.maestro-action-conf { margin-left: auto; font-size: 11px; }
+.maestro-action-caret { width: 12px; text-align: center; }
+.maestro-action-body {
+  padding: 0 10px 10px 10px;
+  display: flex; flex-direction: column; gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.maestro-action-rationale { line-height: 1.4; }
+.maestro-action-prompt {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+  color: var(--text);
+}
+.maestro-action-assumptions {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.maestro-assumption {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 6px 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  line-height: 1.4;
+}
+.maestro-action-revert { font-size: 11px; }
