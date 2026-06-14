@@ -36,20 +36,34 @@ LOCK_FILE="$STATE_DIR/tick.lock"
 # Paused flag is shared with the UI (the MaestroChip toggle writes here
 # via the maestro.setPaused IPC). File presence == paused.
 PAUSED_FLAG="$HOME/.baton/maestro/paused"
+# Mode file shared with the UI (maestro.setMode IPC). Contents are
+# the literal "propose-first" or "act-first". Absent → propose-first.
+# Cosmetic at PoC stage; execution gating is v1.x.
+MODE_FILE="$HOME/.baton/maestro/mode"
 mkdir -p "$STATE_DIR" "$HOME/.baton/maestro"
+
+current_mode() {
+  if [[ -s "$MODE_FILE" ]]; then
+    head -1 "$MODE_FILE" | tr -d '[:space:]'
+  else
+    echo "propose-first"
+  fi
+}
 
 # ------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------
 MODE="tick"
+MODE_ARG=""
 case "${1:-}" in
   --reset)  MODE="reset"  ;;
   --status) MODE="status" ;;
   --pause)  MODE="pause"  ;;
   --resume) MODE="resume" ;;
+  --mode)   MODE="set-mode"; MODE_ARG="${2:-}"; shift 2 2>/dev/null || true ;;
   "")       ;;
   *)
-    echo "Usage: $0 [--reset|--status|--pause|--resume]" >&2
+    echo "Usage: $0 [--reset|--status|--pause|--resume|--mode suggest|run]" >&2
     exit 64
     ;;
 esac
@@ -91,6 +105,7 @@ if [[ "$MODE" == "status" ]]; then
   echo "session-id : ${sid:-(unset; next tick will bootstrap)}"
   echo "tick-count : $tc"
   echo "paused     : $([[ -e "$PAUSED_FLAG" ]] && echo "yes ($PAUSED_FLAG)" || echo "no")"
+  echo "mode       : $(current_mode)  (cosmetic at PoC; execution wiring is v1.x)"
   if [[ -n "$sid" ]]; then
     row="$(sqlite3 "$HOME/.baton/baton.db" \
       "SELECT id, backend_id, status, session_kind FROM sessions WHERE claude_session_id='$sid';")"
@@ -110,6 +125,22 @@ fi
 if [[ "$MODE" == "resume" ]]; then
   rm -f "$PAUSED_FLAG"
   echo "Maestro resumed."
+  exit 0
+fi
+
+# Map CLI shorthand to the canonical strings the UI reads/writes.
+if [[ "$MODE" == "set-mode" ]]; then
+  case "$MODE_ARG" in
+    suggest|propose|propose-first) echo "propose-first" > "$MODE_FILE" ;;
+    run|act|act-first)             echo "act-first"     > "$MODE_FILE" ;;
+    "")
+      echo "current mode: $(current_mode)"
+      echo "usage: $0 --mode suggest|run"
+      exit 0
+      ;;
+    *) echo "unknown mode: $MODE_ARG (try: suggest, run)" >&2; exit 64 ;;
+  esac
+  echo "Maestro mode set to: $(current_mode)"
   exit 0
 fi
 

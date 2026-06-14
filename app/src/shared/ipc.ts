@@ -471,6 +471,13 @@ const MaestroSetPausedResponse = z.object({
   /** Echo back the resulting state so the renderer can confirm. */
   paused: z.boolean(),
 });
+
+const MaestroSetModeRequest = z.object({
+  mode: z.enum(['propose-first', 'act-first']),
+});
+const MaestroSetModeResponse = z.object({
+  mode: z.enum(['propose-first', 'act-first']),
+});
 const MaestroGetStateResponse = z.object({
   /** When false the rest of the response is essentially empty —
    *  no PoC state on disk. Render the chip in an "uninitialized"
@@ -494,6 +501,15 @@ const MaestroGetStateResponse = z.object({
    *  script both honor this flag (file at ~/.baton/maestro/paused).
    *  When true the next tick is skipped with an explicit log line. */
   paused:          z.boolean(),
+  /** Maestro mode (PRD F15.2):
+   *  - 'propose-first' (suggest): actions queue in the Inbox for
+   *    human Approve/Reject before any side effects.
+   *  - 'act-first' (run): actions execute immediately under
+   *    checkpoint+revert; the user reviews assumptions after.
+   *  PoC stage: this is a cosmetic flag until execution is wired —
+   *  the chip surfaces it now so the contract is stable when the
+   *  runtime catches up. Default 'propose-first'. */
+  mode:            z.enum(['propose-first', 'act-first']),
   /** True after the bloat threshold was hit and not yet cleared. */
   bloatWarning:    z.boolean(),
   /** Latest plan from poc/maestro/option3-master-session/last-plan.json.
@@ -1284,6 +1300,7 @@ export const ControlVerbs = {
   'usage.list':          { request: UsageListRequest,     response: UsageListResponse },
   'maestro.getState':    { request: MaestroGetStateRequest, response: MaestroGetStateResponse },
   'maestro.setPaused':   { request: MaestroSetPausedRequest, response: MaestroSetPausedResponse },
+  'maestro.setMode':     { request: MaestroSetModeRequest,   response: MaestroSetModeResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },

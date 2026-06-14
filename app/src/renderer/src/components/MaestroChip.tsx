@@ -100,6 +100,16 @@ export function MaestroChip(): JSX.Element | null {
               void refresh();
             }
           }}
+          onSetMode={async (mode) => {
+            if (mode === state.mode) return;
+            setState({ ...state, mode });
+            try {
+              const r = await window.baton.call('maestro.setMode', { mode });
+              setState((s) => (s ? { ...s, mode: r.mode } : s));
+            } catch {
+              void refresh();
+            }
+          }}
         />
       ) : null}
     </div>
@@ -132,10 +142,11 @@ function chipTitle(s: State, nowTick: number): string {
 }
 
 function MaestroPopup(
-  { state, now, onTogglePause }: {
+  { state, now, onTogglePause, onSetMode }: {
     state: State;
     now: number;
     onTogglePause: () => void;
+    onSetMode: (mode: 'propose-first' | 'act-first') => void;
   }
 ): JSX.Element {
   void now;
@@ -198,6 +209,12 @@ function MaestroPopup(
         </div>
       ) : null}
 
+      <ModeSelector
+        mode={state.mode}
+        disabled={state.paused}
+        onChange={onSetMode}
+      />
+
       {plan ? (
         <>
           <div className="maestro-popup-reasoning">{plan.reasoning}</div>
@@ -228,6 +245,54 @@ function MaestroPopup(
         <span>session {state.sessionId ? state.sessionId.slice(0, 8) : '—'}</span>
         {state.lastTickAt ? <span>last tick {fmtRelative(state.lastTickAt)}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function ModeSelector(
+  { mode, disabled, onChange }: {
+    mode: 'propose-first' | 'act-first';
+    disabled: boolean;
+    onChange: (m: 'propose-first' | 'act-first') => void;
+  }
+): JSX.Element {
+  const cosmetic = true; // PoC stage — execution is not wired yet.
+  return (
+    <div
+      className={`maestro-mode-row ${disabled ? 'is-disabled' : ''}`}
+      role="radiogroup"
+      aria-label="Maestro mode"
+    >
+      <div className="maestro-mode-label dim">Mode</div>
+      <div className="maestro-mode-seg">
+        <button
+          type="button"
+          className={`maestro-mode-pill ${mode === 'propose-first' ? 'is-active' : ''}`}
+          role="radio"
+          aria-checked={mode === 'propose-first'}
+          onClick={() => !disabled && onChange('propose-first')}
+          disabled={disabled}
+          title="Propose-first: queue actions for human approval"
+        >
+          suggest
+        </button>
+        <button
+          type="button"
+          className={`maestro-mode-pill ${mode === 'act-first' ? 'is-active' : ''}`}
+          role="radio"
+          aria-checked={mode === 'act-first'}
+          onClick={() => !disabled && onChange('act-first')}
+          disabled={disabled}
+          title="Act-first: execute under checkpoint+revert, user reviews after"
+        >
+          run
+        </button>
+      </div>
+      {cosmetic ? (
+        <div className="maestro-mode-note dim">
+          Execution isn't wired yet — selector is cosmetic.
+        </div>
+      ) : null}
     </div>
   );
 }

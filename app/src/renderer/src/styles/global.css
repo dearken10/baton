@@ -3328,6 +3328,48 @@ button.terminal-tab,
   border-radius: 3px;
   font-size: 11px;
 }
+
+/* Suggest/run segmented control (PRD F15.2 mode). */
+.maestro-mode-row {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.maestro-mode-label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.maestro-mode-seg {
+  display: inline-flex;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 0;
+}
+.maestro-mode-pill {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 12px;
+  border-radius: 999px;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.maestro-mode-pill:hover:not(:disabled) { color: var(--text); }
+.maestro-mode-pill.is-active {
+  background: var(--accent-2);
+  color: var(--accent);
+}
+.maestro-mode-pill:disabled { cursor: not-allowed; opacity: 0.5; }
+.maestro-mode-row.is-disabled .maestro-mode-label { opacity: 0.5; }
+.maestro-mode-note {
+  flex-basis: 100%;
+  font-size: 10px;
+  font-style: italic;
+  color: var(--text-faint);
+}
 .maestro-popup-reasoning {
   background: var(--bg-2);
   border: 1px solid var(--border);

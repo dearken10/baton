@@ -57,7 +57,7 @@ import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
 import { buildUsageList } from '../services/usageList.js';
-import { getMaestroState, setMaestroPaused } from '../services/maestroState.js';
+import { getMaestroState, setMaestroPaused, setMaestroMode } from '../services/maestroState.js';
 import { getDatabase } from '../database/index.js';
 import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
 
@@ -284,6 +284,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'usage.list': async () => ({ items: await buildUsageList() }),
   'maestro.getState': () => getMaestroState(),
   'maestro.setPaused': (req) => setMaestroPaused(req.paused),
+  'maestro.setMode':   (req) => setMaestroMode(req.mode),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);

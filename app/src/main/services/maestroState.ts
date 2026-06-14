@@ -21,6 +21,8 @@ import { app } from 'electron';
 import type { ResponseOf } from '../../shared/ipc.js';
 
 type State = ResponseOf<'maestro.getState'>;
+type Mode = State['mode'];
+const DEFAULT_MODE: Mode = 'propose-first';
 
 interface ActionFromDisk {
   action_id: string;
@@ -57,6 +59,19 @@ const DEFAULT_INTERVAL_MIN = 15;
  *  shell tick script to honor without parsing JSON. */
 function pausedFlagPath(): string {
   return join(homedir(), '.baton', 'maestro', 'paused');
+}
+
+/** Mode file: contains the literal "propose-first" or "act-first".
+ *  Missing or unreadable → DEFAULT_MODE. Same one-line format
+ *  bootstrap-or-tick.sh's --mode flag writes. */
+function modeFilePath(): string {
+  return join(homedir(), '.baton', 'maestro', 'mode');
+}
+
+function readMode(): Mode {
+  const raw = readTextSafe(modeFilePath());
+  if (raw === 'act-first' || raw === 'propose-first') return raw;
+  return DEFAULT_MODE;
 }
 
 function maestroStateDir(): string {
@@ -181,6 +196,7 @@ export function getMaestroState(): State {
     tickIntervalMin,
     daemonRunning: isDaemonRunning(),
     paused: existsSync(pausedFlagPath()),
+    mode: readMode(),
     bloatWarning,
     plan: normalizePlan(planDisk),
   };
@@ -202,6 +218,19 @@ export function setMaestroPaused(paused: boolean): { paused: boolean } {
   }
   cache = null;
   return { paused: existsSync(p) };
+}
+
+/** Set Maestro's operating mode (PRD F15.2). Writes the literal mode
+ *  string to ~/.baton/maestro/mode. The shell script reads the same
+ *  file for `--status` and (eventually) gating execution. */
+export function setMaestroMode(mode: Mode): { mode: Mode } {
+  const p = modeFilePath();
+  try {
+    mkdirSync(join(p, '..'), { recursive: true });
+  } catch { /* dir may already exist */ }
+  writeFileSync(p, mode + '\n');
+  cache = null;
+  return { mode: readMode() };
 }
 
 /** Test helper: drops the cache so a follow-up call re-reads disk. */
