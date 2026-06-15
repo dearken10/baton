@@ -1517,6 +1517,11 @@ export class SessionManager {
           const t0 = Date.now();
           this.promptSubmittedAt.set(event.sessionId, t0);
           trace('USER_PROMPT', { sid: shortSid(event.sessionId), t0 });
+          // Renderer-facing signal: TerminalPane registers a scrollback
+          // marker so the user can jump back to this prompt via the
+          // floating Up/Down buttons. Fire-and-forget — if no renderer
+          // is listening (window closed) the event is dropped harmlessly.
+          emit({ type: 'session.prompt_submitted', sessionId: event.sessionId });
           // Talking to a session implicitly un-snoozes it: the user is
           // clearly engaged with this work again, so the chip should
           // become visible. No-op if not snoozed.

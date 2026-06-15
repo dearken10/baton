@@ -1191,10 +1191,56 @@ button {
      below), so this is what shows through behind the glyphs. */
   background: var(--bg);
   overflow: hidden;
+  /* Positioning context for the absolute-positioned prompt nav
+     buttons (.terminal-prompt-nav). */
+  position: relative;
 }
 .terminal-host .xterm { height: 100%; }
 .terminal-host .xterm-viewport { background: transparent !important; }
 .terminal-host .xterm-screen { background: transparent; }
+
+/* Floating Up/Down buttons for jumping between previous user prompts.
+   Pinned to the bottom-right of the terminal pane, offset enough to
+   clear the xterm scrollbar (~14px on macOS overlay scrollbars).
+   pointer-events on the container is none so the buttons don't block
+   text selection in the empty corner; the buttons themselves re-enable
+   it. */
+.terminal-prompt-nav {
+  position: absolute;
+  right: 18px;
+  bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  pointer-events: none;
+  z-index: 2;
+}
+.terminal-prompt-nav-btn {
+  pointer-events: auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  opacity: 0.7;
+  transition: opacity 100ms;
+}
+.terminal-prompt-nav-btn:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--accent);
+}
+.terminal-prompt-nav-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
 
 /* (Split-layout editor/conversation styles will return in W4 when
    Monaco lands. MVP uses a single terminal-only middle pane.) */

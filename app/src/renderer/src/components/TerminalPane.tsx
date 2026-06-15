@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react';
-import { Terminal } from '@xterm/xterm';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Terminal, type IMarker } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SerializeAddon } from '@xterm/addon-serialize';
@@ -59,6 +59,19 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
   // without re-creating the addon on every render.
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
+
+  // Scrollback markers for the user's previous prompts to the agent.
+  // Each UserPromptSubmit hook fires session.prompt_submitted; we
+  // register an xterm IMarker at the current cursor row. IMarker auto-
+  // tracks its line as scrollback trims, and reports line=-1 once the
+  // line itself is dropped — we filter those out at click time.
+  //
+  // navIndex is the cursor INTO the marker array for Up/Down navigation:
+  //   navIndex === markers.length → "at the bottom" (newest); Up moves back
+  //   navIndex === 0              → "at the top" (oldest); Down moves forward
+  const markersRef = useRef<IMarker[]>([]);
+  const [markerCount, setMarkerCount] = useState(0);
+  const [navIndex, setNavIndex] = useState(0);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -167,6 +180,24 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       void window.baton.call('pty.resize', { sessionId, cols, rows });
     });
 
+    // Listen for prompt-submitted events for THIS session and register
+    // a marker at the line the cursor was on when the user hit enter.
+    // The marker survives scrollback trims; if the underlying line gets
+    // dropped, IMarker.line goes to -1 and we filter it at nav time.
+    const offPrompt = window.baton.onEvent((event) => {
+      if (event.type !== 'session.prompt_submitted') return;
+      if (event.sessionId !== sessionId) return;
+      // registerMarker(0) anchors at the current cursor row in the
+      // active buffer (baseY + cursorY in absolute terms).
+      const marker = term.registerMarker(0);
+      if (!marker) return;
+      markersRef.current.push(marker);
+      setMarkerCount(markersRef.current.length);
+      // After a new prompt, snap nav cursor past the end so the next
+      // Up click goes to the newest prompt, not the one before it.
+      setNavIndex(markersRef.current.length);
+    });
+
     // Subscribe to pty data for this session only.
     // IMPORTANT: pass a Uint8Array (raw bytes), not a string. xterm.write
     // treats a string as UTF-16 — multi-byte UTF-8 box-drawing chars
@@ -220,15 +251,56 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       saveSnapshot();
       window.removeEventListener('resize', onWinResize);
       ro.disconnect();
+      offPrompt();
       offData();
       dataSub.dispose();
       resizeSub.dispose();
       try { webLinks.dispose(); } catch { /* ignore */ }
+      // Dispose markers so their hold on buffer rows is released. The
+      // ref is re-initialised when the next session mounts (the parent
+      // remounts via key={sessionId}).
+      for (const m of markersRef.current) {
+        try { m.dispose(); } catch { /* already disposed */ }
+      }
+      markersRef.current = [];
       term.dispose();
       termRef.current = null;
       void webglOk; // silence the lint; useful for future telemetry
     };
   }, [sessionId]);
+
+  /** Step the nav cursor by ±1 (or to the boundary), skipping markers
+   *  whose underlying line has been trimmed (line === -1), and scroll
+   *  the terminal so that prompt is visible. */
+  const jumpBy = useCallback((delta: -1 | 1): void => {
+    const term = termRef.current;
+    if (!term) return;
+    const markers = markersRef.current;
+    if (markers.length === 0) return;
+    let idx = navIndex + delta;
+    // Skip trimmed markers in the requested direction.
+    while (idx >= 0 && idx < markers.length && markers[idx].line < 0) {
+      idx += delta;
+    }
+    if (idx < 0 || idx >= markers.length) return;
+    setNavIndex(idx);
+    // scrollToLine takes an absolute buffer line. Aim a couple of rows
+    // ABOVE the prompt so the user sees a little context (the agent's
+    // last output line) without losing the prompt off the top edge.
+    const target = Math.max(0, markers[idx].line - 2);
+    try { term.scrollToLine(target); } catch { /* terminal disposed */ }
+  }, [navIndex]);
+
+  // Live counts of how many usable markers are above/below the cursor,
+  // used to disable the buttons when there's nowhere to go. Recomputed
+  // each render so trimmed markers (line === -1) don't get counted.
+  const markers = markersRef.current;
+  const hasPrev = navIndex > 0 && markers.slice(0, navIndex).some((m) => m.line >= 0);
+  const hasNext = navIndex < markers.length - 1
+    && markers.slice(navIndex + 1).some((m) => m.line >= 0);
+  // markerCount is only read so React re-renders when a new marker is
+  // pushed; the actual data we read comes from the ref.
+  void markerCount;
 
   function acceptsDrop(e: React.DragEvent<HTMLDivElement>): boolean {
     const types = e.dataTransfer.types;
@@ -276,7 +348,30 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       ref={hostRef}
       onDragOver={onDragOver}
       onDrop={onDrop}
-    />
+    >
+      <div className="terminal-prompt-nav">
+        <button
+          type="button"
+          className="btn ghost terminal-prompt-nav-btn"
+          onClick={() => jumpBy(-1)}
+          disabled={!hasPrev}
+          aria-label="Jump to previous prompt"
+          title="Previous prompt"
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          className="btn ghost terminal-prompt-nav-btn"
+          onClick={() => jumpBy(1)}
+          disabled={!hasNext}
+          aria-label="Jump to next prompt"
+          title="Next prompt"
+        >
+          ▼
+        </button>
+      </div>
+    </div>
   );
 }
 

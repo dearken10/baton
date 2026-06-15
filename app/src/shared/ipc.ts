@@ -948,6 +948,15 @@ const SessionRefreshedEvent = EventEnvelope.extend({
   session: Session,
 });
 
+/** Fired when a UserPromptSubmit hook arrives for a session — i.e. the
+ *  user hit enter on a prompt to the agent. TerminalPane uses it to
+ *  register a scrollback marker so the user can later jump back to the
+ *  prompt via the floating Up/Down buttons. */
+const SessionPromptSubmittedEvent = EventEnvelope.extend({
+  type: z.literal('session.prompt_submitted'),
+  sessionId: SessionId,
+});
+
 const ConnectionAddedEvent = EventEnvelope.extend({
   type: z.literal('connection.added'),
   profile: ConnectionProfile,
@@ -979,6 +988,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionRenamedEvent,
   SessionTokensUpdatedEvent,
   SessionRefreshedEvent,
+  SessionPromptSubmittedEvent,
   ConnectionAddedEvent,
   ConnectionUpdatedEvent,
   ConnectionRemovedEvent,
