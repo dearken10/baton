@@ -1517,6 +1517,10 @@ export class SessionManager {
           const t0 = Date.now();
           this.promptSubmittedAt.set(event.sessionId, t0);
           trace('USER_PROMPT', { sid: shortSid(event.sessionId), t0 });
+          // Renderer-facing nudge: HistoryPanel re-fetches promptHistory
+          // when this fires. The transcript file is the source of truth,
+          // so the event carries no payload — just a "refresh now" ping.
+          emit({ type: 'session.prompt_submitted', sessionId: event.sessionId });
           // Talking to a session implicitly un-snoozes it: the user is
           // clearly engaged with this work again, so the chip should
           // become visible. No-op if not snoozed.
