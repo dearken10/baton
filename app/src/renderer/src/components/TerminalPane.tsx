@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Terminal, type IMarker } from '@xterm/xterm';
+import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SerializeAddon } from '@xterm/addon-serialize';
@@ -35,6 +35,15 @@ function xtermThemeFor(t: Theme): {
 /** How often to snapshot the visible terminal to disk. */
 const SCROLLBACK_SAVE_MS = 10_000;
 
+/** Absolute buffer line numbers where the user submitted each prompt
+ *  (per session). Lives at module scope so it survives TerminalPane
+ *  unmount/remount — sessions transition through 'done' on respawn /
+ *  permission toggle, which drops them from the parent's liveSessions
+ *  filter and unmounts us. xterm's IMarker would die with the Terminal,
+ *  so we trade auto-tracking on scrollback rotation for the feature
+ *  actually working across status churn. */
+const promptLinesBySession = new Map<string, number[]>();
+
 interface Props {
   sessionId: string;
 }
@@ -60,18 +69,17 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
 
-  // Scrollback markers for the user's previous prompts to the agent.
-  // Each UserPromptSubmit hook fires session.prompt_submitted; we
-  // register an xterm IMarker at the current cursor row. IMarker auto-
-  // tracks its line as scrollback trims, and reports line=-1 once the
-  // line itself is dropped — we filter those out at click time.
-  //
-  // navIndex is the cursor INTO the marker array for Up/Down navigation:
-  //   navIndex === markers.length → "at the bottom" (newest); Up moves back
-  //   navIndex === 0              → "at the top" (oldest); Down moves forward
-  const markersRef = useRef<IMarker[]>([]);
-  const [markerCount, setMarkerCount] = useState(0);
-  const [navIndex, setNavIndex] = useState(0);
+  // Index INTO promptLinesBySession[sessionId] for Up/Down navigation:
+  //   navIndex === lines.length → "at the bottom" (newest); Up moves back
+  //   navIndex === 0            → "at the top" (oldest); Down moves forward
+  // Lazy initialiser so a remount preserves the user's place at the end
+  // of the persisted history rather than snapping to 0.
+  const [navIndex, setNavIndex] = useState(
+    () => promptLinesBySession.get(sessionId)?.length ?? 0,
+  );
+  // Render-trigger nonce — bumped whenever we mutate the persisted
+  // line array for this session so React re-evaluates hasPrev/hasNext.
+  const [, setLinesNonce] = useState(0);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -180,32 +188,21 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       void window.baton.call('pty.resize', { sessionId, cols, rows });
     });
 
-    // Listen for prompt-submitted events for THIS session and register
-    // a marker at the line the cursor was on when the user hit enter.
-    // The marker survives scrollback trims; if the underlying line gets
-    // dropped, IMarker.line goes to -1 and we filter it at nav time.
+    // Listen for prompt-submitted events for THIS session and append
+    // the line number the cursor was on to the persisted array. Stored
+    // at module scope so an unmount/remount (status churn dropping us
+    // from liveSessions) doesn't lose the history.
     const offPrompt = window.baton.onEvent((event) => {
       if (event.type !== 'session.prompt_submitted') return;
       if (event.sessionId !== sessionId) return;
-      // TEMP DIAGNOSTIC — remove after we confirm the chain works.
       const buf = term.buffer.active;
-      // eslint-disable-next-line no-console
-      console.log('[prompt-nav] event received', {
-        sessionId,
-        bufferType: buf.type,
-        baseY: buf.baseY,
-        cursorY: buf.cursorY,
-        length: buf.length,
-      });
-      const marker = term.registerMarker(0);
-      // eslint-disable-next-line no-console
-      console.log('[prompt-nav] registerMarker →', marker
-        ? { line: marker.line, isDisposed: marker.isDisposed }
-        : 'undefined');
-      if (!marker) return;
-      markersRef.current.push(marker);
-      setMarkerCount(markersRef.current.length);
-      setNavIndex(markersRef.current.length);
+      const line = buf.baseY + buf.cursorY;
+      const lines = promptLinesBySession.get(sessionId) ?? [];
+      lines.push(line);
+      promptLinesBySession.set(sessionId, lines);
+      setLinesNonce((n) => n + 1);
+      // Snap the nav cursor past the end so Up goes to the newest prompt.
+      setNavIndex(lines.length);
     });
 
     // Subscribe to pty data for this session only.
@@ -266,60 +263,42 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       dataSub.dispose();
       resizeSub.dispose();
       try { webLinks.dispose(); } catch { /* ignore */ }
-      // Dispose markers so their hold on buffer rows is released. The
-      // ref is re-initialised when the next session mounts (the parent
-      // remounts via key={sessionId}).
-      for (const m of markersRef.current) {
-        try { m.dispose(); } catch { /* already disposed */ }
-      }
-      markersRef.current = [];
+      // Note: promptLinesBySession is INTENTIONALLY not cleared here.
+      // The whole reason we moved it to module scope was to survive
+      // unmount. session.deleted is the right place to evict, not here.
       term.dispose();
       termRef.current = null;
       void webglOk; // silence the lint; useful for future telemetry
     };
   }, [sessionId]);
 
-  /** Step the nav cursor by ±1 (or to the boundary), skipping markers
-   *  whose underlying line has been trimmed (line === -1), and scroll
-   *  the terminal so that prompt is visible. */
+  /** Step the nav cursor by ±1, clamp to the persisted-line bounds, and
+   *  scroll the terminal so the corresponding prompt comes into view. */
   const jumpBy = useCallback((delta: -1 | 1): void => {
     const term = termRef.current;
     if (!term) return;
-    const markers = markersRef.current;
-    if (markers.length === 0) return;
-    let idx = navIndex + delta;
-    // Skip trimmed markers in the requested direction.
-    while (idx >= 0 && idx < markers.length && markers[idx].line < 0) {
-      idx += delta;
-    }
-    if (idx < 0 || idx >= markers.length) return;
+    const lines = promptLinesBySession.get(sessionId) ?? [];
+    if (lines.length === 0) return;
+    const idx = navIndex + delta;
+    if (idx < 0 || idx >= lines.length) return;
     setNavIndex(idx);
-    // scrollToLine takes an absolute buffer line. Aim a couple of rows
-    // ABOVE the prompt so the user sees a little context (the agent's
-    // last output line) without losing the prompt off the top edge.
-    const target = Math.max(0, markers[idx].line - 2);
+    // Aim a couple of rows ABOVE the prompt so the user sees a little
+    // context (the agent's last output line) without losing the prompt
+    // off the top edge. Clamp to the current buffer length so a stored
+    // line past the current end (rare: scrollback re-saved smaller)
+    // just snaps to the bottom rather than throwing.
+    const buf = term.buffer.active;
+    const target = Math.max(0, Math.min(lines[idx] - 2, buf.length - 1));
     try { term.scrollToLine(target); } catch { /* terminal disposed */ }
-  }, [navIndex]);
+  }, [navIndex, sessionId]);
 
-  // Live counts of how many usable markers are above/below the cursor,
-  // used to disable the buttons when there's nowhere to go. Recomputed
-  // each render so trimmed markers (line === -1) don't get counted.
-  const markers = markersRef.current;
-  const hasPrev = navIndex > 0 && markers.slice(0, navIndex).some((m) => m.line >= 0);
-  const hasNext = navIndex < markers.length - 1
-    && markers.slice(navIndex + 1).some((m) => m.line >= 0);
-  // markerCount is only read so React re-renders when a new marker is
-  // pushed; the actual data we read comes from the ref.
-  void markerCount;
-  // TEMP DIAGNOSTIC — log button state on every render.
-  // eslint-disable-next-line no-console
-  console.log('[prompt-nav] render', {
-    markerCount,
-    markersLength: markers.length,
-    navIndex,
-    hasPrev,
-    hasNext,
-  });
+  // Live counts of how many prompts are above/below the cursor. The
+  // line values themselves are read from the module-level map; the
+  // unused destructure subscribes the render to setLinesNonce so a new
+  // push triggers re-evaluation.
+  const linesForSession = promptLinesBySession.get(sessionId) ?? [];
+  const hasPrev = navIndex > 0;
+  const hasNext = navIndex < linesForSession.length - 1;
 
   function acceptsDrop(e: React.DragEvent<HTMLDivElement>): boolean {
     const types = e.dataTransfer.types;
