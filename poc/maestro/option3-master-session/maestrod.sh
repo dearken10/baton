@@ -75,14 +75,18 @@ fi
 # by spawn + kill on this pid.
 PID_FILE="$LOG_DIR/daemon.pid"
 
-# If another daemon already owns the pid file, bail.
+# If another daemon already owns the pid file, bail. Skip the self
+# case: if the file contains our own pid we ARE the legitimate one
+# (the parent that spawned us may have pre-written; previously a
+# bug, now defensive). Without this guard a parent pre-write makes
+# us mis-detect ourselves and suicide on startup.
 if [[ -s "$PID_FILE" ]]; then
   existing="$(cat "$PID_FILE" 2>/dev/null || echo "")"
-  if [[ -n "$existing" ]] && kill -0 "$existing" 2>/dev/null; then
+  if [[ -n "$existing" ]] && [[ "$existing" != "$$" ]] && kill -0 "$existing" 2>/dev/null; then
     echo "$(date -Iseconds) refusing to start: daemon already running pid=$existing" >&2
     exit 0
   fi
-  rm -f "$PID_FILE"   # stale
+  rm -f "$PID_FILE"   # stale OR our own pre-write
 fi
 
 echo "$$" > "$PID_FILE"

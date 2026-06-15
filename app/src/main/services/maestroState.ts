@@ -191,11 +191,14 @@ function spawnDaemon(): { pid: number | null; reason?: string } {
       },
     });
     proc.unref();
-    // The daemon writes its OWN pid file; we don't need to. But if
-    // the daemon hasn't written it yet by the time the chip polls,
-    // the chip would briefly show "off." Write it now so the next
-    // getState() sees the correct state immediately.
-    if (proc.pid) writeFileSync(daemonPidPath(), String(proc.pid));
+    // IMPORTANT: do NOT pre-write proc.pid to the daemon pid file.
+    // The daemon's own duplicate-instance guard reads that file,
+    // checks `kill -0 <pid>`, and if it succeeds bails with
+    // "refusing to start: daemon already running." Pre-writing
+    // means the daemon mistakes its OWN pid for a rival's and
+    // suicides on startup. Let the daemon's lifecycle trap write
+    // the pid itself (which it does as its first action). The
+    // chip's 5 s poll will pick it up within a tick or two.
     return { pid: proc.pid ?? null };
   } catch (e) {
     return { pid: null, reason: (e as Error).message };
