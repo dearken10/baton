@@ -366,7 +366,11 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
         <button
           type="button"
           className="btn ghost terminal-prompt-nav-btn"
-          onClick={() => jumpBy(-1)}
+          onClick={() => {
+            // eslint-disable-next-line no-console
+            console.log('[prompt-nav] CLICK up', { hasPrev, navIndex });
+            jumpBy(-1);
+          }}
           disabled={!hasPrev}
           aria-label="Jump to previous prompt"
           title="Previous prompt"
@@ -376,7 +380,11 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
         <button
           type="button"
           className="btn ghost terminal-prompt-nav-btn"
-          onClick={() => jumpBy(1)}
+          onClick={() => {
+            // eslint-disable-next-line no-console
+            console.log('[prompt-nav] CLICK down', { hasNext, navIndex });
+            jumpBy(1);
+          }}
           disabled={!hasNext}
           aria-label="Jump to next prompt"
           title="Next prompt"
