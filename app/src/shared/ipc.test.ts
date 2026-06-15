@@ -70,6 +70,7 @@ describe('control verb registry', () => {
         "session.delete",
         "session.kill",
         "session.list",
+        "session.promptHistory",
         "session.rename",
         "session.reorder",
         "session.respawn",

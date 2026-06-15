@@ -1381,6 +1381,51 @@ button {
   outline: 1px solid var(--accent);
   outline-offset: -1px;
 }
+
+/* Prompt history list — one row per past user prompt. The whole row
+   is a button so a click copies the prompt to the clipboard. */
+.history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 0;
+}
+.history-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+}
+.history-row:hover { background: var(--bg-2); border-left-color: var(--accent); }
+.history-row-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+.history-ts { font-variant-numeric: tabular-nums; }
+.history-copy-hint { opacity: 0; transition: opacity 100ms; }
+.history-row:hover .history-copy-hint { opacity: 1; }
+.history-text {
+  color: var(--text-dim);
+  line-height: 1.4;
+  /* Two-line clamp keeps the row scannable; full text goes to clipboard
+     on click, so we don't lose anything by truncating visually. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.history-row:hover .history-text { color: var(--text); }
 .tree-caret {
   display: inline-block;
   width: 10px;

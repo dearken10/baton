@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
 import { FilesPanel } from './FilesPanel.js';
 import { GitPanel } from './GitPanel.js';
+import { HistoryPanel } from './HistoryPanel.js';
 import { SearchPanel } from './SearchPanel.js';
 
-type Tab = 'files' | 'search' | 'git';
+type Tab = 'files' | 'search' | 'git' | 'history';
 
 const REFRESH_MS = 3000;
 
@@ -63,6 +64,12 @@ export function RightColumn(): JSX.Element {
         >
           ⎇ Git
         </button>
+        <button
+          className={`right-tab ${tab === 'history' ? 'active' : ''}`}
+          onClick={() => setTab('history')}
+        >
+          💬 History
+        </button>
         {isRemote && selectedConnection ? (
           <span
             className={`conn-chip ${remoteHealthy ? 'ok' : 'warn'}`}
@@ -108,6 +115,8 @@ export function RightColumn(): JSX.Element {
             sessionId={selected.id}
             worktreePath={selected.worktreePath}
           />
+        ) : tab === 'history' ? (
+          <HistoryPanel sessionId={selected.id} />
         ) : (
           <GitPanel
             sessionId={selected.id}

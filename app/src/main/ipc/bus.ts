@@ -39,6 +39,7 @@ import {
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
+import { readPromptHistory } from '../services/promptHistory.js';
 import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
@@ -296,6 +297,20 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     }
     const report = await readGitStatus(fs, worktreePath);
     return report;
+  },
+  'session.promptHistory': async (req) => {
+    // Find the row; if it's gone (deleted in a race, or never existed)
+    // just return an empty list rather than throwing — the renderer
+    // treats [] as "no history yet". listAll() is small enough.
+    const session = getSessionManager().listAll().find((s) => s.id === req.sessionId);
+    if (!session) return { prompts: [] };
+    // Remote-session transcripts live on the remote host (under that
+    // user's ~/.claude). Reading them needs an SSH probe we haven't
+    // built; for now return [] for non-local sessions rather than
+    // pretending the local file applies.
+    const project = getProject(session.projectId);
+    if (project && project.connectionId !== 'local') return { prompts: [] };
+    return { prompts: readPromptHistory(session) };
   },
   'worktree.list': async (req) => {
     const project = getProject(req.projectId);

@@ -458,6 +458,22 @@ const WorktreeGitStatusResponse = z.object({
   dirty: z.boolean(),
 });
 
+/** Per-session list of prompts the user has sent the agent, oldest →
+ *  newest. Sourced from the agent's transcript file (Claude JSONL or
+ *  Codex rollout), not from anything we record ourselves — so it
+ *  survives restarts and is correct for sessions that existed before
+ *  this feature shipped. Shell sessions return []. */
+const SessionPromptHistoryRequest = z.object({ sessionId: SessionId });
+const SessionPromptHistoryEntry = z.object({
+  /** Wall-clock ms when the prompt was logged. 0 if the transcript
+   *  didn't carry a timestamp (defensive — current formats always do). */
+  ts: z.number(),
+  text: z.string(),
+});
+const SessionPromptHistoryResponse = z.object({
+  prompts: z.array(SessionPromptHistoryEntry),
+});
+
 /** Open a file or dir in the system default application. */
 const ShellOpenPathRequest = z.object({ absPath: z.string().min(1) });
 const ShellOpenPathResponse = z.object({ ok: z.boolean() });
@@ -806,6 +822,7 @@ export const ControlVerbs = {
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
   'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },
   'worktree.gitStatus':    { request: WorktreeGitStatusRequest,   response: WorktreeGitStatusResponse },
+  'session.promptHistory': { request: SessionPromptHistoryRequest, response: SessionPromptHistoryResponse },
   'worktree.list':         { request: WorktreeListRequest,        response: WorktreeListResponse },
   'worktree.listOrphans':  { request: WorktreeListOrphansRequest, response: WorktreeListOrphansResponse },
   'worktree.removeOrphan': { request: WorktreeRemoveOrphanRequest, response: WorktreeRemoveOrphanResponse },
@@ -948,6 +965,15 @@ const SessionRefreshedEvent = EventEnvelope.extend({
   session: Session,
 });
 
+/** Fired when the agent's UserPromptSubmit hook reports a new prompt
+ *  from the user. The HistoryPanel listens for this and re-fetches
+ *  session.promptHistory; no payload is needed because the transcript
+ *  is the source of truth. */
+const SessionPromptSubmittedEvent = EventEnvelope.extend({
+  type: z.literal('session.prompt_submitted'),
+  sessionId: SessionId,
+});
+
 const ConnectionAddedEvent = EventEnvelope.extend({
   type: z.literal('connection.added'),
   profile: ConnectionProfile,
@@ -979,6 +1005,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionRenamedEvent,
   SessionTokensUpdatedEvent,
   SessionRefreshedEvent,
+  SessionPromptSubmittedEvent,
   ConnectionAddedEvent,
   ConnectionUpdatedEvent,
   ConnectionRemovedEvent,
