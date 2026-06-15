@@ -325,6 +325,41 @@ export function setMaestroMode(mode: Mode): { mode: Mode } {
   return { mode: readMode() };
 }
 
+/** Reconcile what's on disk against what's running. Called once at
+ *  app startup so the chip's "active" state matches reality: if the
+ *  user's last session ended without explicit pause but the daemon
+ *  isn't running (machine reboot, daemon crashed, our test killed it,
+ *  whatever), spawn it now.
+ *
+ *  Conversely, a stale "paused" + a running daemon shouldn't happen —
+ *  but if it ever did, we'd kill the daemon to honor the flag.
+ *
+ *  Best-effort: failures log but don't throw. The PoC is opt-in;
+ *  startup should never block on it. */
+export function reconcileMaestroOnStartup(): {
+  acted: 'spawned' | 'killed' | 'noop';
+  reason?: string;
+} {
+  const stateDir = maestroStateDir();
+  // If the PoC isn't checked out (no state dir, no script), do nothing.
+  if (!existsSync(stateDir) && !existsSync(maestrodScriptPath())) {
+    return { acted: 'noop', reason: 'PoC not installed' };
+  }
+  const paused = existsSync(pausedFlagPath());
+  const running = isDaemonRunning();
+  if (!paused && !running) {
+    const r = spawnDaemon();
+    return r.pid
+      ? { acted: 'spawned', reason: `pid=${r.pid}` }
+      : { acted: 'noop', reason: r.reason ?? 'spawn failed' };
+  }
+  if (paused && running) {
+    stopDaemon();
+    return { acted: 'killed', reason: 'paused flag set' };
+  }
+  return { acted: 'noop' };
+}
+
 /** Test helper: drops the cache so a follow-up call re-reads disk. */
 export function _resetMaestroStateCacheForTests(): void {
   cache = null;

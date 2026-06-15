@@ -100,6 +100,15 @@ export function MaestroChip(): JSX.Element | null {
               void refresh();
             }
           }}
+          onRestartDaemon={async () => {
+            // "Restart" = setPaused(false) again, which calls
+            // spawnDaemon if not already running. Idempotent.
+            try {
+              await window.baton.call('maestro.setPaused', { paused: false });
+            } finally {
+              void refresh();
+            }
+          }}
           onSetMode={async (mode) => {
             if (mode === state.mode) return;
             setState({ ...state, mode });
@@ -116,8 +125,10 @@ export function MaestroChip(): JSX.Element | null {
   );
 }
 
-function chipTone(s: State): 'ok' | 'warn' | 'idle' | 'off' | 'paused' {
+function chipTone(s: State): 'ok' | 'warn' | 'idle' | 'off' | 'paused' | 'desync' {
   if (s.paused) return 'paused';
+  // Active but no daemon = something's wrong. Surface louder than warn.
+  if (!s.paused && !s.daemonRunning && s.tickCount > 0) return 'desync';
   if (s.bloatWarning) return 'warn';
   if (!s.daemonRunning && s.tickCount === 0) return 'off';
   if (!s.daemonRunning) return 'idle';
@@ -126,6 +137,7 @@ function chipTone(s: State): 'ok' | 'warn' | 'idle' | 'off' | 'paused' {
 
 function chipBadge(s: State): string {
   if (s.paused) return 'paused';
+  if (!s.paused && !s.daemonRunning && s.tickCount > 0) return 'stopped';
   if (!s.daemonRunning && s.tickCount === 0) return 'off';
   const acts = s.plan?.actions?.filter((a) => a.kind !== 'defer').length ?? 0;
   return `${acts}/${s.tickCount}`;
@@ -134,6 +146,9 @@ function chipBadge(s: State): string {
 function chipTitle(s: State, nowTick: number): string {
   void nowTick;
   if (s.paused) return 'Maestro — paused (click to resume)';
+  if (!s.paused && !s.daemonRunning && s.tickCount > 0) {
+    return "Maestro — active but daemon isn't running (click to Restart)";
+  }
   if (!s.daemonRunning && s.tickCount === 0) {
     return 'Maestro — off (click to activate)';
   }
@@ -145,10 +160,11 @@ function chipTitle(s: State, nowTick: number): string {
 }
 
 function MaestroPopup(
-  { state, now, onTogglePause, onSetMode }: {
+  { state, now, onTogglePause, onRestartDaemon, onSetMode }: {
     state: State;
     now: number;
     onTogglePause: () => void;
+    onRestartDaemon: () => void;
     onSetMode: (mode: 'propose-first' | 'act-first') => void;
   }
 ): JSX.Element {
@@ -186,22 +202,45 @@ function MaestroPopup(
         </button>
       </div>
 
-      <div className="maestro-popup-meta">
-        <span
-          className={`maestro-dot maestro-dot-${
-            state.paused ? 'paused' : state.daemonRunning ? 'on' : 'off'
-          }`}
-          aria-hidden
-        />
-        <span>
-          {state.paused
-            ? 'Paused — no ticks will fire'
-            : state.daemonRunning
-              ? 'Daemon running'
-              : 'Daemon off'}
-          {!state.paused ? <> · every {state.tickIntervalMin}m</> : null}
-        </span>
-      </div>
+      {/* Daemon-status row. Four shapes:
+            paused                   "Paused — no ticks will fire"
+            active, running          "Daemon running · every 15m"
+            active, not running      "Active but daemon isn't running" + Restart
+            inactive (only valid       (impossible — covered above)
+              in the desync case)
+       */}
+      {(() => {
+        const desync = !state.paused && !state.daemonRunning;
+        return (
+          <div className={`maestro-popup-meta ${desync ? 'is-desync' : ''}`}>
+            <span
+              className={`maestro-dot maestro-dot-${
+                state.paused ? 'paused'
+                : state.daemonRunning ? 'on'
+                : 'desync'
+              }`}
+              aria-hidden
+            />
+            <span className="maestro-popup-meta-text">
+              {state.paused
+                ? 'Paused — no ticks will fire'
+                : state.daemonRunning
+                  ? <>Daemon running <span className="dim">· every {state.tickIntervalMin}m</span></>
+                  : <><strong>Active but daemon isn't running.</strong> No ticks will fire.</>}
+            </span>
+            {desync ? (
+              <button
+                type="button"
+                className="maestro-popup-restart"
+                onClick={onRestartDaemon}
+                title="Spawn the daemon now"
+              >
+                Restart
+              </button>
+            ) : null}
+          </div>
+        );
+      })()}
 
       {/* Promoted next-tick row. Only shown when there's a useful
           countdown to surface (daemon running + not paused + we know

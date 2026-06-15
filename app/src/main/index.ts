@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 
 import { registerControlBus } from './ipc/bus.js';
+import { reconcileMaestroOnStartup } from './services/maestroState.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { getSessionManager } from './services/sessionManager.js';
 import { addProject } from './services/projectStore.js';
@@ -267,6 +268,19 @@ app.whenReady().then(() => {
   // Warm any saved SSH connections so the dropdown badges show
   // real status the first time the user opens AddProjectDialog.
   warmAllConnections();
+
+  // Maestro (PRD F15 PoC): if the user's last state was "active"
+  // (no paused flag) but no daemon is running (crash, reboot, manual
+  // kill), spawn one. The reverse — paused flag with a live daemon —
+  // gets cleaned up the same way. Best-effort; logs but never throws.
+  try {
+    const r = reconcileMaestroOnStartup();
+    if (r.acted !== 'noop') {
+      console.log(`[maestro] startup reconcile: ${r.acted} (${r.reason ?? ''})`);
+    }
+  } catch (e) {
+    console.warn('[maestro] startup reconcile failed:', e);
+  }
 
   createWindow();
 
