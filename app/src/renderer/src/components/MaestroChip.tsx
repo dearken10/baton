@@ -135,9 +135,12 @@ function chipTitle(s: State, nowTick: number): string {
   void nowTick;
   if (s.paused) return 'Maestro — paused (click to resume)';
   if (!s.daemonRunning && s.tickCount === 0) {
-    return 'Maestro — not running (./bootstrap-or-tick.sh to start)';
+    return 'Maestro — off (click to activate)';
   }
-  const next = s.nextTickEtaAt ? ` · next ${fmtCountdown(s.nextTickEtaAt)}` : '';
+  if (!s.daemonRunning) {
+    return `Maestro — daemon off · tick ${s.tickCount}`;
+  }
+  const next = s.nextTickEtaAt ? ` · next tick in ${fmtCountdown(s.nextTickEtaAt)}` : '';
   return `Maestro — tick ${s.tickCount}${next}`;
 }
 
@@ -198,10 +201,14 @@ function MaestroPopup(
               : 'Daemon off'}
           {!state.paused ? <> · every {state.tickIntervalMin}m</> : null}
         </span>
-        {state.nextTickEtaAt && state.daemonRunning && !state.paused ? (
-          <span className="dim"> · next {fmtCountdown(state.nextTickEtaAt)}</span>
-        ) : null}
       </div>
+
+      {/* Promoted next-tick row. Only shown when there's a useful
+          countdown to surface (daemon running + not paused + we know
+          when the last tick fired). */}
+      {state.nextTickEtaAt && state.daemonRunning && !state.paused ? (
+        <NextTickRow nextTickEtaAt={state.nextTickEtaAt} />
+      ) : null}
 
       {state.bloatWarning ? (
         <div className="maestro-popup-bloat">
@@ -245,6 +252,28 @@ function MaestroPopup(
         <span>session {state.sessionId ? state.sessionId.slice(0, 8) : '—'}</span>
         {state.lastTickAt ? <span>last tick {fmtRelative(state.lastTickAt)}</span> : null}
       </div>
+    </div>
+  );
+}
+
+function NextTickRow({ nextTickEtaAt }: { nextTickEtaAt: string }): JSX.Element {
+  // Re-render every second so the countdown is live while the popup
+  // is open. (Tick prop on the parent already drives this; we just
+  // read it transitively via Date.now() at render time.)
+  const ms = Date.parse(nextTickEtaAt) - Date.now();
+  const overdue = ms <= 0;
+  const t = new Date(nextTickEtaAt);
+  const hhmm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+  return (
+    <div
+      className={`maestro-nexttick ${overdue ? 'is-overdue' : ''}`}
+      title={`Scheduled at ${t.toLocaleString()}`}
+    >
+      <span className="maestro-nexttick-label">Next tick</span>
+      <span className="maestro-nexttick-value">
+        {overdue ? 'overdue (any moment)' : `in ${fmtCountdown(nextTickEtaAt)}`}
+      </span>
+      <span className="maestro-nexttick-at dim">· at {hhmm}</span>
     </div>
   );
 }

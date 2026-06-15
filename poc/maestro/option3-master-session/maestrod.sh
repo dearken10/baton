@@ -70,12 +70,38 @@ fi
 # ------------------------------------------------------------------
 # Lifecycle
 # ------------------------------------------------------------------
+# Pid file shared with the UI chip (maestro.getState reads it). The
+# chip's on/off toggle (maestro.setPaused) starts/stops this daemon
+# by spawn + kill on this pid.
+PID_FILE="$LOG_DIR/daemon.pid"
+
+# If another daemon already owns the pid file, bail.
+if [[ -s "$PID_FILE" ]]; then
+  existing="$(cat "$PID_FILE" 2>/dev/null || echo "")"
+  if [[ -n "$existing" ]] && kill -0 "$existing" 2>/dev/null; then
+    echo "$(date -Iseconds) refusing to start: daemon already running pid=$existing" >&2
+    exit 0
+  fi
+  rm -f "$PID_FILE"   # stale
+fi
+
+echo "$$" > "$PID_FILE"
+
 SHUTDOWN=0
 shutdown() {
   SHUTDOWN=1
   echo "$(date -Iseconds) shutdown requested; finishing current tick before exit"
 }
+cleanup() {
+  # Only remove the pid file if it still points at us. Defense against
+  # a race where another daemon already replaced it.
+  if [[ -s "$PID_FILE" ]] && [[ "$(cat "$PID_FILE")" == "$$" ]]; then
+    rm -f "$PID_FILE"
+  fi
+  echo "$(date -Iseconds) maestrod down"
+}
 trap shutdown SIGINT SIGTERM
+trap cleanup  EXIT
 
 echo "$(date -Iseconds) maestrod up  interval=${INTERVAL_MIN}m  jitter=±${JITTER_SEC}s  pid=$$"
 
@@ -110,4 +136,4 @@ while (( SHUTDOWN == 0 )); do
   done
 done
 
-echo "$(date -Iseconds) maestrod down"
+# `cleanup` trap above logs "maestrod down" and removes the pid file.

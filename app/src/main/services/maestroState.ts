@@ -13,9 +13,10 @@
  * when the popup is open.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync, openSync, closeSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import { app } from 'electron';
 
 import type { ResponseOf } from '../../shared/ipc.js';
@@ -124,12 +125,31 @@ function readIntervalMin(): number {
   return DEFAULT_INTERVAL_MIN;
 }
 
-function isDaemonRunning(): boolean {
-  const pidPath = join(homedir(), '.baton', 'maestro', 'daemon.pid');
-  const pidStr = readTextSafe(pidPath);
-  if (!pidStr) return false;
+function daemonPidPath(): string {
+  return join(homedir(), '.baton', 'maestro', 'daemon.pid');
+}
+function daemonLogPath(): string {
+  return join(homedir(), '.baton', 'maestro', 'daemon.log');
+}
+function maestrodScriptPath(): string {
+  return join(maestroStateDir(), '..', 'maestrod.sh');
+}
+function repoRootForMaestrod(): string {
+  // bootstrap-or-tick.sh expects to be invoked from the repo root, so
+  // the daemon (which calls into it) needs that cwd too.
+  return join(maestroStateDir(), '..', '..', '..', '..');
+}
+
+function readDaemonPid(): number | null {
+  const pidStr = readTextSafe(daemonPidPath());
+  if (!pidStr) return null;
   const pid = Number.parseInt(pidStr, 10);
-  if (!Number.isFinite(pid) || pid <= 0) return false;
+  return Number.isFinite(pid) && pid > 0 ? pid : null;
+}
+
+function isDaemonRunning(): boolean {
+  const pid = readDaemonPid();
+  if (pid == null) return false;
   try {
     // Signal 0 → liveness probe. ESRCH means the process is gone.
     process.kill(pid, 0);
@@ -137,6 +157,67 @@ function isDaemonRunning(): boolean {
   } catch {
     return false;
   }
+}
+
+/** Spawn maestrod.sh as a fully detached background process so it
+ *  survives Electron quit. The daemon writes its own pid file via
+ *  the lifecycle trap in maestrod.sh; we just kick it off. Returns
+ *  the spawned pid or null if the script is missing / spawn failed. */
+function spawnDaemon(): { pid: number | null; reason?: string } {
+  const script = maestrodScriptPath();
+  if (!existsSync(script)) {
+    return { pid: null, reason: `maestrod.sh not found at ${script}` };
+  }
+  if (isDaemonRunning()) {
+    return { pid: readDaemonPid(), reason: 'already running' };
+  }
+  try {
+    mkdirSync(join(daemonPidPath(), '..'), { recursive: true });
+  } catch { /* ok */ }
+  // Open a log file fd so the daemon's stdout/stderr keep flowing to
+  // disk after Electron detaches.
+  const logFd = openSync(daemonLogPath(), 'a');
+  try {
+    const proc = spawn(script, [], {
+      detached: true,
+      cwd: repoRootForMaestrod(),
+      stdio: ['ignore', logFd, logFd],
+      env: {
+        ...process.env,
+        // Inherit usage hints from the renderer's settings later;
+        // PoC pulls from main process env or the documented defaults.
+        USAGE_5H: process.env.USAGE_5H ?? '0.06',
+        USAGE_7D: process.env.USAGE_7D ?? '0.06',
+      },
+    });
+    proc.unref();
+    // The daemon writes its OWN pid file; we don't need to. But if
+    // the daemon hasn't written it yet by the time the chip polls,
+    // the chip would briefly show "off." Write it now so the next
+    // getState() sees the correct state immediately.
+    if (proc.pid) writeFileSync(daemonPidPath(), String(proc.pid));
+    return { pid: proc.pid ?? null };
+  } catch (e) {
+    return { pid: null, reason: (e as Error).message };
+  } finally {
+    closeSync(logFd);
+  }
+}
+
+/** SIGTERM the daemon. The daemon's cleanup trap removes the pid
+ *  file. We give up after one signal — the daemon will finish its
+ *  current tick, then exit; we don't need to block here. */
+function stopDaemon(): { stoppedPid: number | null } {
+  const pid = readDaemonPid();
+  if (pid == null) return { stoppedPid: null };
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // Process already dead; drop the stale pid file.
+    try { unlinkSync(daemonPidPath()); } catch { /* fine */ }
+    return { stoppedPid: null };
+  }
+  return { stoppedPid: pid };
 }
 
 function normalizePlan(p: PlanFromDisk | null): State['plan'] {
@@ -204,17 +285,28 @@ export function getMaestroState(): State {
   return value;
 }
 
-/** Touch / remove the paused flag. Bypasses + invalidates the read
- *  cache so the next getMaestroState() returns the new value. */
+/** Active ↔ paused toggle. "Active" means the daemon is running and
+ *  ticks are happening on schedule. "Paused" means the daemon is
+ *  stopped AND any opportunistic tick (cron, manual call) bails fast.
+ *
+ *  Going active   → remove paused flag; spawn maestrod.sh if not
+ *                    already running.
+ *  Going paused   → SIGTERM the daemon and touch the paused flag
+ *                    so any external tick caller also short-circuits.
+ *
+ *  Side effects are best-effort; the function still returns the
+ *  resulting paused state so the chip can reconcile. */
 export function setMaestroPaused(paused: boolean): { paused: boolean } {
   const p = pausedFlagPath();
   try {
     mkdirSync(join(p, '..'), { recursive: true });
   } catch { /* dir may already exist */ }
   if (paused) {
+    stopDaemon();
     if (!existsSync(p)) writeFileSync(p, new Date().toISOString() + '\n');
   } else {
     try { unlinkSync(p); } catch { /* not present, fine */ }
+    spawnDaemon();
   }
   cache = null;
   return { paused: existsSync(p) };

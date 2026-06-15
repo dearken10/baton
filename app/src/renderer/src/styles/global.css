@@ -3315,6 +3315,33 @@ button.terminal-tab,
 }
 .maestro-dot-on  { background: var(--running); box-shadow: 0 0 6px var(--running); }
 .maestro-dot-off { background: var(--paused); }
+.maestro-nexttick {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+.maestro-nexttick.is-overdue {
+  background: rgba(91, 141, 239, 0.08);
+  border-color: var(--accent-2);
+}
+.maestro-nexttick-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+.maestro-nexttick-value {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.maestro-nexttick-at { font-size: 11px; }
+
 .maestro-popup-bloat {
   background: rgba(240, 169, 69, 0.12);
   border: 1px solid #5a4626;
