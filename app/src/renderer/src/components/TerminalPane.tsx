@@ -362,10 +362,28 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
-      <div className="terminal-prompt-nav">
+      <div
+        className="terminal-prompt-nav"
+        ref={(el) => {
+          if (!el) return;
+          const r = el.getBoundingClientRect();
+          // eslint-disable-next-line no-console
+          console.log('[prompt-nav] LAYOUT container', {
+            x: Math.round(r.x), y: Math.round(r.y),
+            w: Math.round(r.width), h: Math.round(r.height),
+          });
+        }}
+      >
         <button
           type="button"
-          className="btn ghost terminal-prompt-nav-btn"
+          className="terminal-prompt-nav-btn"
+          onMouseDown={() => {
+            // mousedown fires even if click is intercepted by an overlay;
+            // useful for telling "didn't reach button at all" from
+            // "reached button but click was swallowed".
+            // eslint-disable-next-line no-console
+            console.log('[prompt-nav] MOUSEDOWN up');
+          }}
           onClick={() => {
             // eslint-disable-next-line no-console
             console.log('[prompt-nav] CLICK up', { hasPrev, navIndex });
@@ -379,7 +397,11 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
         </button>
         <button
           type="button"
-          className="btn ghost terminal-prompt-nav-btn"
+          className="terminal-prompt-nav-btn"
+          onMouseDown={() => {
+            // eslint-disable-next-line no-console
+            console.log('[prompt-nav] MOUSEDOWN down');
+          }}
           onClick={() => {
             // eslint-disable-next-line no-console
             console.log('[prompt-nav] CLICK down', { hasNext, navIndex });

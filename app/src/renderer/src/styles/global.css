@@ -1212,11 +1212,15 @@ button {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  /* z-index bumped high to rule out being covered by xterm's internal
+     layers; the buttons themselves re-enable pointer-events explicitly
+     via !important so the cascade can't accidentally turn them off. */
+  z-index: 100;
   pointer-events: none;
-  z-index: 2;
 }
 .terminal-prompt-nav-btn {
-  pointer-events: auto;
+  pointer-events: auto !important;
+  cursor: pointer;
   width: 24px;
   height: 24px;
   padding: 0;
@@ -1226,16 +1230,17 @@ button {
   font-size: 10px;
   line-height: 1;
   border-radius: 4px;
+  /* TEMP-DIAGNOSTIC: bright accent border so the buttons are
+     unmistakable in the screenshot. Revert after we confirm clicks. */
   background: var(--bg-2);
-  border: 1px solid var(--border);
-  color: var(--text-dim);
-  opacity: 0.7;
+  border: 2px solid var(--accent);
+  color: var(--text);
+  font-family: inherit;
+  opacity: 1;
   transition: opacity 100ms;
 }
 .terminal-prompt-nav-btn:hover:not(:disabled) {
-  opacity: 1;
-  color: var(--text);
-  border-color: var(--accent);
+  background: var(--bg-3);
 }
 .terminal-prompt-nav-btn:disabled {
   opacity: 0.3;
