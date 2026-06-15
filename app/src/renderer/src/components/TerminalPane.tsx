@@ -311,6 +311,15 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
   // markerCount is only read so React re-renders when a new marker is
   // pushed; the actual data we read comes from the ref.
   void markerCount;
+  // TEMP DIAGNOSTIC — log button state on every render.
+  // eslint-disable-next-line no-console
+  console.log('[prompt-nav] render', {
+    markerCount,
+    markersLength: markers.length,
+    navIndex,
+    hasPrev,
+    hasNext,
+  });
 
   function acceptsDrop(e: React.DragEvent<HTMLDivElement>): boolean {
     const types = e.dataTransfer.types;
