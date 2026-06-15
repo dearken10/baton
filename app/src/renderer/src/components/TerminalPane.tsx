@@ -187,14 +187,24 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     const offPrompt = window.baton.onEvent((event) => {
       if (event.type !== 'session.prompt_submitted') return;
       if (event.sessionId !== sessionId) return;
-      // registerMarker(0) anchors at the current cursor row in the
-      // active buffer (baseY + cursorY in absolute terms).
+      // TEMP DIAGNOSTIC — remove after we confirm the chain works.
+      const buf = term.buffer.active;
+      // eslint-disable-next-line no-console
+      console.log('[prompt-nav] event received', {
+        sessionId,
+        bufferType: buf.type,
+        baseY: buf.baseY,
+        cursorY: buf.cursorY,
+        length: buf.length,
+      });
       const marker = term.registerMarker(0);
+      // eslint-disable-next-line no-console
+      console.log('[prompt-nav] registerMarker →', marker
+        ? { line: marker.line, isDisposed: marker.isDisposed }
+        : 'undefined');
       if (!marker) return;
       markersRef.current.push(marker);
       setMarkerCount(markersRef.current.length);
-      // After a new prompt, snap nav cursor past the end so the next
-      // Up click goes to the newest prompt, not the one before it.
       setNavIndex(markersRef.current.length);
     });
 
