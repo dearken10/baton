@@ -200,9 +200,16 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       const lines = promptLinesBySession.get(sessionId) ?? [];
       lines.push(line);
       promptLinesBySession.set(sessionId, lines);
+      // eslint-disable-next-line no-console
+      console.log('[prompt-nav] PUSH', { sessionId, line, totalLines: lines.length });
       setLinesNonce((n) => n + 1);
       // Snap the nav cursor past the end so Up goes to the newest prompt.
       setNavIndex(lines.length);
+    });
+    // eslint-disable-next-line no-console
+    console.log('[prompt-nav] MOUNT', {
+      sessionId,
+      persistedLines: promptLinesBySession.get(sessionId)?.length ?? 0,
     });
 
     // Subscribe to pty data for this session only.
@@ -299,6 +306,14 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
   const linesForSession = promptLinesBySession.get(sessionId) ?? [];
   const hasPrev = navIndex > 0;
   const hasNext = navIndex < linesForSession.length - 1;
+  // eslint-disable-next-line no-console
+  console.log('[prompt-nav] RENDER', {
+    sessionId: sessionId.slice(0, 8),
+    navIndex,
+    linesLen: linesForSession.length,
+    hasPrev,
+    hasNext,
+  });
 
   function acceptsDrop(e: React.DragEvent<HTMLDivElement>): boolean {
     const types = e.dataTransfer.types;
