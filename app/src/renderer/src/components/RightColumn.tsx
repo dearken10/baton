@@ -10,7 +10,7 @@ type Tab = 'files' | 'search' | 'git' | 'history';
 const REFRESH_MS = 3000;
 
 export function RightColumn(): JSX.Element {
-  const [tab, setTab] = useState<Tab>('files');
+  const [tab, setTab] = useState<Tab>('history');
   const selectedId = useAppStore((s) => s.selectedSessionId);
   const sessionsRecord = useAppStore((s) => s.sessions);
   const projectsRecord = useAppStore((s) => s.projects);
@@ -47,6 +47,12 @@ export function RightColumn(): JSX.Element {
     <aside className="col col-right">
       <div className="right-tabs">
         <button
+          className={`right-tab ${tab === 'history' ? 'active' : ''}`}
+          onClick={() => setTab('history')}
+        >
+          💬 History
+        </button>
+        <button
           className={`right-tab ${tab === 'files' ? 'active' : ''}`}
           onClick={() => setTab('files')}
         >
@@ -63,12 +69,6 @@ export function RightColumn(): JSX.Element {
           onClick={() => setTab('git')}
         >
           ⎇ Git
-        </button>
-        <button
-          className={`right-tab ${tab === 'history' ? 'active' : ''}`}
-          onClick={() => setTab('history')}
-        >
-          💬 History
         </button>
         {isRemote && selectedConnection ? (
           <span
