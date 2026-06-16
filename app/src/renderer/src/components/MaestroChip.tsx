@@ -129,10 +129,11 @@ function chipTone(s: State): 'ok' | 'warn' | 'idle' | 'off' | 'paused' | 'desync
   if (s.paused) return 'paused';
   // Active but no daemon = something's wrong. Surface louder than warn.
   if (!s.paused && !s.daemonRunning && s.tickCount > 0) return 'desync';
-  if (s.bloatWarning) return 'warn';
   if (!s.daemonRunning && s.tickCount === 0) return 'off';
   if (!s.daemonRunning) return 'idle';
   return 'ok';
+  // (bloatWarning intentionally not used — leaky abstraction; the
+  //  daemon handles compaction silently.)
 }
 
 function chipBadge(s: State): string {
@@ -249,11 +250,11 @@ function MaestroPopup(
         <NextTickRow nextTickEtaAt={state.nextTickEtaAt} />
       ) : null}
 
-      {state.bloatWarning ? (
-        <div className="maestro-popup-bloat">
-          ⚠ Conversation log is large. Consider <code>--reset</code> to start fresh.
-        </div>
-      ) : null}
+      {/* Conversation bloat used to surface here as a warning row,
+          but it was a leaky abstraction — the underlying threshold
+          was tick-count based, not actual size-based, and the user
+          had nothing useful to do except --reset (which loses
+          memory). Quietly handled in bootstrap-or-tick.sh now. */}
 
       <ModeSelector
         mode={state.mode}
