@@ -7,7 +7,6 @@ import { LeftColumn } from './components/LeftColumn.js';
 import { MiddleColumn } from './components/MiddleColumn.js';
 import { RightColumn } from './components/RightColumn.js';
 import { SplitHandle } from './components/SplitHandle.js';
-import { MaestroStrip } from './components/MaestroStrip.js';
 import { MaestroFullScreen } from './components/MaestroFullScreen.js';
 import { useMaestroUI } from './components/maestroUI.js';
 
@@ -165,7 +164,6 @@ export function App(): JSX.Element {
           void window.baton.call('onboarding.complete', {}).catch(() => { /* best-effort */ });
         }}
       />
-      <MaestroStrip />
       {fullScreen ? (
         <MaestroFullScreen />
       ) : (

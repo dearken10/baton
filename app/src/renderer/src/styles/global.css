@@ -71,16 +71,10 @@ button {
 
 .app {
   display: grid;
-  /* Titlebar + Maestro strip + workspace. When the strip is absent
-     (PoC not installed → MaestroStrip returns null), the middle row
-     collapses to 0px and the workspace takes the rest. */
-  grid-template-rows: 36px auto 1fr;
+  /* Titlebar + workspace (or Maestro full-screen view when toggled). */
+  grid-template-rows: 36px 1fr;
   grid-template-columns: minmax(0, 1fr);
   height: 100vh;
-}
-.app.app-maestro-full {
-  /* Full-screen Maestro: titlebar + strip + Maestro view (no workspace). */
-  grid-template-rows: 36px auto 1fr;
 }
 
 /* ── Titlebar ─────────────────────────────────────────────── */
@@ -3211,74 +3205,13 @@ button.terminal-tab,
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-2); }
 
-/* ── Maestro: M9 layout — strip, chip, full-screen ───────── */
+/* ── Maestro: M9-lite — chip toggles full-screen ─────────── */
 
 :root {
   --maestro:    #a78bfa;
   --maestro-2:  #1c1730;
   --maestro-fg: #0e0a1f;
 }
-
-/* MaestroStrip — 30px under the titlebar. */
-.maestro-strip {
-  display: flex; align-items: center; gap: 10px;
-  height: 30px;
-  padding: 0 14px;
-  background: var(--bg-1);
-  border-bottom: 1px solid var(--border);
-  color: var(--text-dim);
-  font-size: 12px;
-  cursor: pointer;
-  user-select: none;
-  transition: background 0.12s ease, color 0.12s ease;
-}
-.maestro-strip:hover {
-  background: var(--bg-2);
-  color: var(--text);
-}
-.maestro-strip-glyph { font-size: 13px; color: var(--maestro); }
-.maestro-strip-label { font-weight: 600; color: var(--text); }
-.maestro-strip-dim   { color: var(--text-dim); }
-.maestro-strip-next  {
-  font-family: ui-monospace, monospace; font-size: 11px;
-  color: var(--text-dim);
-}
-.maestro-strip-tail {
-  margin-left: auto;
-  display: flex; align-items: center; gap: 10px;
-}
-.maestro-strip-badge-prop {
-  background: var(--maestro-2);
-  color: var(--maestro);
-  border: 1px solid var(--maestro);
-  border-radius: 999px;
-  padding: 1px 8px;
-  font-size: 10px;
-  font-weight: 600;
-}
-.maestro-strip-badge-defer { color: var(--text-faint); font-size: 11px; }
-.maestro-strip-toggle {
-  background: var(--maestro-2);
-  color: var(--maestro);
-  border: 1px solid var(--maestro);
-  border-radius: 6px;
-  padding: 3px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  font-family: inherit;
-  display: inline-flex; align-items: center; gap: 5px;
-}
-.maestro-strip-toggle:hover { filter: brightness(1.15); }
-.maestro-strip-toggle-icon { font-size: 13px; }
-
-/* Strip tones — most days it's `ok`. */
-.maestro-strip-paused .maestro-strip-glyph { opacity: 0.5; }
-.maestro-strip-paused .maestro-strip-label { color: var(--text-faint); }
-.maestro-strip-desync { border-bottom-color: var(--needs); }
-.maestro-strip-desync .maestro-strip-glyph { color: var(--needs); }
-.maestro-strip-desync .maestro-strip-label { color: var(--needs); }
-.maestro-strip-off    .maestro-strip-glyph { color: var(--text-faint); }
 
 /* ── Maestro chip (titlebar — toggles full-screen) ──────── */
 .maestro-wrapper {
