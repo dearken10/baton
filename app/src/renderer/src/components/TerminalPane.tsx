@@ -3,12 +3,17 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SerializeAddon } from '@xterm/addon-serialize';
+import { SearchAddon } from '@xterm/addon-search';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { useAppStore } from '../store.js';
 import { webUrlTabId } from './tabIds.js';
 import { getTheme, subscribeTheme, type Theme } from '../lib/theme.js';
+import {
+  SCROLL_TO_PROMPT_EVENT,
+  type ScrollToPromptDetail,
+} from './scrollToPromptEvent.js';
 
 function xtermThemeFor(t: Theme): {
   background: string; foreground: string; cursor: string;
@@ -101,6 +106,12 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     // they left off" across restarts (PRD F8.8).
     const serialize = new SerializeAddon();
     term.loadAddon(serialize);
+    // Search addon — used by the prompt-history panel to scroll the
+    // scrollback to a clicked prompt. We pass it the prompt text and
+    // findPrevious() scrolls to the match. Not used for in-terminal
+    // user-driven search (no UI surface for that yet).
+    const search = new SearchAddon();
+    term.loadAddon(search);
     // Make URLs in the terminal clickable. Default behaviour is
     // window.open() which would just hand the URL to the OS browser;
     // we intercept and route it to an in-app browser tab in the
@@ -200,6 +211,28 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     };
     window.addEventListener('resize', onWinResize);
 
+    // Listen for scroll-to-prompt requests from the History panel. We
+    // search the buffer for the prompt snippet and let xterm's search
+    // addon scroll us to the match. findPrevious so we find the LAST
+    // occurrence in the buffer if the snippet happens to appear in
+    // both Claude's quoted echo and the user's typed-back form — the
+    // last one in the scrollback is the rendered turn the user means.
+    const onScrollToPrompt = (e: Event): void => {
+      const detail = (e as CustomEvent<ScrollToPromptDetail>).detail;
+      if (!detail || detail.sessionId !== sessionId) return;
+      if (!detail.snippet) return;
+      try {
+        // Plain string match — case-sensitive, no regex. Move to the
+        // bottom first so findPrevious walks the WHOLE buffer instead
+        // of starting from wherever we last scrolled.
+        term.scrollToBottom();
+        search.findPrevious(detail.snippet, {
+          regex: false, caseSensitive: true, wholeWord: false,
+        });
+      } catch { /* terminal disposed or search failed */ }
+    };
+    window.addEventListener(SCROLL_TO_PROMPT_EVENT, onScrollToPrompt);
+
     // Live-restyle on theme toggle. xterm v5+ exposes per-property
     // setters on `term.options` that notify the active renderer
     // (including WebGL). Replacing `term.options` wholesale doesn't
@@ -219,11 +252,13 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       // captured. Synchronous serialise + fire-and-forget IPC.
       saveSnapshot();
       window.removeEventListener('resize', onWinResize);
+      window.removeEventListener(SCROLL_TO_PROMPT_EVENT, onScrollToPrompt);
       ro.disconnect();
       offData();
       dataSub.dispose();
       resizeSub.dispose();
       try { webLinks.dispose(); } catch { /* ignore */ }
+      try { search.dispose(); } catch { /* ignore */ }
       term.dispose();
       termRef.current = null;
       void webglOk; // silence the lint; useful for future telemetry
