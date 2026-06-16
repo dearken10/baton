@@ -1,0 +1,2719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>baton · Maestro layout options</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --running:#5b8def; --needs:#f0a945; --done:#2fbf71;
+    --errored:#ef5454; --paused:#6b7280;
+    --maestro:#a78bfa;
+    --maestro-bg:#1c1730;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; min-height:100vh; background:#050608; color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+    font-size:13px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+  .dim { color:var(--text-dim); }
+
+  /* Page chrome: picker + preview */
+  .page-head {
+    padding: 18px 24px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky; top: 0; z-index: 50;
+  }
+  .page-head h1 {
+    margin: 0 0 6px 0; font-size: 17px; font-weight: 600; color: var(--text);
+  }
+  .page-head p { margin: 0 0 14px 0; color: var(--text-dim); font-size: 12px; }
+  .picker {
+    display: flex; gap: 6px; flex-wrap: wrap;
+  }
+  .picker button {
+    background: var(--bg-2); color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: all 0.15s ease;
+  }
+  .picker button:hover { background: var(--bg-3); color: var(--text); }
+  .picker button.active {
+    background: var(--maestro-bg);
+    color: var(--maestro);
+    border-color: var(--maestro);
+  }
+  .picker button strong { color: inherit; }
+  .picker button .pick-sub { font-size: 10px; color: var(--text-faint); display: block; margin-top: 2px; }
+  .picker button.active .pick-sub { color: var(--maestro); opacity: 0.7; }
+
+  .preview-wrap {
+    padding: 24px;
+    display: flex; justify-content: center;
+  }
+  .preview {
+    width: 1180px;
+    max-width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+  }
+
+  .variant { display: none; }
+  .variant.active { display: block; }
+
+  /* ─────────────────────── Baton window chrome ─────────────────────── */
+  .titlebar {
+    display:flex; align-items:center; gap:12px; padding:0 12px; height: 36px;
+    background:var(--bg-1); border-bottom:1px solid var(--border);
+    font-size:12px; color:var(--text-dim);
+  }
+  .titlebar .dots { display:flex; gap:6px; }
+  .titlebar .dot { width:11px; height:11px; border-radius:50%; background:#3a3f4a; }
+  .titlebar .dot.red { background:#ff5f57; }
+  .titlebar .dot.yellow { background:#febc2e; }
+  .titlebar .dot.green { background:#28c840; }
+  .titlebar .title { color:var(--text); font-weight:600; margin-left:8px; }
+  .titlebar .meta { color: var(--text-faint); font-size: 11px; }
+  .titlebar .spacer { flex:1; }
+  .titlebar .right-chips { display:flex; gap:6px; align-items:center; }
+
+  /* Maestro chip */
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px 2px 8px;
+    height: 22px;
+    cursor: pointer;
+    color: var(--text); font-size: 11px; font-weight: 500; line-height: 1;
+  }
+  .chip.maestro {
+    border-color: var(--maestro);
+    background: var(--maestro-bg);
+    color: var(--maestro);
+  }
+  .chip .glyph { font-size: 12px; }
+  .chip.active-now { box-shadow: 0 0 0 2px rgba(167,139,250,0.15); }
+  .chip.usage {
+    background: rgba(47,191,113,0.08);
+    border-color: var(--done);
+    color: var(--done);
+  }
+
+  /* Workspace fake area */
+  .workspace {
+    display: grid;
+    height: 600px;
+    grid-template-columns: 280px 1fr 320px;
+    background: var(--bg);
+  }
+  .col { border-right: 1px solid var(--border); display: flex; flex-direction: column; min-width: 0; }
+  .col:last-child { border-right: none; }
+  .col-head {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:10px 14px; border-bottom:1px solid var(--border); background:var(--bg-1);
+    font-size:11px; text-transform:uppercase; letter-spacing:0.06em; color:var(--text-dim);
+    flex: 0 0 auto;
+  }
+  .col-body { flex: 1; overflow-y: auto; padding: 10px; }
+
+  /* Session rows in left column */
+  .proj-name {
+    padding: 8px 6px 4px; font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-faint);
+  }
+  .session-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 2px;
+  }
+  .session-row:hover { background: var(--bg-1); }
+  .session-row.selected { background: var(--bg-2); border: 1px solid var(--border); }
+  .session-row .dot {
+    width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0;
+  }
+  .dot-running { background: var(--running); box-shadow: 0 0 6px var(--running); }
+  .dot-needs   { background: var(--needs); box-shadow: 0 0 6px var(--needs); }
+  .dot-paused  { background: var(--paused); }
+  .dot-idle    { background: var(--paused); opacity: 0.6; }
+
+  .session-row .label {
+    flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px;
+  }
+  .session-row .branch { color: var(--text-dim); font-size: 11px; }
+
+  .editor-fake {
+    flex: 1; background:
+      repeating-linear-gradient(
+        180deg,
+        var(--bg) 0px, var(--bg) 18px,
+        rgba(255,255,255,0.018) 18px, rgba(255,255,255,0.018) 19px
+      );
+    padding: 16px;
+    color: var(--text-faint);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+  }
+  .editor-fake .line-no { color: var(--text-faint); opacity: 0.5; display: inline-block; width: 24px; }
+  .editor-fake .tok-kw  { color: #c586c0; }
+  .editor-fake .tok-str { color: #ce9178; }
+  .editor-fake .tok-fn  { color: #dcdcaa; }
+  .editor-fake .tok-cm  { color: #7eb87a; }
+
+  .files-fake { padding: 10px 14px; color: var(--text-dim); font-size: 12px; }
+  .files-fake .file { padding: 4px 0; }
+
+  /* ─────────────────────── Maestro action card (shared) ─────────────────────── */
+  .action-card {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .action-card.intervention { border-left: 3px solid var(--maestro); }
+  .action-card.defer { border-left: 3px solid var(--paused); opacity: 0.7; }
+
+  .ac-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px;
+  }
+  .ac-status-dot {
+    width: 8px; height: 8px; border-radius: 999px; flex-shrink: 0;
+  }
+  .ac-project {
+    font-weight: 600; font-size: 13px;
+  }
+  .ac-branch {
+    color: var(--text-dim); font-size: 12px;
+    font-family: ui-monospace, monospace;
+  }
+  .ac-status-badge {
+    margin-left: auto;
+    font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    padding: 2px 7px; border-radius: 999px;
+    background: var(--bg-3); color: var(--text-dim);
+  }
+  .ac-status-badge.needs-input { background: rgba(240,169,69,0.12); color: var(--needs); }
+  .ac-status-badge.paused      { background: var(--bg-3); color: var(--text-faint); }
+  .ac-status-badge.idle        { background: var(--bg-3); color: var(--text-dim); }
+
+  .ac-intent {
+    color: var(--text-dim); font-size: 12px;
+    margin-bottom: 10px;
+    font-style: italic;
+  }
+
+  .ac-confidence-row {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 10px; font-size: 11px;
+  }
+  .conf-bar {
+    display: inline-flex; gap: 2px;
+  }
+  .conf-cell {
+    width: 14px; height: 6px; border-radius: 2px;
+    background: var(--bg-3);
+  }
+  .conf-cell.fill-high   { background: var(--done); }
+  .conf-cell.fill-medium { background: var(--needs); }
+  .conf-cell.fill-low    { background: var(--text-dim); }
+  .conf-label {
+    font-weight: 600;
+  }
+  .conf-label.high   { color: var(--done); }
+  .conf-label.medium { color: var(--needs); }
+  .conf-label.low    { color: var(--text-dim); }
+  .conf-meta { color: var(--text-faint); }
+  .ac-reissue-badge {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--text-faint);
+    background: var(--bg-2);
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+
+  .ac-prompt {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 9px 11px;
+    font-family: ui-monospace, monospace;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--text);
+    margin-bottom: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .ac-prompt::before {
+    content: "▸ Send to agent";
+    display: block;
+    color: var(--maestro);
+    font-family: inherit;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+    font-weight: 600;
+  }
+  .ac-defer-msg {
+    color: var(--text-faint);
+    font-size: 12px;
+    font-style: italic;
+    padding: 8px 0;
+  }
+
+  .ac-assumption {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--needs);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .ac-assumption .qa { display: block; color: var(--text); margin-bottom: 4px; }
+  .ac-assumption .qa b { color: var(--needs); font-weight: 600; }
+  .ac-assumption .iw  { color: var(--text-faint); font-size: 11px; }
+
+  .ac-revert {
+    font-size: 11px; color: var(--text-faint);
+    padding: 6px 0 10px;
+    border-top: 1px dashed var(--border);
+    margin-top: 4px;
+  }
+  .ac-revert::before { content: "↻ "; }
+
+  .ac-actions {
+    display: flex; gap: 6px;
+    margin-top: 8px;
+  }
+  .ac-btn {
+    border: 1px solid var(--border);
+    background: var(--bg-2);
+    color: var(--text);
+    padding: 5px 12px;
+    border-radius: 5px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .ac-btn:hover { background: var(--bg-3); }
+  .ac-btn.primary {
+    background: var(--maestro);
+    color: #0e0a1f;
+    border-color: var(--maestro);
+    font-weight: 600;
+  }
+  .ac-btn.primary:hover { filter: brightness(1.08); }
+  .ac-btn.danger { color: var(--errored); }
+  .ac-btn.subtle { background: transparent; }
+
+  /* ─────────────────────── M1: Bigger popup ─────────────────────── */
+  .m1-anchor { position: relative; }
+  .m1-popup {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 12px;
+    width: 560px;
+    background: var(--bg-1);
+    border: 1px solid var(--border-2);
+    border-radius: 10px;
+    box-shadow: 0 18px 48px rgba(0,0,0,0.6);
+    padding: 14px;
+    z-index: 30;
+    max-height: 540px;
+    overflow-y: auto;
+  }
+  .m1-popup-head {
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 10px; border-bottom: 1px solid var(--border);
+    margin-bottom: 12px;
+  }
+  .m1-popup-head h3 { margin: 0; font-size: 14px; flex: 1; }
+  .meta-row {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: var(--text-dim);
+    padding: 8px 0; margin-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+  .meta-row .dot-running { width: 8px; height: 8px; border-radius: 999px; }
+
+  .mode-selector {
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 0; margin-bottom: 12px;
+    font-size: 11px; color: var(--text-dim);
+  }
+  .seg-pills {
+    display: inline-flex; background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px;
+  }
+  .seg-pills button {
+    background: transparent; border: none;
+    color: var(--text-dim); cursor: pointer;
+    font-size: 11px; padding: 3px 12px;
+    border-radius: 999px; font-family: inherit; font-weight: 500;
+  }
+  .seg-pills button.active { background: var(--accent-2); color: var(--accent); }
+
+  .reasoning {
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 9px 11px; font-style: italic;
+    color: var(--text-dim); font-size: 11.5px; line-height: 1.5;
+    margin-bottom: 12px;
+  }
+  .reasoning::before {
+    content: "ⓘ "; color: var(--maestro); font-style: normal;
+  }
+
+  /* Toggle */
+  .toggle {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: transparent; border: none; cursor: pointer;
+    color: var(--text-dim); font-size: 11px;
+  }
+  .toggle .track {
+    width: 26px; height: 14px; background: var(--accent-2);
+    border-radius: 999px; position: relative;
+  }
+  .toggle .thumb {
+    position: absolute; top: 2px; left: 14px;
+    width: 10px; height: 10px; background: var(--accent);
+    border-radius: 999px;
+  }
+  .toggle.is-paused .track { background: var(--bg-3); }
+  .toggle.is-paused .thumb { left: 2px; background: var(--text-dim); }
+  .toggle .label { color: var(--accent); font-weight: 600; }
+  .toggle.is-paused .label { color: var(--text-faint); }
+
+  /* ─────────────────────── M2: Right drawer ─────────────────────── */
+  .m2-workspace {
+    display: grid;
+    grid-template-columns: 280px 1fr 380px;
+  }
+  .m2-drawer {
+    background: var(--bg);
+    border-left: 1px solid var(--maestro);
+    box-shadow: -4px 0 20px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column;
+  }
+  .m2-drawer-head {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-1);
+    display: flex; align-items: center; gap: 8px;
+  }
+  .m2-drawer-head h3 { margin: 0; font-size: 13px; flex: 1; }
+  .m2-drawer-body { flex: 1; overflow-y: auto; padding: 12px; }
+
+  /* ─────────────────────── M3: Bottom drawer ─────────────────────── */
+  .m3-shell {
+    display: grid;
+    grid-template-rows: 36px 1fr 280px;
+    height: 600px;
+  }
+  .m3-main {
+    display: grid;
+    grid-template-columns: 280px 1fr 320px;
+    border-bottom: 1px solid var(--maestro);
+    min-height: 0;
+  }
+  .m3-drawer {
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .m3-drawer-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .m3-drawer-head .h3 { font-weight: 600; }
+  .m3-drawer-body {
+    flex: 1; overflow-y: auto;
+    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 10px;
+    align-items: start;
+  }
+  .m3-drawer-body .action-card { margin: 0; }
+
+  /* ─────────────────────── M4: Center tab ─────────────────────── */
+  .m4-tabs {
+    display: flex; gap: 0;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    padding: 0 12px;
+    flex: 0 0 auto;
+  }
+  .m4-tab {
+    padding: 9px 14px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .m4-tab:hover { color: var(--text); }
+  .m4-tab.active {
+    color: var(--maestro);
+    border-bottom-color: var(--maestro);
+  }
+  .m4-pane {
+    flex: 1; overflow-y: auto;
+    padding: 18px 24px;
+    background: var(--bg);
+  }
+  .m4-pane-head {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .m4-pane-head h2 { margin: 0; font-size: 16px; flex: 1; }
+  .m4-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    align-items: start;
+  }
+  .m4-history {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .m4-history h4 { margin: 0 0 10px 0; font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .m4-history-row {
+    display: flex; gap: 12px;
+    padding: 6px 0;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+  }
+  .m4-history-row .tick { color: var(--maestro); }
+
+  /* ─────────────────────── M5: Radar IS Maestro ─────────────────────── */
+  .m5-titlebar {
+    height: 56px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 12px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 12px;
+  }
+  .m5-titlebar .title { color: var(--text); font-weight: 600; }
+  .m5-titlebar .maestro-banner {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--maestro-bg);
+    color: var(--maestro);
+    padding: 6px 14px;
+    border-radius: 999px;
+    border: 1px solid var(--maestro);
+    font-weight: 500;
+    font-size: 12px;
+  }
+  .m5-workspace {
+    display: grid;
+    grid-template-columns: 480px 1fr;
+    height: 600px;
+  }
+  .m5-radar {
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    padding: 12px 14px;
+  }
+  .m5-proj { margin-bottom: 18px; }
+  .m5-proj-name {
+    font-size: 11px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-faint);
+    padding: 4px 0;
+  }
+  .m5-session {
+    border-left: 2px solid var(--border);
+    padding-left: 12px;
+    margin-bottom: 14px;
+  }
+  .m5-session.has-maestro { border-left-color: var(--maestro); }
+  .m5-session.user-active { border-left-color: var(--running); }
+  .m5-session-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 6px;
+  }
+  .m5-session-head .branch {
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
+    font-weight: 500;
+  }
+  .m5-session-head .status {
+    margin-left: auto;
+    font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-faint);
+    padding: 1px 6px; border-radius: 4px;
+    background: var(--bg-2);
+  }
+  .m5-session-head .status.needs { color: var(--needs); }
+  .m5-session-head .status.running { color: var(--running); }
+  .m5-maestro-inline {
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--maestro);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin-top: 4px;
+    font-size: 11.5px;
+  }
+  .m5-maestro-inline .label {
+    color: var(--maestro);
+    font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.04em;
+    margin-bottom: 4px;
+    font-weight: 600;
+  }
+  .m5-maestro-inline .prompt {
+    font-family: ui-monospace, monospace;
+    color: var(--text);
+    margin-bottom: 6px;
+    line-height: 1.5;
+  }
+  .m5-maestro-inline .conf {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 10px;
+  }
+  .m5-maestro-inline .qa {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .m5-mini-actions {
+    display: flex; gap: 4px; margin-top: 8px;
+  }
+  .m5-mini-actions button {
+    background: var(--bg-2); border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .m5-mini-actions button.primary {
+    background: var(--maestro); color: #0e0a1f; border-color: var(--maestro); font-weight: 600;
+  }
+  .m5-userside-note {
+    color: var(--text-faint);
+    font-size: 11px;
+    font-style: italic;
+  }
+
+  /* ─────────────────────── M6: Full-app takeover ─────────────────────── */
+  .m6-shell {
+    display: grid;
+    grid-template-rows: 36px 1fr;
+    height: 600px;
+  }
+  .m6-content {
+    padding: 18px 24px;
+    overflow-y: auto;
+    background: var(--bg);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .m6-banner {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 12px;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+  }
+  .m6-banner h2 { margin: 0; font-size: 17px; flex: 1; }
+  .m6-banner .glyph { font-size: 20px; }
+  .m6-close {
+    background: var(--bg-2); border: 1px solid var(--border); color: var(--text-dim);
+    border-radius: 6px; cursor: pointer;
+    padding: 4px 12px; font-family: inherit; font-size: 12px;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .m6-close:hover { color: var(--text); background: var(--bg-3); }
+  .m6-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+  .m6-grid .action-card { margin: 0; }
+  .m6-history {
+    margin-top: 20px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .m6-history h4 { margin: 0 0 10px 0; font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .m6-history-row {
+    display: grid; grid-template-columns: 80px 1fr 1fr 2fr;
+    gap: 12px;
+    padding: 6px 0;
+    font-size: 12px;
+    color: var(--text-dim);
+    font-family: ui-monospace, monospace;
+    border-bottom: 1px solid var(--bg-2);
+  }
+  .m6-history-row .tick { color: var(--maestro); font-weight: 600; }
+
+  /* ─────────────────────── M7: Top drawer ─────────────────────── */
+  .m7-shell {
+    display: grid;
+    grid-template-rows: 36px 280px 1fr;
+    height: 600px;
+  }
+  .m7-drawer {
+    background: var(--bg);
+    border-bottom: 1px solid var(--maestro);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  .m7-drawer-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+  }
+  .m7-drawer-head .h3 { font-weight: 600; }
+  .m7-drawer-body {
+    flex: 1; overflow-y: auto;
+    padding: 10px 14px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+    gap: 10px;
+    align-items: start;
+  }
+  .m7-drawer-body .action-card { margin: 0; }
+  .m7-main {
+    display: grid;
+    grid-template-columns: 280px 1fr 320px;
+    min-height: 0;
+  }
+  .arrow-cue {
+    position: absolute;
+    top: 36px;
+    left: auto;
+    right: 60px;
+    width: 0; height: 0;
+    border-left: 8px solid transparent;
+    border-right: 8px solid transparent;
+    border-bottom: 8px solid var(--maestro);
+    z-index: 5;
+  }
+
+  /* ─────────────────────── M8: Collapsible top drawer ─────────────────────── */
+  .m8-collapsed-shell {
+    display: grid;
+    grid-template-rows: 36px 30px 1fr;
+    height: 380px;
+  }
+  .m8-expanded-shell {
+    display: grid;
+    grid-template-rows: 36px 280px 1fr;
+    height: 600px;
+  }
+  .m8-strip {
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    padding: 0 14px;
+    display: flex; align-items: center; gap: 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    height: 30px;
+    transition: background 0.15s ease, color 0.15s ease;
+  }
+  .m8-strip:hover {
+    background: var(--bg-2);
+    color: var(--text);
+  }
+  .m8-strip .glyph { color: var(--maestro); font-size: 13px; }
+  .m8-strip .label-bold { color: var(--text); font-weight: 500; }
+  .m8-strip .next { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: 11px; }
+  .m8-strip .count {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .m8-strip .badge-prop {
+    background: var(--maestro-bg);
+    color: var(--maestro);
+    border: 1px solid var(--maestro);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+  .m8-strip .badge-defer {
+    color: var(--text-faint);
+    font-size: 11px;
+  }
+  .m8-strip .expand-cue {
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 10px;
+    color: var(--text-faint);
+  }
+  .m8-strip:hover .expand-cue {
+    border-color: var(--maestro);
+    color: var(--maestro);
+  }
+
+  .m8-state-label {
+    text-align: left;
+    font-size: 11px;
+    color: var(--text-dim);
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 4px;
+  }
+  .m8-state-label b { color: var(--maestro); }
+  .m8-state-label .arrow { color: var(--text-faint); padding: 0 8px; }
+
+  .m8-preview-pair {
+    display: flex; flex-direction: column;
+    gap: 18px;
+  }
+
+  /* ─────────────────────── M9: Strip + full-screen toggle ─────────────────────── */
+  .m9-toggle-btn {
+    background: var(--maestro-bg);
+    color: var(--maestro);
+    border: 1px solid var(--maestro);
+    border-radius: 6px;
+    padding: 3px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 600;
+    display: inline-flex; align-items: center; gap: 5px;
+    transition: filter 0.15s ease;
+  }
+  .m9-toggle-btn:hover { filter: brightness(1.15); }
+  .m9-toggle-btn .icon { font-size: 13px; }
+
+  .m9-fullscreen-toggle {
+    background: var(--bg-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-weight: 500;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .m9-fullscreen-toggle:hover { background: var(--bg-3); }
+
+  .m9-callout {
+    background: var(--maestro-bg);
+    border: 1px solid var(--maestro);
+    border-radius: 6px;
+    padding: 8px 12px;
+    margin-bottom: 14px;
+    color: var(--maestro);
+    font-size: 11.5px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .m9-callout .arrow-key { background: rgba(0,0,0,0.3); padding: 1px 6px; border-radius: 3px; font-family: ui-monospace, monospace; font-size: 10px; }
+
+  /* Footnotes */
+  .footnote {
+    padding: 14px 24px;
+    color: var(--text-faint);
+    font-size: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .pros-cons {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 24px;
+    padding: 14px 24px 20px;
+    background: var(--bg-1);
+    border-top: 1px solid var(--border);
+  }
+  .pros-cons h4 { margin: 0 0 6px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); }
+  .pros-cons ul { margin: 0; padding-left: 18px; color: var(--text-dim); font-size: 12px; }
+  .pros-cons li { padding: 2px 0; }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>🎼 Maestro — 5 layout options</h1>
+  <p>Same Maestro state across all five (tick 7, 3 proposals, 1 deferred). Pick what to build.</p>
+  <div class="picker" role="tablist">
+    <button class="active" data-tab="m1"><strong>1.</strong> Bigger popup<span class="pick-sub">smallest lift</span></button>
+    <button data-tab="m2"><strong>2.</strong> Right drawer<span class="pick-sub">over Files/Git</span></button>
+    <button data-tab="m3"><strong>3.</strong> Bottom drawer<span class="pick-sub">previously recommended</span></button>
+    <button data-tab="m4"><strong>4.</strong> Center tab<span class="pick-sub">Maestro Inbox</span></button>
+    <button data-tab="m5"><strong>5.</strong> Radar IS Maestro<span class="pick-sub">biggest narrative win</span></button>
+    <button data-tab="m6"><strong>6.</strong> Full-app takeover<span class="pick-sub">drawer = whole workspace</span></button>
+    <button data-tab="m7"><strong>7.</strong> Top drawer<span class="pick-sub">Fitts-law fix for M3</span></button>
+    <button data-tab="m8"><strong>8.</strong> Collapsible top drawer<span class="pick-sub">best of M3 + M7</span></button>
+    <button data-tab="m9"><strong>9.</strong> Strip + full-screen toggle<span class="pick-sub">ambient ↔ focused</span></button>
+  </div>
+</div>
+
+<div class="preview-wrap">
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M1 · BIGGER POPUP                                       -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant active" id="m1">
+  <div class="preview">
+    <div class="titlebar">
+      <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+      <span class="title">baton</span>
+      <span class="meta">v0.0.1</span>
+      <span class="spacer"></span>
+      <div class="right-chips m1-anchor">
+        <button class="chip maestro active-now"><span class="glyph">🎼</span> <span>3/7</span></button>
+        <div class="chip usage" title="5h: 6%">●● 6%</div>
+
+        <div class="m1-popup">
+          <div class="m1-popup-head">
+            <span class="glyph" style="font-size:16px;">🎼</span>
+            <h3>Maestro · tick 7</h3>
+            <button class="toggle" aria-label="active"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+          </div>
+
+          <div class="meta-row">
+            <span class="dot-running" style="background:var(--running);"></span>
+            <span>Daemon running · every 15 min</span>
+            <span style="margin-left:auto;" class="dim">next tick in 11m 42s · at 11:42</span>
+          </div>
+
+          <div class="mode-selector">
+            <span class="dim">Mode</span>
+            <div class="seg-pills">
+              <button class="active">suggest</button>
+              <button>run</button>
+            </div>
+            <span class="dim" style="font-size:10px; font-style:italic;">cosmetic — execution not wired</span>
+          </div>
+
+          <div class="reasoning">
+            Tick 7 saw <b>3b146ef1</b> move to entirely new work — dropping the 5-tick git-commit nudge. <b>44a32a89</b> re-snoozed after my Voice Live proposal in tick 6, treating as soft "wrong direction" signal. <b>4e8ceafe</b> hit the Claude Code "Resume from summary" picker, treating as HITL-equivalent.
+          </div>
+
+          <!-- Card 1 -->
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">misc</span>
+              <span class="ac-branch">/ no git</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">Kill process on port 7006 · then verify Codex install</div>
+
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label medium">Medium</span>
+              <span class="conf-meta">· 1 assumption</span>
+              <span class="ac-reissue-badge">6th re-issue</span>
+            </div>
+
+            <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install resolved correctly against the Azure endpoint. If both work, summarize the final config (deployment name, env vars set) and stop.</div>
+
+            <div class="ac-assumption">
+              <span class="qa"><b>Q:</b> Can the install be verified without an interactive Codex session?</span>
+              <span class="qa"><b>A:</b> Yes — <span class="mono">--version</span> / <span class="mono">--help</span> exercise the binary + config load.</span>
+              <span class="iw">✗ If wrong: Codex demands interactive auth on first run; agent surfaces that, user takes over.</span>
+            </div>
+
+            <div class="ac-revert">Read-only CLI checks. Cancel with ESC; nothing on disk to revert.</div>
+
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit prompt</button>
+              <button class="ac-btn subtle">💤 Snooze 1h</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <!-- Card 2 -->
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">baton</span>
+              <span class="ac-branch">/ main</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">PR #7 (prompt-history panel) open + green</div>
+
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low-medium</span>
+              <span class="conf-meta">· 2 assumptions</span>
+            </div>
+
+            <div class="ac-prompt">PR #7 is open and green. Run any automated checks beyond the existing CI — lint, build, and any integration tests that would catch the panel-refresh-on-submit case — and report results. Don't merge; I'll run it locally and confirm prior prompts appear before deciding.</div>
+
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit prompt</button>
+              <button class="ac-btn subtle">💤 Snooze 1h</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <!-- Defer card -->
+          <div class="action-card defer">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-paused"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ feature/prd-creation-flow-improvements</span>
+              <span class="ac-status-badge paused">deferred</span>
+            </div>
+            <div class="ac-defer-msg">Scrollback is the Claude Code "Resume from summary" picker (Enter to confirm). Typing here consumes the menu, not the agent. HITL-equivalent.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Workspace below the popup -->
+    <div class="workspace" style="opacity: 0.6;">
+      <div class="col">
+        <div class="col-head">Sessions</div>
+        <div class="col-body">
+          <div class="proj-name">misc</div>
+          <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b><br/><span class="branch">Kill process on port 7006</span></span></div>
+          <div class="proj-name">baton</div>
+          <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b><br/><span class="branch">PR #7 prompt-history</span></span></div>
+          <div class="session-row selected"><span class="dot dot-running"></span><span class="label"><b>master-mind</b><br/><span class="branch">design Maestro UI layouts</span></span></div>
+          <div class="proj-name">automation</div>
+          <div class="session-row"><span class="dot dot-idle"></span><span class="label"><b>development</b><br/><span class="branch">joke loop</span></span></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-head">Editor</div>
+        <div class="col-body" style="padding:0;">
+          <div class="editor-fake">
+            <div><span class="line-no">1</span><span class="tok-cm">// MaestroChip.tsx</span></div>
+            <div><span class="line-no">2</span></div>
+            <div><span class="line-no">3</span><span class="tok-kw">export function</span> <span class="tok-fn">MaestroChip</span>() {</div>
+            <div><span class="line-no">4</span>  …</div>
+            <div><span class="line-no">5</span>}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-head">Files / Git</div>
+        <div class="files-fake">
+          <div class="file">📁 app/</div>
+          <div class="file">  📁 src/</div>
+          <div class="file">    📄 MaestroChip.tsx</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li>Lowest lift — same Direction A architecture, just bigger and richer.</li>
+        <li>Cards now show project · branch · intent · status (no more 8-char codes).</li>
+        <li>Confidence as bar + word label ("Medium / Low-medium").</li>
+        <li>Approve / Edit / Snooze / Reject buttons surface right there.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>Still a popup — outside-click closes; can't keep open while editing.</li>
+        <li>If you have ≥5 proposals, scroll inside the popup is awkward.</li>
+        <li>Doesn't surface tick history.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M2 · RIGHT DRAWER                                       -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m2">
+  <div class="preview">
+    <div class="titlebar">
+      <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+      <span class="title">baton</span>
+      <span class="meta">v0.0.1</span>
+      <span class="spacer"></span>
+      <div class="right-chips">
+        <button class="chip maestro active-now"><span class="glyph">🎼</span> <span>3/7</span></button>
+        <div class="chip usage">●● 6%</div>
+      </div>
+    </div>
+    <div class="workspace m2-workspace">
+      <div class="col">
+        <div class="col-head">Sessions</div>
+        <div class="col-body">
+          <div class="proj-name">misc</div>
+          <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b><br/><span class="branch">Kill process on port 7006</span></span></div>
+          <div class="proj-name">baton</div>
+          <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b><br/><span class="branch">PR #7</span></span></div>
+          <div class="session-row selected"><span class="dot dot-running"></span><span class="label"><b>master-mind</b><br/><span class="branch">layout mockups</span></span></div>
+          <div class="proj-name">automation</div>
+          <div class="session-row"><span class="dot dot-idle"></span><span class="label"><b>development</b><br/><span class="branch">joke loop</span></span></div>
+          <div class="session-row"><span class="dot dot-paused"></span><span class="label"><b>feature/prd-…</b><br/><span class="branch">GitLab API token</span></span></div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-head">Editor · MaestroChip.tsx</div>
+        <div class="col-body" style="padding:0;">
+          <div class="editor-fake">
+            <div><span class="line-no">1</span><span class="tok-cm">// MaestroChip.tsx</span></div>
+            <div><span class="line-no">2</span></div>
+            <div><span class="line-no">3</span><span class="tok-kw">export function</span> <span class="tok-fn">MaestroChip</span>() {</div>
+            <div><span class="line-no">4</span>  …</div>
+            <div><span class="line-no">5</span>}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col m2-drawer">
+        <div class="m2-drawer-head">
+          <span class="glyph" style="font-size:14px;">🎼</span>
+          <h3>Maestro</h3>
+          <span class="dim" style="font-size:11px;">tick 7</span>
+          <button class="toggle" aria-label="active"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+        </div>
+        <div class="m2-drawer-body">
+          <div class="meta-row" style="margin-top:-4px; border-bottom:none; padding-bottom:0;">
+            <span class="dot-running" style="background:var(--running);"></span>
+            <span style="font-size:11px;">Running · next in 11m 42s</span>
+          </div>
+
+          <div class="mode-selector" style="margin-bottom:8px;">
+            <span class="dim">Mode</span>
+            <div class="seg-pills">
+              <button class="active">suggest</button>
+              <button>run</button>
+            </div>
+          </div>
+
+          <div class="reasoning">3b146ef1 moved to entirely new work — dropping 5-tick git-commit nudge. 44a32a89 re-snoozed: soft "wrong direction" signal. 4e8ceafe hit the "Resume from summary" picker.</div>
+
+          <!-- Cards (narrower than M1) -->
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">misc</span>
+              <span class="ac-branch">/no git</span>
+            </div>
+            <div class="ac-intent">Verify Codex install</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label medium">Medium</span>
+              <span class="ac-reissue-badge">6th</span>
+            </div>
+            <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install. If both work, summarize the config and stop.</div>
+            <div class="ac-assumption">
+              <span class="qa"><b>Q:</b> Can verify w/o interactive Codex?</span>
+              <span class="qa"><b>A:</b> Yes — std CLI convention.</span>
+              <span class="iw">If wrong: agent surfaces, user takes over.</span>
+            </div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓</button>
+              <button class="ac-btn">✎</button>
+              <button class="ac-btn subtle">💤</button>
+              <button class="ac-btn danger subtle">✗</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">baton</span>
+              <span class="ac-branch">/main</span>
+            </div>
+            <div class="ac-intent">PR #7 automated checks</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low-med</span>
+            </div>
+            <div class="ac-prompt">PR #7 is open + green. Run any automated checks beyond CI. Don't merge.</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓</button>
+              <button class="ac-btn">✎</button>
+              <button class="ac-btn subtle">💤</button>
+              <button class="ac-btn danger subtle">✗</button>
+            </div>
+          </div>
+
+          <div class="action-card defer">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-paused"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/feature/prd…</span>
+            </div>
+            <div class="ac-defer-msg">"Resume from summary" picker — HITL-equivalent.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li>Stays open while you edit code — read prompt, tweak, approve in flow.</li>
+        <li>Full vertical height for the action list.</li>
+        <li>Approve/Reject as compact icon buttons works at this width.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>Replaces Files / Git column while open — you trade one panel for another.</li>
+        <li>Cards squeeze at ~360px; less room for assumption text.</li>
+        <li>No history view unless you scroll.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M3 · BOTTOM DRAWER (RECOMMENDED)                        -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m3">
+  <div class="preview">
+    <div class="m3-shell">
+      <div class="titlebar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <span class="title">baton</span>
+        <span class="meta">v0.0.1</span>
+        <span class="spacer"></span>
+        <div class="right-chips">
+          <button class="chip maestro active-now"><span class="glyph">🎼</span> <span>3/7</span></button>
+          <div class="chip usage">●● 6%</div>
+        </div>
+      </div>
+      <div class="m3-main">
+        <div class="col">
+          <div class="col-head">Sessions</div>
+          <div class="col-body">
+            <div class="proj-name">misc</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b><br/><span class="branch">Codex install</span></span></div>
+            <div class="proj-name">baton</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b><br/><span class="branch">PR #7</span></span></div>
+            <div class="session-row selected"><span class="dot dot-running"></span><span class="label"><b>master-mind</b><br/><span class="branch">layout mockups</span></span></div>
+            <div class="proj-name">automation</div>
+            <div class="session-row"><span class="dot dot-idle"></span><span class="label"><b>development</b><br/><span class="branch">joke loop</span></span></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Editor · MaestroChip.tsx</div>
+          <div class="col-body" style="padding:0;">
+            <div class="editor-fake">
+              <div><span class="line-no">1</span><span class="tok-cm">// MaestroChip.tsx</span></div>
+              <div><span class="line-no">2</span></div>
+              <div><span class="line-no">3</span><span class="tok-kw">export function</span> <span class="tok-fn">MaestroChip</span>() {</div>
+              <div><span class="line-no">4</span>  <span class="tok-kw">return</span> &lt;<span class="tok-fn">div</span>/&gt;;</div>
+              <div><span class="line-no">5</span>}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Files / Git</div>
+          <div class="files-fake">
+            <div class="file">📁 app/src/</div>
+            <div class="file">  📄 MaestroChip.tsx</div>
+            <div class="file">  📄 maestroState.ts</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="m3-drawer">
+        <div class="m3-drawer-head">
+          <span class="glyph" style="font-size:14px;">🎼</span>
+          <span class="h3">Maestro Inbox · tick 7</span>
+          <span class="dim" style="font-size:11px;">3 proposals · 1 deferred</span>
+          <span class="dim" style="font-size:11px;">next tick in 11m 42s · at 11:42</span>
+          <span class="spacer" style="flex:1;"></span>
+          <div class="mode-selector" style="padding:0; margin:0;">
+            <div class="seg-pills">
+              <button class="active">suggest</button>
+              <button>run</button>
+            </div>
+          </div>
+          <button class="toggle" aria-label="active"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+          <span style="color:var(--text-faint); padding-left:8px; cursor:pointer;" title="Settings">⚙</span>
+        </div>
+        <div class="m3-drawer-body">
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">misc</span>
+              <span class="ac-branch">/ no git</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">Codex CLI verification</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label medium">Medium</span>
+              <span class="conf-meta">· 1 assumption</span>
+              <span class="ac-reissue-badge">6th re-issue</span>
+            </div>
+            <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install resolved correctly against the Azure endpoint. Summarize the config and stop.</div>
+            <div class="ac-assumption">
+              <span class="qa"><b>Q:</b> Can verify w/o interactive Codex?</span>
+              <span class="qa"><b>A:</b> Yes — std CLI convention.</span>
+              <span class="iw">If wrong: agent surfaces, user takes over.</span>
+            </div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">baton</span>
+              <span class="ac-branch">/ main</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">PR #7 prompt-history panel</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low-medium</span>
+              <span class="conf-meta">· 2 assumptions</span>
+            </div>
+            <div class="ac-prompt">PR #7 is open and green. Run any automated checks beyond the existing CI — lint, build, and integration tests that catch panel-refresh-on-submit. Don't merge.</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-idle"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ development</span>
+              <span class="ac-status-badge idle">idle</span>
+            </div>
+            <div class="ac-intent">Joke loop — no coding task</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low</span>
+              <span class="conf-meta">· 1 assumption</span>
+            </div>
+            <div class="ac-prompt">Pausing the joke loop. What was this session originally spun up for on the <span class="mono">development</span> branch — any coding task you can pick up, or is this purely sandbox?</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card defer">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-paused"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ feature/prd-…</span>
+              <span class="ac-status-badge paused">deferred</span>
+            </div>
+            <div class="ac-defer-msg">"Resume from summary" picker — typing here consumes the menu, not the agent. HITL-equivalent.</div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li>Stays open while you edit. Side-by-side cards make tick-over-tick comparison easy.</li>
+        <li>Resizable + remembers height. Small when Maestro is quiet, expand when triaging.</li>
+        <li>Doesn't displace projects or files/git.</li>
+        <li>Stepping stone to Mockup 5 — cards already in radar-like layout.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>Eats vertical space that could be terminal/editor.</li>
+        <li>Horizontal grid wraps awkwardly on narrow windows.</li>
+        <li>No history surface unless you scroll within a card.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M4 · CENTER TAB                                         -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m4">
+  <div class="preview">
+    <div class="titlebar">
+      <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+      <span class="title">baton</span>
+      <span class="meta">v0.0.1</span>
+      <span class="spacer"></span>
+      <div class="right-chips">
+        <button class="chip maestro active-now"><span class="glyph">🎼</span> <span>3/7</span></button>
+        <div class="chip usage">●● 6%</div>
+      </div>
+    </div>
+    <div class="workspace">
+      <div class="col">
+        <div class="col-head">Sessions</div>
+        <div class="col-body">
+          <div class="proj-name">misc</div>
+          <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b><br/><span class="branch">Codex install</span></span></div>
+          <div class="proj-name">baton</div>
+          <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b><br/><span class="branch">PR #7</span></span></div>
+          <div class="session-row"><span class="dot dot-running"></span><span class="label"><b>master-mind</b><br/><span class="branch">layout mockups</span></span></div>
+          <div class="proj-name">automation</div>
+          <div class="session-row"><span class="dot dot-idle"></span><span class="label"><b>development</b><br/><span class="branch">joke loop</span></span></div>
+        </div>
+      </div>
+      <div class="col" style="background:var(--bg);">
+        <div class="m4-tabs">
+          <div class="m4-tab">📄 MaestroChip.tsx</div>
+          <div class="m4-tab">⇄ diff</div>
+          <div class="m4-tab active">🎼 Maestro Inbox</div>
+          <div class="m4-tab" style="margin-left:auto;">⚙</div>
+        </div>
+        <div class="m4-pane">
+          <div class="m4-pane-head">
+            <span style="font-size:22px;">🎼</span>
+            <div>
+              <h2 style="margin:0;">Maestro · tick 7</h2>
+              <div class="dim" style="font-size:11px;">3 proposals · 1 deferred · next tick in 11m 42s · at 11:42</div>
+            </div>
+            <span class="spacer" style="flex:1;"></span>
+            <div class="mode-selector" style="padding:0; margin:0;">
+              <span class="dim" style="font-size:11px;">Mode</span>
+              <div class="seg-pills">
+                <button class="active">suggest</button>
+                <button>run</button>
+              </div>
+            </div>
+            <button class="toggle"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+          </div>
+
+          <div class="reasoning" style="margin-bottom:18px;">Tick 7. ~7h45m since tick 6. Major changes: <b>3b146ef1</b> moved to entirely new work — dropping 5-tick git-commit nudge. <b>44a32a89</b> re-snoozed after my Voice Live proposal — soft "wrong direction" signal. <b>4e8ceafe</b> hit the "Resume from summary" picker; HITL-equivalent.</div>
+
+          <div class="m4-grid">
+            <div class="action-card intervention">
+              <div class="ac-header">
+                <span class="ac-status-dot dot-needs"></span>
+                <span class="ac-project">misc</span>
+                <span class="ac-branch">/ no git</span>
+                <span class="ac-status-badge needs-input">needs-input</span>
+              </div>
+              <div class="ac-intent">Codex CLI verification</div>
+              <div class="ac-confidence-row">
+                <div class="conf-bar">
+                  <div class="conf-cell fill-medium"></div>
+                  <div class="conf-cell fill-medium"></div>
+                  <div class="conf-cell fill-medium"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                </div>
+                <span class="conf-label medium">Medium</span>
+                <span class="conf-meta">· 1 assumption</span>
+                <span class="ac-reissue-badge">6th re-issue</span>
+              </div>
+              <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install. If both work, summarize the final config and stop.</div>
+              <div class="ac-assumption">
+                <span class="qa"><b>Q:</b> Can verify w/o interactive Codex?</span>
+                <span class="qa"><b>A:</b> Yes — std CLI convention.</span>
+                <span class="iw">If wrong: agent surfaces, user takes over.</span>
+              </div>
+              <div class="ac-actions">
+                <button class="ac-btn primary">✓ Approve</button>
+                <button class="ac-btn">✎ Edit prompt</button>
+                <button class="ac-btn subtle">💤 Snooze 1h</button>
+                <button class="ac-btn danger subtle">✗ Reject</button>
+              </div>
+            </div>
+
+            <div class="action-card intervention">
+              <div class="ac-header">
+                <span class="ac-status-dot dot-needs"></span>
+                <span class="ac-project">baton</span>
+                <span class="ac-branch">/ main</span>
+                <span class="ac-status-badge needs-input">needs-input</span>
+              </div>
+              <div class="ac-intent">PR #7 prompt-history panel</div>
+              <div class="ac-confidence-row">
+                <div class="conf-bar">
+                  <div class="conf-cell fill-low"></div>
+                  <div class="conf-cell fill-low"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                </div>
+                <span class="conf-label low">Low-medium</span>
+                <span class="conf-meta">· 2 assumptions</span>
+              </div>
+              <div class="ac-prompt">PR #7 is open and green. Run any automated checks beyond CI — lint, build, integration tests for panel-refresh-on-submit. Don't merge; I'll run it locally.</div>
+              <div class="ac-actions">
+                <button class="ac-btn primary">✓ Approve</button>
+                <button class="ac-btn">✎ Edit prompt</button>
+                <button class="ac-btn subtle">💤 Snooze 1h</button>
+                <button class="ac-btn danger subtle">✗ Reject</button>
+              </div>
+            </div>
+
+            <div class="action-card intervention">
+              <div class="ac-header">
+                <span class="ac-status-dot dot-idle"></span>
+                <span class="ac-project">automation</span>
+                <span class="ac-branch">/ development</span>
+                <span class="ac-status-badge idle">idle</span>
+              </div>
+              <div class="ac-intent">Joke loop — surface real intent</div>
+              <div class="ac-confidence-row">
+                <div class="conf-bar">
+                  <div class="conf-cell fill-low"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                </div>
+                <span class="conf-label low">Low</span>
+              </div>
+              <div class="ac-prompt">Pausing the joke loop. What was this session originally spun up for on the <span class="mono">development</span> branch?</div>
+              <div class="ac-actions">
+                <button class="ac-btn primary">✓ Approve</button>
+                <button class="ac-btn">✎ Edit prompt</button>
+                <button class="ac-btn subtle">💤</button>
+                <button class="ac-btn danger subtle">✗</button>
+              </div>
+            </div>
+
+            <div class="action-card defer">
+              <div class="ac-header">
+                <span class="ac-status-dot dot-paused"></span>
+                <span class="ac-project">automation</span>
+                <span class="ac-branch">/ feature/prd-…</span>
+                <span class="ac-status-badge paused">deferred</span>
+              </div>
+              <div class="ac-defer-msg">"Resume from summary" picker — HITL-equivalent.</div>
+            </div>
+          </div>
+
+          <div class="m4-history">
+            <h4>History · last 6 ticks</h4>
+            <div class="m4-history-row"><span class="tick">tick 6</span><span>4 proposed</span><span>0 acted</span><span>1 reverted (44a32a89 Voice Live → re-snoozed)</span></div>
+            <div class="m4-history-row"><span class="tick">tick 5</span><span>5 proposed</span><span>0 acted</span><span>identical to tick 4</span></div>
+            <div class="m4-history-row"><span class="tick">tick 4</span><span>5 proposed</span><span>0 acted</span><span>identical to tick 3</span></div>
+            <div class="m4-history-row"><span class="tick">tick 3</span><span>5 proposed</span><span>0 acted</span><span>compaction marker (false alarm)</span></div>
+            <div class="m4-history-row"><span class="tick">tick 2</span><span>2 proposed</span><span>0 acted</span><span>—</span></div>
+            <div class="m4-history-row"><span class="tick">tick 1</span><span>2 proposed</span><span>0 acted</span><span>bootstrap</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="col">
+        <div class="col-head">Files / Git</div>
+        <div class="files-fake">
+          <div class="file">📁 app/src/</div>
+          <div class="file">  📄 MaestroChip.tsx</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li>Maximum surface area — rich cards, side-by-side grid, room for history below.</li>
+        <li>History panel makes calibration over time legible (tick 6 reverted, tick 5 identical, …).</li>
+        <li>Cmd+Shift+M = "Maestro is a place I visit," like email inbox.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>You leave your code to triage Maestro. Most "go to" surfaces have lower engagement than ambient ones.</li>
+        <li>New tab adds chrome to a pane that's already crowded.</li>
+        <li>Wider attack surface — needs filters, search, pagination at scale.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M5 · RADAR IS MAESTRO                                   -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m5">
+  <div class="preview">
+    <div class="m5-titlebar">
+      <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+      <span class="title">baton</span>
+      <div class="maestro-banner">
+        <span style="font-size:14px;">🎼</span>
+        <span>Maestro · tick 7 · next in 11m 42s</span>
+        <button class="toggle" style="margin-left:12px;"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+        <span style="color:var(--maestro); opacity:0.7; padding:0 4px;">·</span>
+        <div class="seg-pills" style="background:rgba(0,0,0,0.2); border-color:rgba(167,139,250,0.3);">
+          <button class="active">suggest</button>
+          <button style="color:rgba(167,139,250,0.5);">run</button>
+        </div>
+      </div>
+      <span class="spacer"></span>
+      <div class="chip usage">●● 6%</div>
+    </div>
+    <div class="m5-workspace">
+      <div class="m5-radar">
+        <div class="m5-proj">
+          <div class="m5-proj-name">misc</div>
+          <div class="m5-session has-maestro">
+            <div class="m5-session-head">
+              <span class="branch">no git</span>
+              <span class="status needs">needs-input</span>
+            </div>
+            <div class="dim" style="font-size:11px;">Kill process on port 7006 · Codex install</div>
+            <div class="m5-maestro-inline">
+              <div class="label">🎼 Maestro · Medium confidence · 6th re-issue</div>
+              <div class="prompt">Run <span class="mono">codex --version</span> + <span class="mono">codex --help</span> to verify install. Summarize config and stop.</div>
+              <div class="conf">
+                <div class="conf-bar">
+                  <div class="conf-cell fill-medium"></div>
+                  <div class="conf-cell fill-medium"></div>
+                  <div class="conf-cell fill-medium"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                </div>
+                <span class="dim">1 assumption · Q: verify w/o interactive Codex? · A: Yes</span>
+              </div>
+              <div class="m5-mini-actions">
+                <button class="primary">✓ Approve</button>
+                <button>✎ Edit</button>
+                <button>💤</button>
+                <button>✗</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="m5-proj">
+          <div class="m5-proj-name">baton</div>
+          <div class="m5-session has-maestro">
+            <div class="m5-session-head">
+              <span class="branch">main</span>
+              <span class="status needs">needs-input</span>
+            </div>
+            <div class="dim" style="font-size:11px;">PR #7 prompt-history panel</div>
+            <div class="m5-maestro-inline">
+              <div class="label">🎼 Maestro · Low-med confidence</div>
+              <div class="prompt">Run any automated checks beyond CI. Don't merge; I'll run it locally.</div>
+              <div class="conf">
+                <div class="conf-bar">
+                  <div class="conf-cell fill-low"></div>
+                  <div class="conf-cell fill-low"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                </div>
+                <span class="dim">2 assumptions</span>
+              </div>
+              <div class="m5-mini-actions">
+                <button class="primary">✓ Approve</button>
+                <button>✎ Edit</button>
+                <button>💤</button>
+                <button>✗</button>
+              </div>
+            </div>
+          </div>
+          <div class="m5-session user-active">
+            <div class="m5-session-head">
+              <span class="branch">master-mind</span>
+              <span class="status running">running</span>
+            </div>
+            <div class="dim" style="font-size:11px;">layout mockups</div>
+            <div class="m5-userside-note">▶ User active — Maestro stands back.</div>
+          </div>
+        </div>
+
+        <div class="m5-proj">
+          <div class="m5-proj-name">automation</div>
+          <div class="m5-session has-maestro">
+            <div class="m5-session-head">
+              <span class="branch">development</span>
+              <span class="status">idle</span>
+            </div>
+            <div class="dim" style="font-size:11px;">joke loop · no coding task</div>
+            <div class="m5-maestro-inline">
+              <div class="label">🎼 Maestro · Low confidence</div>
+              <div class="prompt">Pausing the joke loop. What was this for — sandbox, or any task you can pick up?</div>
+              <div class="conf">
+                <div class="conf-bar">
+                  <div class="conf-cell fill-low"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                  <div class="conf-cell"></div>
+                </div>
+                <span class="dim">1 assumption</span>
+              </div>
+              <div class="m5-mini-actions">
+                <button class="primary">✓</button>
+                <button>✎</button>
+                <button>💤</button>
+                <button>✗</button>
+              </div>
+            </div>
+          </div>
+          <div class="m5-session">
+            <div class="m5-session-head">
+              <span class="branch">feature/prd-…</span>
+              <span class="status">paused</span>
+            </div>
+            <div class="dim" style="font-size:11px;">"Resume from summary" picker — HITL-blocked. Deferred.</div>
+          </div>
+        </div>
+
+        <div class="m5-proj">
+          <div class="m5-proj-name dim" style="opacity:0.5;">snoozed</div>
+          <div class="m5-session" style="opacity:0.5;">
+            <div class="m5-session-head">
+              <span class="branch">llm-docker-dev6 · real-time-interaction</span>
+              <span class="status">paused 💤</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="col" style="border-right:none;">
+        <div class="col-head">Editor · MaestroChip.tsx</div>
+        <div class="col-body" style="padding:0;">
+          <div class="editor-fake">
+            <div><span class="line-no">1</span><span class="tok-cm">// MaestroChip.tsx</span></div>
+            <div><span class="line-no">2</span></div>
+            <div><span class="line-no">3</span><span class="tok-kw">export function</span> <span class="tok-fn">MaestroChip</span>() {</div>
+            <div><span class="line-no">4</span>  <span class="tok-kw">return</span> &lt;<span class="tok-fn">div</span>/&gt;;</div>
+            <div><span class="line-no">5</span>}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li>Strongest product narrative — Maestro conducts; radar is its score; you're the listener-of-last-resort.</li>
+        <li>No new chrome. Maestro is everywhere already; impossible to miss.</li>
+        <li>Approve/Reject lives next to the session it acts on — no context switching.</li>
+        <li>Solves the "where is Maestro" discoverability problem entirely.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>Largest design lift — rethinking how session chips render, how the inbox (F3.8) and Maestro inbox (F15.8) relate.</li>
+        <li>When Maestro is off, radar needs a sensible fallback (revert to plain status chips).</li>
+        <li>Vertical density: each session row triples in size when it has a proposal. Long lists scroll a lot.</li>
+        <li>Right column gets squeezed if you keep Files/Git visible too.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M6 · FULL-APP TAKEOVER                                  -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m6">
+  <div class="preview">
+    <div class="m6-shell">
+      <div class="titlebar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <span class="title">baton</span>
+        <span class="meta">v0.0.1</span>
+        <span class="spacer"></span>
+        <div class="right-chips">
+          <button class="chip maestro active-now" style="background:var(--maestro); color:#0e0a1f; border-color:var(--maestro);"><span class="glyph">🎼</span> <span>open</span></button>
+          <div class="chip usage">●● 6%</div>
+        </div>
+      </div>
+      <div class="m6-content">
+        <div class="m6-banner">
+          <span class="glyph">🎼</span>
+          <div>
+            <h2 style="margin:0;">Maestro · tick 7</h2>
+            <div class="dim" style="font-size:11.5px;">3 proposals · 1 deferred · daemon running · next tick in 11m 42s · at 11:42</div>
+          </div>
+          <span class="spacer" style="flex:1;"></span>
+          <div class="mode-selector" style="padding:0; margin:0;">
+            <span class="dim" style="font-size:11px;">Mode</span>
+            <div class="seg-pills">
+              <button class="active">suggest</button>
+              <button>run</button>
+            </div>
+          </div>
+          <button class="toggle"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+          <button class="m6-close">✕ Close</button>
+        </div>
+
+        <div class="reasoning">Tick 7 saw <b>3b146ef1</b> move to entirely new work — dropping the 5-tick git-commit nudge. <b>44a32a89</b> re-snoozed after my Voice Live proposal in tick 6 — soft "wrong direction" signal. <b>4e8ceafe</b> hit the Claude Code "Resume from summary" picker (Enter to confirm); typing into that consumes the menu, not the agent. HITL-equivalent.</div>
+
+        <div class="m6-grid">
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">misc</span>
+              <span class="ac-branch">/ no git</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">Codex CLI verification</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label medium">Medium</span>
+              <span class="conf-meta">· 1 assumption</span>
+              <span class="ac-reissue-badge">6th re-issue</span>
+            </div>
+            <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install resolved correctly against the Azure endpoint. Summarize the config and stop.</div>
+            <div class="ac-assumption">
+              <span class="qa"><b>Q:</b> Can verify w/o interactive Codex?</span>
+              <span class="qa"><b>A:</b> Yes — std CLI convention.</span>
+              <span class="iw">If wrong: agent surfaces, user takes over.</span>
+            </div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">baton</span>
+              <span class="ac-branch">/ main</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">PR #7 prompt-history panel</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low-medium</span>
+              <span class="conf-meta">· 2 assumptions</span>
+            </div>
+            <div class="ac-prompt">PR #7 is open and green. Run any automated checks beyond the existing CI — lint, build, integration tests that catch panel-refresh-on-submit. Don't merge; I'll run it locally.</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-idle"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ development</span>
+              <span class="ac-status-badge idle">idle</span>
+            </div>
+            <div class="ac-intent">Joke loop — no coding task</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low</span>
+              <span class="conf-meta">· 1 assumption</span>
+            </div>
+            <div class="ac-prompt">Pausing the joke loop. What was this session originally spun up for on the <span class="mono">development</span> branch — any coding task you can pick up, or is this purely sandbox?</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤</button>
+              <button class="ac-btn danger subtle">✗</button>
+            </div>
+          </div>
+
+          <div class="action-card defer">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-paused"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ feature/prd-…</span>
+              <span class="ac-status-badge paused">deferred</span>
+            </div>
+            <div class="ac-defer-msg">"Resume from summary" picker — typing here consumes the menu. HITL-equivalent.</div>
+          </div>
+        </div>
+
+        <div class="m6-history">
+          <h4>History · last 6 ticks</h4>
+          <div class="m6-history-row"><span class="tick">tick 6</span><span>4 proposed</span><span>0 acted</span><span>1 reverted (44a32a89 Voice Live → re-snoozed)</span></div>
+          <div class="m6-history-row"><span class="tick">tick 5</span><span>5 proposed</span><span>0 acted</span><span>identical to tick 4</span></div>
+          <div class="m6-history-row"><span class="tick">tick 4</span><span>5 proposed</span><span>0 acted</span><span>identical to tick 3</span></div>
+          <div class="m6-history-row"><span class="tick">tick 3</span><span>5 proposed</span><span>0 acted</span><span>compaction marker (false alarm)</span></div>
+          <div class="m6-history-row"><span class="tick">tick 2</span><span>2 proposed</span><span>0 acted</span><span>—</span></div>
+          <div class="m6-history-row"><span class="tick">tick 1</span><span>2 proposed</span><span>0 acted</span><span>bootstrap</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li>Maximum surface — 3-column card grid, full reasoning at top, history below.</li>
+        <li>No competition for space with editor/files/projects when you're focused on Maestro.</li>
+        <li>Mental model: "Maestro is a mode" like Files vs Editor in a packed IDE.</li>
+        <li>The Close button is right at top-right — same Fitts distance as the trigger chip.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>You lose sight of your editor + the sessions list while Maestro is open. Trade flow.</li>
+        <li>Approving an action then wanting to see what the agent does requires Close → find session → click.</li>
+        <li>For 1–2 proposals it feels heavyweight; for 10+ it feels right.</li>
+        <li>Repeated Open/Close as you triage = mode-switching tax.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M7 · TOP DRAWER (Fitts-law fix for M3)                  -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m7">
+  <div class="preview" style="position:relative;">
+    <div class="m7-shell">
+      <div class="titlebar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <span class="title">baton</span>
+        <span class="meta">v0.0.1</span>
+        <span class="spacer"></span>
+        <div class="right-chips">
+          <button class="chip maestro active-now"><span class="glyph">🎼</span> <span>3/7 ▾</span></button>
+          <div class="chip usage">●● 6%</div>
+        </div>
+      </div>
+      <span class="arrow-cue" aria-hidden></span>
+
+      <div class="m7-drawer">
+        <div class="m7-drawer-head">
+          <span class="glyph" style="font-size:14px;">🎼</span>
+          <span class="h3">Maestro · tick 7</span>
+          <span class="dim" style="font-size:11px;">3 proposals · 1 deferred</span>
+          <span class="dim" style="font-size:11px;">next tick in 11m 42s · at 11:42</span>
+          <span class="spacer" style="flex:1;"></span>
+          <div class="mode-selector" style="padding:0; margin:0;">
+            <div class="seg-pills">
+              <button class="active">suggest</button>
+              <button>run</button>
+            </div>
+          </div>
+          <button class="toggle" aria-label="active"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+          <span style="color:var(--text-faint); padding-left:8px; cursor:pointer;" title="Settings">⚙</span>
+          <span style="color:var(--text-faint); padding-left:6px; cursor:pointer;" title="Collapse">✕</span>
+        </div>
+        <div class="m7-drawer-body">
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">misc</span>
+              <span class="ac-branch">/ no git</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">Codex CLI verification</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label medium">Medium</span>
+              <span class="conf-meta">· 1 assumption</span>
+              <span class="ac-reissue-badge">6th re-issue</span>
+            </div>
+            <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install resolved correctly against the Azure endpoint. Summarize the config and stop.</div>
+            <div class="ac-assumption">
+              <span class="qa"><b>Q:</b> Can verify w/o interactive Codex?</span>
+              <span class="qa"><b>A:</b> Yes — std CLI convention.</span>
+              <span class="iw">If wrong: agent surfaces, user takes over.</span>
+            </div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">baton</span>
+              <span class="ac-branch">/ main</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">PR #7 prompt-history panel</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low-medium</span>
+              <span class="conf-meta">· 2 assumptions</span>
+            </div>
+            <div class="ac-prompt">PR #7 is open and green. Run any automated checks beyond the existing CI — lint, build, integration tests that catch panel-refresh-on-submit. Don't merge.</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-idle"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ development</span>
+              <span class="ac-status-badge idle">idle</span>
+            </div>
+            <div class="ac-intent">Joke loop — no coding task</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low</span>
+              <span class="conf-meta">· 1 assumption</span>
+            </div>
+            <div class="ac-prompt">Pausing the joke loop. What was this session originally spun up for on the <span class="mono">development</span> branch — sandbox, or any task you can pick up?</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card defer">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-paused"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ feature/prd-…</span>
+              <span class="ac-status-badge paused">deferred</span>
+            </div>
+            <div class="ac-defer-msg">"Resume from summary" picker — typing here consumes the menu. HITL-equivalent.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="m7-main">
+        <div class="col">
+          <div class="col-head">Sessions</div>
+          <div class="col-body">
+            <div class="proj-name">misc</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b><br/><span class="branch">Codex install</span></span></div>
+            <div class="proj-name">baton</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b><br/><span class="branch">PR #7</span></span></div>
+            <div class="session-row selected"><span class="dot dot-running"></span><span class="label"><b>master-mind</b><br/><span class="branch">layout mockups</span></span></div>
+            <div class="proj-name">automation</div>
+            <div class="session-row"><span class="dot dot-idle"></span><span class="label"><b>development</b><br/><span class="branch">joke loop</span></span></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Editor · MaestroChip.tsx</div>
+          <div class="col-body" style="padding:0;">
+            <div class="editor-fake">
+              <div><span class="line-no">1</span><span class="tok-cm">// MaestroChip.tsx</span></div>
+              <div><span class="line-no">2</span></div>
+              <div><span class="line-no">3</span><span class="tok-kw">export function</span> <span class="tok-fn">MaestroChip</span>() {</div>
+              <div><span class="line-no">4</span>  <span class="tok-kw">return</span> &lt;<span class="tok-fn">div</span>/&gt;;</div>
+              <div><span class="line-no">5</span>}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Files / Git</div>
+          <div class="files-fake">
+            <div class="file">📁 app/src/</div>
+            <div class="file">  📄 MaestroChip.tsx</div>
+            <div class="file">  📄 maestroState.ts</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li>Drawer opens <b>right where you clicked</b> — chip is top-right, drawer drops from top. Zero mouse travel.</li>
+        <li>Same horizontal card grid as M3 (which you liked) — keeps the comparison-friendly layout.</li>
+        <li>Editor stays visible below; resizable so a quiet Maestro can collapse to 80px.</li>
+        <li>Notification arrow ▾ on the chip cues the drop direction.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>Pushes the workspace down — top-of-screen real estate is the most visually anchored.</li>
+        <li>When daemon is off, drawer would either auto-collapse (cue gone) or stay open with stale content.</li>
+        <li>If you keep it open all day, the editor area shrinks permanently.</li>
+        <li>Anchored opposite the projects column (which is top-left) — a tiny bit of cross-eye for triage.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M8 · COLLAPSIBLE TOP DRAWER                             -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m8">
+
+  <div class="m8-state-label">
+    Default state — <b>collapsed strip</b> (~30px tall) <span class="arrow">·</span>
+    no proposals demanding attention, or user collapsed
+  </div>
+
+  <div class="preview m8-preview-pair">
+    <div class="m8-collapsed-shell">
+      <div class="titlebar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <span class="title">baton</span>
+        <span class="meta">v0.0.1</span>
+        <span class="spacer"></span>
+        <div class="right-chips">
+          <button class="chip maestro"><span class="glyph">🎼</span> <span>3/7 ▴</span></button>
+          <div class="chip usage">●● 6%</div>
+        </div>
+      </div>
+
+      <div class="m8-strip" title="Click to expand Maestro inbox">
+        <span class="glyph">🎼</span>
+        <span class="label-bold">Maestro</span>
+        <span class="dim">tick 7 · active</span>
+        <span class="next">next in 11m 42s · 11:42</span>
+        <div class="count">
+          <span class="badge-prop">3 proposals</span>
+          <span class="badge-defer">1 deferred</span>
+          <span class="expand-cue">▾ expand</span>
+        </div>
+      </div>
+
+      <div class="workspace" style="height:auto; min-height:0; flex:1;">
+        <div class="col">
+          <div class="col-head">Sessions</div>
+          <div class="col-body">
+            <div class="proj-name">misc</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b><br/><span class="branch">Codex install</span></span></div>
+            <div class="proj-name">baton</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b><br/><span class="branch">PR #7</span></span></div>
+            <div class="session-row selected"><span class="dot dot-running"></span><span class="label"><b>master-mind</b><br/><span class="branch">layout mockups</span></span></div>
+            <div class="proj-name">automation</div>
+            <div class="session-row"><span class="dot dot-idle"></span><span class="label"><b>development</b></span></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Editor · MaestroChip.tsx</div>
+          <div class="col-body" style="padding:0;">
+            <div class="editor-fake">
+              <div><span class="line-no">1</span><span class="tok-cm">// You barely notice Maestro is here.</span></div>
+              <div><span class="line-no">2</span><span class="tok-cm">// 30px strip ≈ 4% of vertical space.</span></div>
+              <div><span class="line-no">3</span></div>
+              <div><span class="line-no">4</span><span class="tok-kw">export function</span> <span class="tok-fn">MaestroChip</span>() {</div>
+              <div><span class="line-no">5</span>  <span class="tok-kw">return</span> &lt;<span class="tok-fn">div</span>/&gt;;</div>
+              <div><span class="line-no">6</span>}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Files / Git</div>
+          <div class="files-fake">
+            <div class="file">📁 app/src/</div>
+            <div class="file">  📄 MaestroChip.tsx</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="m8-state-label" style="margin-top:24px;">
+    Triggered state — <b>expanded drawer</b> <span class="arrow">·</span>
+    proposals demanding attention, urgent badge on chip, or user clicked strip / chip
+  </div>
+
+  <div class="preview m8-preview-pair">
+    <div class="m8-expanded-shell" style="position:relative;">
+      <div class="titlebar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <span class="title">baton</span>
+        <span class="meta">v0.0.1</span>
+        <span class="spacer"></span>
+        <div class="right-chips">
+          <button class="chip maestro active-now"><span class="glyph">🎼</span> <span>3/7 ▾</span></button>
+          <div class="chip usage">●● 6%</div>
+        </div>
+      </div>
+      <span class="arrow-cue" aria-hidden></span>
+
+      <div class="m7-drawer">
+        <div class="m7-drawer-head">
+          <span class="glyph" style="font-size:14px;">🎼</span>
+          <span class="h3">Maestro · tick 7</span>
+          <span class="dim" style="font-size:11px;">3 proposals · 1 deferred</span>
+          <span class="dim" style="font-size:11px;">next tick in 11m 42s · at 11:42</span>
+          <span class="spacer" style="flex:1;"></span>
+          <div class="mode-selector" style="padding:0; margin:0;">
+            <div class="seg-pills">
+              <button class="active">suggest</button>
+              <button>run</button>
+            </div>
+          </div>
+          <button class="toggle" aria-label="active"><span class="track"><span class="thumb"></span></span><span class="label">active</span></button>
+          <span style="color:var(--text-faint); padding-left:8px; cursor:pointer;" title="Settings">⚙</span>
+          <span style="color:var(--text-faint); padding-left:6px; cursor:pointer;" title="Collapse back to strip">▴ collapse</span>
+        </div>
+        <div class="m7-drawer-body">
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">misc</span>
+              <span class="ac-branch">/ no git</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">Codex CLI verification</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label medium">Medium</span>
+              <span class="conf-meta">· 1 assumption</span>
+              <span class="ac-reissue-badge">6th re-issue</span>
+            </div>
+            <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install resolved correctly against the Azure endpoint. Summarize the config and stop.</div>
+            <div class="ac-assumption">
+              <span class="qa"><b>Q:</b> Can verify w/o interactive Codex?</span>
+              <span class="qa"><b>A:</b> Yes — std CLI convention.</span>
+              <span class="iw">If wrong: agent surfaces, user takes over.</span>
+            </div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">baton</span>
+              <span class="ac-branch">/ main</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">PR #7 prompt-history panel</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low-medium</span>
+              <span class="conf-meta">· 2 assumptions</span>
+            </div>
+            <div class="ac-prompt">PR #7 is open and green. Run any automated checks beyond the existing CI — lint, build, integration tests that catch panel-refresh-on-submit. Don't merge.</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-idle"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ development</span>
+              <span class="ac-status-badge idle">idle</span>
+            </div>
+            <div class="ac-intent">Joke loop — no coding task</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low</span>
+              <span class="conf-meta">· 1 assumption</span>
+            </div>
+            <div class="ac-prompt">Pausing the joke loop. What was this session originally spun up for on the <span class="mono">development</span> branch — sandbox, or any task you can pick up?</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card defer">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-paused"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ feature/prd-…</span>
+              <span class="ac-status-badge paused">deferred</span>
+            </div>
+            <div class="ac-defer-msg">"Resume from summary" picker — typing here consumes the menu. HITL-equivalent.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="m7-main">
+        <div class="col">
+          <div class="col-head">Sessions</div>
+          <div class="col-body">
+            <div class="proj-name">misc</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b></span></div>
+            <div class="proj-name">baton</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b></span></div>
+            <div class="session-row selected"><span class="dot dot-running"></span><span class="label"><b>master-mind</b></span></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Editor</div>
+          <div class="col-body" style="padding:0;">
+            <div class="editor-fake">
+              <div><span class="line-no">1</span><span class="tok-cm">// Triage mode — drawer expanded.</span></div>
+              <div><span class="line-no">2</span><span class="tok-cm">// Editor still visible below.</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Files</div>
+          <div class="files-fake"><div class="file">📁 app/src/</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    <b>Auto-expand triggers</b> (proposed): (a) first tick of the day,
+    (b) high-confidence proposal (≥ 0.85), (c) HITL request fires on a
+    target session, (d) revert request from the user, (e) explicit
+    <span class="mono">/maestro-show</span> shortcut.
+    <b>Auto-collapse</b>: 10 min of no Maestro interaction <i>and</i>
+    no proposals over Low-medium confidence.
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li><b>Best of both M3 + M7</b>. Same horizontal card grid you liked from M3; same zero-mouse-travel anchor from M7; plus an idle posture that doesn't eat editor space.</li>
+        <li>Strip is a tactile, glanceable summary even when collapsed (next tick countdown is the killer info).</li>
+        <li>Smart auto-expand lets Maestro come to you when it has something good (high confidence, HITL), not just when YOU remember.</li>
+        <li>Click the strip OR click the chip — both anchor in the same corner, so it's discoverable from either direction.</li>
+        <li>Resizable while expanded; collapse returns to the 30px strip without losing state.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>Two states + auto-expand policy = more design + animation work than the static drawers.</li>
+        <li>Auto-expand triggers need careful tuning — wrong defaults will annoy more than help.</li>
+        <li>The strip's countdown re-rendering every second draws the eye even when nothing's happening (mitigation: only update on minute boundary in collapsed mode).</li>
+        <li>If you never collapse, you've just built M7 with extra steps.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ════════════════════════════════════════════════════════ -->
+<!-- M9 · STRIP + FULL-SCREEN TOGGLE                         -->
+<!-- ════════════════════════════════════════════════════════ -->
+<div class="variant" id="m9">
+
+  <div class="m8-state-label">
+    Default — <b>compact strip</b> (~30px). Ambient awareness; minimal workspace cost.
+  </div>
+
+  <div class="preview m8-preview-pair">
+    <div class="m8-collapsed-shell">
+      <div class="titlebar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <span class="title">baton</span>
+        <span class="meta">v0.0.1</span>
+        <span class="spacer"></span>
+        <div class="right-chips">
+          <button class="chip maestro"><span class="glyph">🎼</span> <span>3/7</span></button>
+          <div class="chip usage">●● 6%</div>
+        </div>
+      </div>
+
+      <div class="m8-strip" title="Click to toggle Maestro full-screen">
+        <span class="glyph">🎼</span>
+        <span class="label-bold">Maestro</span>
+        <span class="dim">tick 7 · active · suggest</span>
+        <span class="next">next in 11m 42s · 11:42</span>
+        <div class="count">
+          <span class="badge-prop">3 proposals</span>
+          <span class="badge-defer">1 deferred</span>
+          <button class="m9-toggle-btn" title="Switch to full-screen Maestro">
+            <span class="icon">⛶</span> Full screen
+          </button>
+        </div>
+      </div>
+
+      <div class="workspace" style="height:auto; min-height:0; flex:1;">
+        <div class="col">
+          <div class="col-head">Sessions</div>
+          <div class="col-body">
+            <div class="proj-name">misc</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>no git</b><br/><span class="branch">Codex install</span></span></div>
+            <div class="proj-name">baton</div>
+            <div class="session-row"><span class="dot dot-needs"></span><span class="label"><b>main</b><br/><span class="branch">PR #7</span></span></div>
+            <div class="session-row selected"><span class="dot dot-running"></span><span class="label"><b>master-mind</b><br/><span class="branch">layout mockups</span></span></div>
+            <div class="proj-name">automation</div>
+            <div class="session-row"><span class="dot dot-idle"></span><span class="label"><b>development</b></span></div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Editor · MaestroChip.tsx</div>
+          <div class="col-body" style="padding:0;">
+            <div class="editor-fake">
+              <div><span class="line-no">1</span><span class="tok-cm">// Strip mode — Maestro present but quiet.</span></div>
+              <div><span class="line-no">2</span><span class="tok-cm">// Click "⛶ Full screen" to swap workspace for Maestro.</span></div>
+              <div><span class="line-no">3</span></div>
+              <div><span class="line-no">4</span><span class="tok-kw">export function</span> <span class="tok-fn">MaestroChip</span>() {</div>
+              <div><span class="line-no">5</span>  <span class="tok-kw">return</span> &lt;<span class="tok-fn">div</span>/&gt;;</div>
+              <div><span class="line-no">6</span>}</div>
+            </div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="col-head">Files / Git</div>
+          <div class="files-fake">
+            <div class="file">📁 app/src/</div>
+            <div class="file">  📄 MaestroChip.tsx</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="m8-state-label" style="margin-top:24px;">
+    Toggled — <b>full-screen Maestro</b>. Workspace hidden; entire app area is Maestro content. Strip persists at top.
+  </div>
+
+  <div class="preview m8-preview-pair">
+    <div class="m6-shell">
+      <div class="titlebar">
+        <div class="dots"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+        <span class="title">baton</span>
+        <span class="meta">v0.0.1</span>
+        <span class="spacer"></span>
+        <div class="right-chips">
+          <button class="chip maestro active-now" style="background:var(--maestro); color:#0e0a1f; border-color:var(--maestro);"><span class="glyph">🎼</span> <span>full</span></button>
+          <div class="chip usage">●● 6%</div>
+        </div>
+      </div>
+
+      <div class="m8-strip" style="background: var(--maestro-bg); border-bottom-color: var(--maestro);" title="Click ⛯ to return to compact strip">
+        <span class="glyph" style="color: var(--maestro);">🎼</span>
+        <span class="label-bold" style="color: var(--maestro);">Maestro · Full screen</span>
+        <span class="dim" style="color: rgba(167,139,250,0.7);">tick 7 · 11m 42s to next</span>
+        <span class="spacer" style="flex:1;"></span>
+        <div class="count">
+          <span class="badge-prop">3 proposals</span>
+          <button class="m9-fullscreen-toggle" title="Return to compact strip + show workspace">
+            <span class="icon">⛯</span> Compact
+          </button>
+        </div>
+      </div>
+
+      <div class="m6-content">
+        <div class="m9-callout">
+          <span>👆</span>
+          <span>You're in <b>full screen</b>. Press <span class="arrow-key">⛯</span> on the strip, click the chip, or hit <span class="arrow-key">Esc</span> to return to compact mode.</span>
+        </div>
+
+        <div class="reasoning">Tick 7 saw <b>3b146ef1</b> move to entirely new work — dropping the 5-tick git-commit nudge. <b>44a32a89</b> re-snoozed after my Voice Live proposal in tick 6 — soft "wrong direction" signal. <b>4e8ceafe</b> hit the Claude Code "Resume from summary" picker (Enter to confirm); HITL-equivalent.</div>
+
+        <div class="m6-grid">
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">misc</span>
+              <span class="ac-branch">/ no git</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">Codex CLI verification</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell fill-medium"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label medium">Medium</span>
+              <span class="conf-meta">· 1 assumption</span>
+              <span class="ac-reissue-badge">6th re-issue</span>
+            </div>
+            <div class="ac-prompt">Run <span class="mono">codex --version</span> and <span class="mono">codex --help</span> to verify the install resolved correctly against the Azure endpoint. Summarize the config and stop.</div>
+            <div class="ac-assumption">
+              <span class="qa"><b>Q:</b> Can verify w/o interactive Codex?</span>
+              <span class="qa"><b>A:</b> Yes — std CLI convention.</span>
+              <span class="iw">If wrong: agent surfaces, user takes over.</span>
+            </div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-needs"></span>
+              <span class="ac-project">baton</span>
+              <span class="ac-branch">/ main</span>
+              <span class="ac-status-badge needs-input">needs-input</span>
+            </div>
+            <div class="ac-intent">PR #7 prompt-history panel</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low-medium</span>
+              <span class="conf-meta">· 2 assumptions</span>
+            </div>
+            <div class="ac-prompt">PR #7 is open and green. Run any automated checks beyond the existing CI — lint, build, integration tests that catch panel-refresh-on-submit. Don't merge; I'll run it locally.</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤 Snooze</button>
+              <button class="ac-btn danger subtle">✗ Reject</button>
+            </div>
+          </div>
+
+          <div class="action-card intervention">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-idle"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ development</span>
+              <span class="ac-status-badge idle">idle</span>
+            </div>
+            <div class="ac-intent">Joke loop — no coding task</div>
+            <div class="ac-confidence-row">
+              <div class="conf-bar">
+                <div class="conf-cell fill-low"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+                <div class="conf-cell"></div>
+              </div>
+              <span class="conf-label low">Low</span>
+              <span class="conf-meta">· 1 assumption</span>
+            </div>
+            <div class="ac-prompt">Pausing the joke loop. What was this session originally spun up for on the <span class="mono">development</span> branch — sandbox, or any task you can pick up?</div>
+            <div class="ac-actions">
+              <button class="ac-btn primary">✓ Approve</button>
+              <button class="ac-btn">✎ Edit</button>
+              <button class="ac-btn subtle">💤</button>
+              <button class="ac-btn danger subtle">✗</button>
+            </div>
+          </div>
+
+          <div class="action-card defer">
+            <div class="ac-header">
+              <span class="ac-status-dot dot-paused"></span>
+              <span class="ac-project">automation</span>
+              <span class="ac-branch">/ feature/prd-…</span>
+              <span class="ac-status-badge paused">deferred</span>
+            </div>
+            <div class="ac-defer-msg">"Resume from summary" picker — typing here consumes the menu. HITL-equivalent.</div>
+          </div>
+        </div>
+
+        <div class="m6-history">
+          <h4>History · last 6 ticks</h4>
+          <div class="m6-history-row"><span class="tick">tick 6</span><span>4 proposed</span><span>0 acted</span><span>1 reverted (44a32a89 Voice Live → re-snoozed)</span></div>
+          <div class="m6-history-row"><span class="tick">tick 5</span><span>5 proposed</span><span>0 acted</span><span>identical to tick 4</span></div>
+          <div class="m6-history-row"><span class="tick">tick 4</span><span>5 proposed</span><span>0 acted</span><span>identical to tick 3</span></div>
+          <div class="m6-history-row"><span class="tick">tick 3</span><span>5 proposed</span><span>0 acted</span><span>—</span></div>
+          <div class="m6-history-row"><span class="tick">tick 2</span><span>2 proposed</span><span>0 acted</span><span>—</span></div>
+          <div class="m6-history-row"><span class="tick">tick 1</span><span>2 proposed</span><span>0 acted</span><span>bootstrap</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footnote">
+    <b>Toggle anchors</b>: the <span class="mono">⛶</span> button on the strip, the chip itself, and an <span class="mono">⌘+Shift+M</span> shortcut all toggle full-screen ↔ strip. <span class="mono">Esc</span> always returns to strip. Auto-return after 5 min of no interaction (proposed default).<br>
+    <b>Same strip in both states</b> — it persists. Only the workspace area below it swaps content.
+  </div>
+
+  <div class="pros-cons">
+    <div>
+      <h4>Strengths</h4>
+      <ul>
+        <li><b>Binary states, one explicit toggle</b> — no middle drawer; no "what mode am I in" confusion.</li>
+        <li>Strip is always visible — Maestro is never forgotten.</li>
+        <li>Full screen gives 100% of workspace to triage when you need it.</li>
+        <li>Three identical anchors (button, chip, shortcut) make the toggle discoverable from anywhere.</li>
+        <li>Esc to exit matches every modal in macOS — muscle memory aligned.</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Trade-offs</h4>
+      <ul>
+        <li>No "see one card without leaving the editor" middle ground (M3/M7/M8 drawer fills that). For glance-then-back triage you re-enter the workspace explicitly.</li>
+        <li>Full-screen swap is a context-switch — you lose the editor while reviewing Maestro.</li>
+        <li>If you triage 4× per hour, you're toggling 8× per hour. The friction adds up.</li>
+        <li>30px strip ate from M8; both feel similar at idle. M9's bet is that you'd rather a clean full-page triage than a drawer.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+  document.querySelectorAll('.picker button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.picker button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const target = btn.dataset.tab;
+      document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+      document.getElementById(target).classList.add('active');
+    });
+  });
+</script>
+
+</body>
+</html>
