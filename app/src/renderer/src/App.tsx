@@ -7,6 +7,9 @@ import { LeftColumn } from './components/LeftColumn.js';
 import { MiddleColumn } from './components/MiddleColumn.js';
 import { RightColumn } from './components/RightColumn.js';
 import { SplitHandle } from './components/SplitHandle.js';
+import { MaestroStrip } from './components/MaestroStrip.js';
+import { MaestroFullScreen } from './components/MaestroFullScreen.js';
+import { useMaestroUI } from './components/maestroUI.js';
 
 // Column-width clamps. Middle column gets whatever's left over.
 const LEFT_MIN = 200;
@@ -122,6 +125,21 @@ export function App(): JSX.Element {
       .catch(() => { /* notifier failure must never break the UI */ });
   }, [selectedSessionId]);
 
+  // Esc returns from Maestro full-screen to the workspace.
+  const fullScreen = useMaestroUI((s) => s.fullScreen);
+  const setFullScreen = useMaestroUI((s) => s.setFullScreen);
+  useEffect(() => {
+    if (!fullScreen) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setFullScreen(false);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [fullScreen, setFullScreen]);
+
   if (preloadError) {
     return (
       <div className="app">
@@ -134,7 +152,7 @@ export function App(): JSX.Element {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${fullScreen ? 'app-maestro-full' : ''}`}>
       <Titlebar
         version={meta?.version ?? 'dev'}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -147,19 +165,24 @@ export function App(): JSX.Element {
           void window.baton.call('onboarding.complete', {}).catch(() => { /* best-effort */ });
         }}
       />
-      <main
-        className="main"
-        style={{
-          ['--left-w' as never]: `${leftWidth}px`,
-          ['--right-w' as never]: `${rightWidth}px`,
-        }}
-      >
-        <LeftColumn />
-        <SplitHandle onResize={onLeftResize} ariaLabel="Resize projects column" />
-        <MiddleColumn />
-        <SplitHandle onResize={onRightResize} ariaLabel="Resize files column" />
-        <RightColumn />
-      </main>
+      <MaestroStrip />
+      {fullScreen ? (
+        <MaestroFullScreen />
+      ) : (
+        <main
+          className="main"
+          style={{
+            ['--left-w' as never]: `${leftWidth}px`,
+            ['--right-w' as never]: `${rightWidth}px`,
+          }}
+        >
+          <LeftColumn />
+          <SplitHandle onResize={onLeftResize} ariaLabel="Resize projects column" />
+          <MiddleColumn />
+          <SplitHandle onResize={onRightResize} ariaLabel="Resize files column" />
+          <RightColumn />
+        </main>
+      )}
     </div>
   );
 }
