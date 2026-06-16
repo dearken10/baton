@@ -742,7 +742,14 @@ export class SessionManager {
           data: chunk.toString('base64'),
         };
         for (const win of BrowserWindow.getAllWindows()) {
-          if (!win.isDestroyed()) win.webContents.send(Channels.ptyData, frame);
+          if (win.isDestroyed()) continue;
+          const wc = win.webContents;
+          if (wc.isDestroyed() || wc.isCrashed()) continue;
+          // Even with the guards above, the render frame can be in the
+          // middle of being swapped (reload / nav) when pty data arrives.
+          // Electron throws "Render frame was disposed before WebFrameMain
+          // could be accessed" — harmless, but loud. Swallow it.
+          try { wc.send(Channels.ptyData, frame); } catch { /* frame gone */ }
         }
       });
 

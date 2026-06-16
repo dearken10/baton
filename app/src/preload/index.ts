@@ -16,6 +16,14 @@ import {
   type AppEvent,
 } from '../shared/ipc.js';
 
+// Every live TerminalPane adds a `baton:pty.data` listener and every
+// mounted screen adds a `baton:events` listener. Node's default cap of
+// 10 trips a MaxListenersExceededWarning once the user has ~8+ sessions
+// open — which is well within normal use. Raise the limit so legitimate
+// fan-out doesn't look like a leak. If we ever DO leak, the symptom
+// will be OOM, not this warning.
+ipcRenderer.setMaxListeners(64);
+
 const api = {
   /** Typed call to a control verb. Renderer code never touches a raw channel name. */
   call<V extends ControlVerb>(verb: V, payload: RequestOf<V>): Promise<ResponseOf<V>> {

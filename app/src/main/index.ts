@@ -170,7 +170,19 @@ function createWindow(): void {
     console.log(`[renderer ${lvlName}] ${message} (${src}:${line})`);
   });
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
-    console.error('[renderer] render-process-gone:', details);
+    // `reason: 'killed'` + exitCode 9 with no preceding JS exception is
+    // the macOS OOM-kill signature — the OS reaped the renderer for
+    // memory pressure (many live xterms + Monaco add up fast). Spell
+    // that out so we don't have to decode signal numbers next time.
+    const oomLikely =
+      details.reason === 'killed' && details.exitCode === 9;
+    const usage = process.memoryUsage();
+    console.error('[renderer] render-process-gone:', {
+      ...details,
+      oomLikely,
+      mainHeapMb: Math.round(usage.heapUsed / 1024 / 1024),
+      mainRssMb: Math.round(usage.rss / 1024 / 1024),
+    });
   });
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.error(`[renderer] did-fail-load: ${code} ${desc} ${url}`);

@@ -88,7 +88,13 @@ export function emit(initial: EventInit): void {
   }
 
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(Channels.events, event);
+    if (win.isDestroyed()) continue;
+    const wc = win.webContents;
+    if (wc.isDestroyed() || wc.isCrashed()) continue;
+    // Frame can be mid-dispose (reload / nav) — Electron throws
+    // "Render frame was disposed before WebFrameMain could be
+    // accessed" in that window. Drop the event for that frame.
+    try { wc.send(Channels.events, event); } catch { /* frame gone */ }
   }
 
   // Fan out to in-process subscribers last. Wrap each so a buggy
