@@ -914,6 +914,13 @@ button {
   line-height: 1.45;
   color: var(--text);
 }
+/* Render a chevron before the prompt as a visual marker. Kept in CSS
+   (not JSX) so it doesn't end up in the user's clipboard when they
+   copy the prompt text. */
+.turn-input::before {
+  content: '❯ ';
+  color: var(--text-dim);
+}
 .turn-progress-toggle {
   display: flex;
   width: 100%;
