@@ -39,7 +39,7 @@ import {
 import { getSessionManager } from '../services/sessionManager.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
-import { readPromptHistory } from '../services/promptHistory.js';
+import { readSessionTurns } from '../services/sessionTurns.js';
 import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
@@ -298,19 +298,17 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const report = await readGitStatus(fs, worktreePath);
     return report;
   },
-  'session.promptHistory': async (req) => {
+  'session.turns': async (req) => {
     // Find the row; if it's gone (deleted in a race, or never existed)
-    // just return an empty list rather than throwing — the renderer
-    // treats [] as "no history yet". listAll() is small enough.
+    // just return an empty list rather than throwing. Remote-session
+    // transcripts live on the remote host (under that user's
+    // ~/.claude); reading them needs an SSH probe we haven't built, so
+    // remote sessions also return [] for now.
     const session = getSessionManager().listAll().find((s) => s.id === req.sessionId);
-    if (!session) return { prompts: [] };
-    // Remote-session transcripts live on the remote host (under that
-    // user's ~/.claude). Reading them needs an SSH probe we haven't
-    // built; for now return [] for non-local sessions rather than
-    // pretending the local file applies.
+    if (!session) return { turns: [] };
     const project = getProject(session.projectId);
-    if (project && project.connectionId !== 'local') return { prompts: [] };
-    return { prompts: readPromptHistory(session) };
+    if (project && project.connectionId !== 'local') return { turns: [] };
+    return { turns: readSessionTurns(session) };
   },
   'worktree.list': async (req) => {
     const project = getProject(req.projectId);

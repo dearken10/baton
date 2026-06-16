@@ -817,6 +817,235 @@ button {
   background: rgba(91, 141, 239, 0.18);
 }
 .terminal-slot { flex: 1; min-height: 0; flex-direction: column; }
+/* Overlays the live terminal — keeps xterm's WebGL canvas alive
+   underneath instead of toggling display:none on it (which can lose
+   the context permanently once the per-page WebGL context budget is
+   exceeded). The Live terminal stays mounted and the same size as the
+   middle-bottom container; this absolute layer just covers it. */
+.turns-slot {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+.turns-slot-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+}
+/* The pane is the flex column that owns the scrollable list AND the
+   composer. Scroll happens ONLY on .turns-scroll — the inner .turns-list
+   is just content sized by its children, so cards keep stable heights. */
+.turns-pane { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.turns-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.turns-scroll > .empty { padding: 20px; }
+
+/* ── Conv-head Live/Turns view toggle ─────────────────────── */
+.middle-view-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--bg-2);
+}
+.middle-view-toggle button {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: 3px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.middle-view-toggle button + button { border-left: 1px solid var(--border); }
+.middle-view-toggle button:hover { color: var(--text); }
+.middle-view-toggle button.on {
+  background: var(--bg-3);
+  color: var(--text);
+}
+
+/* ── Turns view ───────────────────────────────────────────── */
+.turns-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px;
+  /* No flex sizing here — the parent .turns-scroll owns the scroll
+     viewport; this is just the content. min-width:0 lets long lines in
+     children wrap instead of forcing the row wider than the viewport. */
+  min-width: 0;
+}
+.turn-card {
+  /* Content-sized; don't stretch into the flex column above us. */
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-2);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.turn-user {
+  padding: 10px 12px 12px;
+  background: var(--bg-3);
+  border-bottom: 1px solid var(--border);
+}
+.turn-ts {
+  display: inline-block;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 4px;
+}
+.turn-input {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+}
+.turn-progress-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+}
+.turn-progress-toggle:hover { background: var(--bg-1); color: var(--text); }
+.turn-progress-toggle[aria-expanded="true"] { border-bottom-color: var(--border-2); }
+.turn-progress-caret { display: inline-block; width: 12px; }
+.turn-progress {
+  list-style: none;
+  margin: 0;
+  padding: 6px 12px 8px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-1);
+  /* Cap the progress block so a 50-step turn doesn't make a thousand-
+     pixel card. The outer .turns-scroll handles between-card scrolling;
+     this handles within-card scrolling. */
+  max-height: 320px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.turn-progress > li { min-width: 0; }
+.turn-prog {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  min-width: 0;
+}
+.turn-prog-tag {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  min-width: 50px;
+}
+.turn-prog-tool .turn-prog-tag { color: #8b9bef; }
+.turn-prog-result .turn-prog-tag { color: #7cc28a; }
+.turn-prog-result.err .turn-prog-tag { color: #ef5454; }
+.turn-prog-text .turn-prog-tag { color: var(--border-2); }
+.turn-prog-arg {
+  /* flex:1 + min-width:0 is the only reliable way to make a flex child
+     wrap long words instead of pushing the row wider than the card. */
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, SF Mono, Menlo, monospace;
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  opacity: 0.85;
+}
+.turn-prog-text > span:not(.turn-prog-tag) {
+  flex: 1 1 auto;
+  min-width: 0;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.turn-recap {
+  padding: 12px;
+}
+.turn-recap-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.turn-recap-pending { margin: 0; font-style: italic; }
+
+/* ── Turns composer ──────────────────────────────────────── */
+.turns-composer {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-2);
+}
+.turns-composer-input {
+  flex: 1;
+  min-height: 32px;
+  max-height: 160px;
+  resize: none;
+  padding: 7px 10px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+  overflow-y: auto;
+}
+.turns-composer-input:focus { border-color: var(--accent, #5b8def); }
+.turns-composer-input:disabled { opacity: 0.6; cursor: wait; }
+.turns-composer-send {
+  flex: 0 0 auto;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent, #5b8def);
+  border: 1px solid var(--accent, #5b8def);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.turns-composer-send:hover:not(:disabled) { filter: brightness(1.05); }
+.turns-composer-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
 
 /* Editor tab strip (F6.3 + F6.5). Lives above the editor head. */
 .editor-tabs {

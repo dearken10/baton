@@ -2,15 +2,14 @@ import { useEffect, useState } from 'react';
 import { useAppStore } from '../store.js';
 import { FilesPanel } from './FilesPanel.js';
 import { GitPanel } from './GitPanel.js';
-import { HistoryPanel } from './HistoryPanel.js';
 import { SearchPanel } from './SearchPanel.js';
 
-type Tab = 'files' | 'search' | 'git' | 'history';
+type Tab = 'files' | 'search' | 'git';
 
 const REFRESH_MS = 3000;
 
 export function RightColumn(): JSX.Element {
-  const [tab, setTab] = useState<Tab>('history');
+  const [tab, setTab] = useState<Tab>('files');
   const selectedId = useAppStore((s) => s.selectedSessionId);
   const sessionsRecord = useAppStore((s) => s.sessions);
   const projectsRecord = useAppStore((s) => s.projects);
@@ -46,12 +45,6 @@ export function RightColumn(): JSX.Element {
   return (
     <aside className="col col-right">
       <div className="right-tabs">
-        <button
-          className={`right-tab ${tab === 'history' ? 'active' : ''}`}
-          onClick={() => setTab('history')}
-        >
-          💬 History
-        </button>
         <button
           className={`right-tab ${tab === 'files' ? 'active' : ''}`}
           onClick={() => setTab('files')}
@@ -115,8 +108,6 @@ export function RightColumn(): JSX.Element {
             sessionId={selected.id}
             worktreePath={selected.worktreePath}
           />
-        ) : tab === 'history' ? (
-          <HistoryPanel sessionId={selected.id} />
         ) : (
           <GitPanel
             sessionId={selected.id}
