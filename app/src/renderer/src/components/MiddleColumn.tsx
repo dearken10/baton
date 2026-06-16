@@ -1,9 +1,19 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore, selectOpenFiles } from '../store.js';
 import { TerminalPane } from './TerminalPane.js';
+import { TurnsPane } from './TurnsPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
 import { EditorErrorBoundary } from './EditorErrorBoundary.js';
 import type { Session } from '@shared/ipc.js';
+
+const VIEW_LS_KEY = 'baton:middle:view';
+type MiddleView = 'live' | 'turns';
+function loadView(): MiddleView {
+  try {
+    const raw = localStorage.getItem(VIEW_LS_KEY);
+    return raw === 'turns' ? 'turns' : 'live';
+  } catch { return 'live'; }
+}
 
 // Monaco is ~8MB. Lazy-load the editor so it (and Monaco) are only
 // fetched + parsed when the user first opens a file, not at app startup.
@@ -53,6 +63,16 @@ export function MiddleColumn(): JSX.Element {
   // depend on it.
   const splitRef = useRef<HTMLDivElement>(null);
   const [topPct, setTopPct] = useState<number>(() => loadTopPct());
+
+  // Live xterm vs structured Turns view. Both stay mounted so toggling
+  // doesn't reset xterm scrollback or refetch turns; we just flip
+  // display:none. Backends without a transcript (shell, mock) fall back
+  // to the live view — TurnsPane would only show an empty state.
+  const [view, setView] = useState<MiddleView>(() => loadView());
+  function switchView(next: MiddleView): void {
+    setView(next);
+    try { localStorage.setItem(VIEW_LS_KEY, next); } catch { /* ignore */ }
+  }
 
   // When the active session, editor-zone visibility, OR the inner
   // split ratio changes, dispatch a window 'resize'. Every TerminalPane
@@ -180,6 +200,30 @@ export function MiddleColumn(): JSX.Element {
               {selectedProject?.name ?? 'project'} · {sessionLabel(selected)}
             </span>
             {(selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
+              <div className="middle-view-toggle" role="tablist" aria-label="Terminal view">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={view === 'live'}
+                  className={view === 'live' ? 'on' : ''}
+                  onClick={() => switchView('live')}
+                  title="Live xterm — interactive view of the agent's TUI"
+                >
+                  Live
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={view === 'turns'}
+                  className={view === 'turns' ? 'on' : ''}
+                  onClick={() => switchView('turns')}
+                  title="Turns — every prompt broken into user input, progress, recap"
+                >
+                  Turns
+                </button>
+              </div>
+            ) : null}
+            {(selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
               <button
                 type="button"
                 className={`skip-perm-chip ${selected.skipPermissions ? 'on' : 'off'}`}
@@ -216,7 +260,10 @@ export function MiddleColumn(): JSX.Element {
         {hasOpenFile ? <HSplitHandle key="handle" onResize={onSplitResize} /> : null}
         <div className="middle-bottom" key="bottom">
           {/* All live terminals stay mounted — we just hide the
-              ones that aren't selected. Each keeps its own scrollback. */}
+              ones that aren't selected. Each keeps its own scrollback.
+              The Turns pane overlays the active terminal-slot via
+              position:absolute rather than toggling display on it,
+              so the xterm host below keeps its size and identity. */}
           {liveSessions.map((s) => (
             <div
               key={s.id}
@@ -226,6 +273,12 @@ export function MiddleColumn(): JSX.Element {
               <TerminalPane sessionId={s.id} />
             </div>
           ))}
+          {selected && view === 'turns'
+            && (selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
+            <div className="turns-slot turns-slot-overlay">
+              <TurnsPane sessionId={selected.id} />
+            </div>
+          ) : null}
 
           {/* Selected an ended session OR nothing? show a placeholder
               (one of these, mutually exclusive with the live slots). */}

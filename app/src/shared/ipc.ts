@@ -458,21 +458,24 @@ const WorktreeGitStatusResponse = z.object({
   dirty: z.boolean(),
 });
 
-/** Per-session list of prompts the user has sent the agent, oldest →
- *  newest. Sourced from the agent's transcript file (Claude JSONL or
- *  Codex rollout), not from anything we record ourselves — so it
- *  survives restarts and is correct for sessions that existed before
- *  this feature shipped. Shell sessions return []. */
-const SessionPromptHistoryRequest = z.object({ sessionId: SessionId });
-const SessionPromptHistoryEntry = z.object({
-  /** Wall-clock ms when the prompt was logged. 0 if the transcript
-   *  didn't carry a timestamp (defensive — current formats always do). */
+/** Per-session structured turn list — used by the MiddleColumn's "Turns"
+ *  view (the collapsible per-prompt card list). Each turn carries the
+ *  user input, the progress steps (tool calls + intermediate assistant
+ *  text), and a recap (last assistant text). Shell sessions return []. */
+const SessionTurnsRequest = z.object({ sessionId: SessionId });
+const ProgressItem = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('assistant'), text: z.string() }),
+  z.object({ kind: z.literal('tool_use'), name: z.string(), inputPreview: z.string() }),
+  z.object({ kind: z.literal('tool_result'), ok: z.boolean(), preview: z.string() }),
+]);
+const SessionTurn = z.object({
+  id: z.string(),
   ts: z.number(),
-  text: z.string(),
+  userInput: z.string(),
+  progress: z.array(ProgressItem),
+  recap: z.string().nullable(),
 });
-const SessionPromptHistoryResponse = z.object({
-  prompts: z.array(SessionPromptHistoryEntry),
-});
+const SessionTurnsResponse = z.object({ turns: z.array(SessionTurn) });
 
 /** Open a file or dir in the system default application. */
 const ShellOpenPathRequest = z.object({ absPath: z.string().min(1) });
@@ -822,7 +825,7 @@ export const ControlVerbs = {
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
   'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },
   'worktree.gitStatus':    { request: WorktreeGitStatusRequest,   response: WorktreeGitStatusResponse },
-  'session.promptHistory': { request: SessionPromptHistoryRequest, response: SessionPromptHistoryResponse },
+  'session.turns':         { request: SessionTurnsRequest,          response: SessionTurnsResponse },
   'worktree.list':         { request: WorktreeListRequest,        response: WorktreeListResponse },
   'worktree.listOrphans':  { request: WorktreeListOrphansRequest, response: WorktreeListOrphansResponse },
   'worktree.removeOrphan': { request: WorktreeRemoveOrphanRequest, response: WorktreeRemoveOrphanResponse },
@@ -966,9 +969,9 @@ const SessionRefreshedEvent = EventEnvelope.extend({
 });
 
 /** Fired when the agent's UserPromptSubmit hook reports a new prompt
- *  from the user. The HistoryPanel listens for this and re-fetches
- *  session.promptHistory; no payload is needed because the transcript
- *  is the source of truth. */
+ *  from the user. TurnsPane listens for this and re-fetches
+ *  session.turns; no payload is needed because the transcript is the
+ *  source of truth. */
 const SessionPromptSubmittedEvent = EventEnvelope.extend({
   type: z.literal('session.prompt_submitted'),
   sessionId: SessionId,
