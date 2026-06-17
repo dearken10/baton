@@ -59,6 +59,16 @@ JSON, and skip to Step 2.
   `-`. Take the last ~4 turns.
 - For each session without a JSONL tail: read the last ~2 KB of
   `~/.baton/scrollback/<session_id>.bin` (ANSI-noisy).
+- **Unchanged-since-last-tick stub.** Every session row carries a
+  `last_activity_at` (ISO 8601, from the JSONL or scrollback mtime).
+  When that timestamp hasn't moved since the previous tick, inventory
+  replaces the full `conversation` block with
+  `{ "source": "unchanged", "last_activity_at": "<iso>" }`. That's
+  **not** a degraded read — the agent literally did not move. Use
+  your memory from previous ticks for those sessions; don't re-ask
+  the agent to "continue" or "finish" anything, and don't treat
+  silence as evidence the session is stalled. Most idle sessions
+  will hit this path; you'll see them every tick with no new bytes.
 - Per project, look for `<project_path>/.baton/backlog.md`. Read
   `- [ ]` items under `## TODO`.
 - Usage % (5h, 7d): read from env `USAGE_5H` / `USAGE_7D` for the PoC.

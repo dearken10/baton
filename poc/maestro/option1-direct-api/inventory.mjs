@@ -19,7 +19,7 @@
 // SAFE: reads only. No mutations to db, sessions, worktrees, or git.
 
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -31,6 +31,14 @@ const SCROLLBACK_TAIL_BYTES = 2048;
 const TRANSCRIPT_TAIL_LINES = 20;
 const JSONL_TURNS = 4;          // last N turns to surface to the planner
 const JSONL_CONTENT_CAP = 600;  // per-block content cap, chars
+
+// Cross-tick cursor: the (session id → last_activity_at) we emitted on
+// the previous tick. When a session's activity timestamp hasn't moved,
+// the master already saw the same tail in its memory — we elide the
+// conversation block down to a `source: 'unchanged'` stub so the
+// inventory stays compact and the master leans on its memory instead
+// of re-reading identical bytes.
+const CURSOR_FILE = join(BATON_DIR, 'maestro', 'inventory-cursor.json');
 
 function sqliteJson(sql) {
   const out = execFileSync(
@@ -55,6 +63,50 @@ function readUsage() {
 // Source: sessionManager.ts transcriptExistsFor — `/[/._]/g → '-'`.
 function sanitizeCwd(cwd) {
   return cwd.replace(/[/._]/g, '-');
+}
+
+// Cross-tick cursor I/O. Returns an object keyed by session id with
+// the previously-emitted last_activity_at ISO string. Missing file →
+// empty map (first tick after install / --reset).
+function readCursor() {
+  try {
+    if (!existsSync(CURSOR_FILE)) return {};
+    return JSON.parse(readFileSync(CURSOR_FILE, 'utf8')) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function writeCursor(cursor) {
+  try {
+    mkdirSync(join(BATON_DIR, 'maestro'), { recursive: true });
+    writeFileSync(CURSOR_FILE, JSON.stringify(cursor, null, 2));
+  } catch {
+    // Cursor is opportunistic — failure here just means we'll re-send
+    // the full tail next tick. Don't fail the inventory call.
+  }
+}
+
+// Determine when a session "last did something" — used for the
+// unchanged-since-last-tick elision. Prefers the JSONL mtime (real
+// agent activity); falls back to scrollback mtime for shells / agents
+// without a captured claude_session_id; finally to the row's started_at
+// as a safe floor so the cursor always has a stable comparator.
+function lastActivityIso(session) {
+  if (session.backend_id === 'claude-code' && session.claude_session_id) {
+    const sanitized = sanitizeCwd(session.worktree_path);
+    const jsonl = join(CLAUDE_PROJECTS_DIR, sanitized, `${session.claude_session_id}.jsonl`);
+    if (existsSync(jsonl)) {
+      try { return new Date(statSync(jsonl).mtimeMs).toISOString(); }
+      catch { /* fall through */ }
+    }
+  }
+  const scrollback = join(SCROLLBACK_DIR, `${session.id}.bin`);
+  if (existsSync(scrollback)) {
+    try { return new Date(statSync(scrollback).mtimeMs).toISOString(); }
+    catch { /* fall through */ }
+  }
+  return new Date(session.started_at).toISOString();
 }
 
 // Read the last `JSONL_TURNS` turns of Claude Code's own conversation
@@ -165,15 +217,28 @@ function main() {
   );
 
   const now = Date.now();
+  const prevCursor = readCursor();
+  const nextCursor = {};
   const sessionRows = sessions.map((s) => {
     const project = projectsById.get(s.project_id);
+    const lastActivityAt = lastActivityIso(s);
+    nextCursor[s.id] = lastActivityAt;
+    const unchanged = prevCursor[s.id] === lastActivityAt;
+
     // Prefer Claude Code's own structured conversation log for
     // claude-code sessions. Scrollback is a noisy TUI buffer; the
     // JSONL is the actual turn-by-turn record. Fall back to scrollback
     // when no claude_session_id is captured yet, when the file is
     // missing, or for non-claude backends (codex, shell).
+    //
+    // Elision: if the activity timestamp hasn't moved since last
+    // tick, the master saw this exact tail before — emit a stub so
+    // it leans on its memory instead. Saves ~99% of the bytes for
+    // quiet sessions while keeping the structural slot in place.
     let conversation = null;
-    if (s.backend_id === 'claude-code' && s.claude_session_id) {
+    if (unchanged) {
+      conversation = { source: 'unchanged', last_activity_at: lastActivityAt };
+    } else if (s.backend_id === 'claude-code' && s.claude_session_id) {
       conversation = readClaudeJsonlTail(s.worktree_path, s.claude_session_id);
     }
     if (!conversation) {
@@ -194,9 +259,12 @@ function main() {
       last_summary: s.last_summary,
       snoozed: s.snoozed_at != null || project?.snoozed_at != null,
       session_kind: s.session_kind ?? 'agent',
+      last_activity_at: lastActivityAt,
       conversation
     };
   });
+
+  writeCursor(nextCursor);
 
   const backlogs = {};
   for (const p of projects) {
