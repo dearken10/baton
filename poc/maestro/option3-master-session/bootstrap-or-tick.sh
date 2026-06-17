@@ -40,6 +40,11 @@ PAUSED_FLAG="$HOME/.baton/maestro/paused"
 # the literal "propose-first" or "act-first". Absent → propose-first.
 # Cosmetic at PoC stage; execution gating is v1.x.
 MODE_FILE="$HOME/.baton/maestro/mode"
+# Heartbeat written by the renderer on every mousemove/click/keydown
+# (throttled). The idle gate below treats `now - mtime(...)` as the
+# user's idle time. Missing file = treat as "idle forever" (i.e. the
+# UI is not running; tick is allowed).
+LAST_ACTIVITY_FILE="$HOME/.baton/maestro/last-activity"
 mkdir -p "$STATE_DIR" "$HOME/.baton/maestro"
 
 current_mode() {
@@ -55,15 +60,17 @@ current_mode() {
 # ------------------------------------------------------------------
 MODE="tick"
 MODE_ARG=""
+FORCE=0
 case "${1:-}" in
   --reset)  MODE="reset"  ;;
   --status) MODE="status" ;;
   --pause)  MODE="pause"  ;;
   --resume) MODE="resume" ;;
   --mode)   MODE="set-mode"; MODE_ARG="${2:-}"; shift 2 2>/dev/null || true ;;
+  --force)  FORCE=1 ;;       # tick now, bypass idle gate (used by "Run now")
   "")       ;;
   *)
-    echo "Usage: $0 [--reset|--status|--pause|--resume|--mode suggest|run]" >&2
+    echo "Usage: $0 [--reset|--status|--pause|--resume|--force|--mode suggest|run]" >&2
     exit 64
     ;;
 esac
@@ -106,6 +113,13 @@ if [[ "$MODE" == "status" ]]; then
   echo "tick-count : $tc"
   echo "paused     : $([[ -e "$PAUSED_FLAG" ]] && echo "yes ($PAUSED_FLAG)" || echo "no")"
   echo "mode       : $(current_mode)  (cosmetic at PoC; execution wiring is v1.x)"
+  echo "idle-thresh: ${MAESTRO_IDLE_MIN_MIN:-15}m"
+  if [[ -e "$LAST_ACTIVITY_FILE" ]]; then
+    la_sec="$(stat -f %m "$LAST_ACTIVITY_FILE" 2>/dev/null || stat -c %Y "$LAST_ACTIVITY_FILE")"
+    echo "last-active: $(( $(date +%s) - la_sec ))s ago"
+  else
+    echo "last-active: (no heartbeat yet)"
+  fi
   if [[ -n "$sid" ]]; then
     row="$(sqlite3 "$HOME/.baton/baton.db" \
       "SELECT id, backend_id, status, session_kind FROM sessions WHERE claude_session_id='$sid';")"
@@ -153,6 +167,58 @@ fi
 if [[ -e "$PAUSED_FLAG" ]]; then
   echo "$(date -Iseconds) skip: paused (flag at $PAUSED_FLAG)"
   exit 0
+fi
+
+# Idle gate: only tick when the user has been idle (no mousemove,
+# click, or keypress in baton) for at least MAESTRO_IDLE_MIN_MIN
+# minutes. The renderer writes a heartbeat to LAST_ACTIVITY_FILE on
+# every input event (throttled). --force bypasses (used by the
+# "Run now" button so the user can fire a tick on demand).
+#
+# Rate-limit: never tick again within IDLE_MIN_MIN of the previous
+# successful tick. Otherwise a long idle session would fire on every
+# poll. The user must come back, interact, and go idle again — or
+# wait IDLE_MIN_MIN past last-tick — for a fresh tick.
+IDLE_MIN_MIN="${MAESTRO_IDLE_MIN_MIN:-15}"
+if ! [[ "$IDLE_MIN_MIN" =~ ^[0-9]+$ ]]; then IDLE_MIN_MIN=15; fi
+IDLE_MIN_SEC=$(( IDLE_MIN_MIN * 60 ))
+
+now_sec="$(date +%s)"
+
+# stat -f %m (BSD/macOS) or stat -c %Y (GNU). Both shell out; either
+# is fine for one mtime per tick.
+mtime_of() {
+  local p="$1"
+  if [[ ! -e "$p" ]]; then echo ""; return; fi
+  stat -f %m "$p" 2>/dev/null || stat -c %Y "$p" 2>/dev/null || echo ""
+}
+
+if (( FORCE == 0 )); then
+  last_act_sec="$(mtime_of "$LAST_ACTIVITY_FILE")"
+  if [[ -n "$last_act_sec" ]]; then
+    since_act=$(( now_sec - last_act_sec ))
+    if (( since_act < IDLE_MIN_SEC )); then
+      remaining=$(( IDLE_MIN_SEC - since_act ))
+      echo "$(date -Iseconds) skip: not idle yet (active ${since_act}s ago; need ${IDLE_MIN_SEC}s; ${remaining}s remaining)"
+      exit 0
+    fi
+  fi
+  # Otherwise: no heartbeat file → UI never reported activity → treat
+  # as idle and proceed.
+
+  # Rate-limit by previous tick mtime. last-tick.log is written on
+  # every (attempted) tick — but we want to gate by SUCCESSFUL ticks
+  # only. Persist a separate marker on success so failed/aborted runs
+  # don't extend the cooldown unfairly.
+  last_tick_sec="$(mtime_of "$STATE_DIR/last-tick-success")"
+  if [[ -n "$last_tick_sec" ]]; then
+    since_tick=$(( now_sec - last_tick_sec ))
+    if (( since_tick < IDLE_MIN_SEC )); then
+      remaining=$(( IDLE_MIN_SEC - since_tick ))
+      echo "$(date -Iseconds) skip: ran ${since_tick}s ago; rate-limited (${remaining}s remaining)"
+      exit 0
+    fi
+  fi
 fi
 
 # Atomic lock via mkdir (portable; no flock on macOS by default).
@@ -252,6 +318,10 @@ sqlite3 "$HOME/.baton/baton.db" \
 
 # Bump tick counter.
 echo -n "$(($(current_tick_count) + 1))" > "$TICK_COUNT_FILE"
+
+# Drop a fresh mtime on the success marker — the idle gate above uses
+# this to rate-limit the next tick. Empty file; mtime is the signal.
+: > "$STATE_DIR/last-tick-success"
 
 echo "$(date -Iseconds) tick ok  session=$SID  count=$(current_tick_count)"
 echo "--- plan summary ---"

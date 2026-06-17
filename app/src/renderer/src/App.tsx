@@ -127,6 +127,7 @@ export function App(): JSX.Element {
   // Esc returns from Maestro full-screen to the workspace.
   const fullScreen = useMaestroUI((s) => s.fullScreen);
   const setFullScreen = useMaestroUI((s) => s.setFullScreen);
+  const markActivity = useMaestroUI((s) => s.markActivity);
   useEffect(() => {
     if (!fullScreen) return;
     const onKey = (e: KeyboardEvent): void => {
@@ -138,6 +139,44 @@ export function App(): JSX.Element {
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [fullScreen, setFullScreen]);
+
+  // Maestro idle tracker (PRD F15.x). Every mousemove / click / keydown
+  // refreshes the in-renderer `lastActivityAt` and, throttled to once
+  // every 5 s, fires a maestro.reportActivity IPC so the daemon's
+  // idle gate sees a fresh mtime on ~/.baton/maestro/last-activity.
+  //
+  // Throttle (not debounce): we want activity reports to keep flowing
+  // while the user is actively working, capped at one per window. A
+  // debounce would only report after the user stops — exactly the
+  // opposite of what we need.
+  useEffect(() => {
+    let lastReportedAt = 0;
+    const REPORT_THROTTLE_MS = 5_000;
+    const onActivity = (): void => {
+      const now = Date.now();
+      markActivity(now);
+      if (now - lastReportedAt < REPORT_THROTTLE_MS) return;
+      lastReportedAt = now;
+      if (!window.baton) return;
+      void window.baton
+        .call('maestro.reportActivity', { at: now })
+        .catch(() => { /* heartbeat is best-effort */ });
+    };
+    // `passive: true` so the mousemove handler doesn't ever block
+    // scrolling. `capture: true` so we win the race against any child
+    // that calls stopPropagation (rare but possible inside Monaco).
+    const opts: AddEventListenerOptions = { passive: true, capture: true };
+    document.addEventListener('mousemove', onActivity, opts);
+    document.addEventListener('mousedown', onActivity, opts);
+    document.addEventListener('keydown',   onActivity, opts);
+    document.addEventListener('wheel',     onActivity, opts);
+    return () => {
+      document.removeEventListener('mousemove', onActivity, opts);
+      document.removeEventListener('mousedown', onActivity, opts);
+      document.removeEventListener('keydown',   onActivity, opts);
+      document.removeEventListener('wheel',     onActivity, opts);
+    };
+  }, [markActivity]);
 
   if (preloadError) {
     return (

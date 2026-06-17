@@ -1,0 +1,1689 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>baton · Maestro transcript-tab mockups</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --running:#5b8def; --needs:#f0a945; --done:#2fbf71;
+    --errored:#ef5454; --paused:#6b7280;
+    --maestro:#a78bfa; --maestro-2:#1c1730;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; min-height:100vh; background:#050608; color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+    font-size:13px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+  .dim { color:var(--text-dim); }
+
+  .page-head {
+    padding: 18px 24px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky; top: 0; z-index: 50;
+  }
+  .page-head h1 { margin: 0 0 6px; font-size: 17px; font-weight: 600; color: var(--text); }
+  .page-head p  { margin: 0 0 14px; color: var(--text-dim); font-size: 12px; }
+  .picker { display: flex; gap: 6px; flex-wrap: wrap; }
+  .picker button {
+    background: var(--bg-2); color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+  .picker button:hover { background: var(--bg-3); color: var(--text); }
+  .picker button.active {
+    background: var(--maestro-2);
+    color: var(--maestro);
+    border-color: var(--maestro);
+  }
+  .picker button .pick-sub { font-size: 10px; color: var(--text-faint); display: block; margin-top: 2px; }
+  .picker button.active .pick-sub { color: var(--maestro); opacity: 0.7; }
+
+  .preview-wrap { padding: 24px; display: flex; justify-content: center; }
+  .preview {
+    width: 1180px; max-width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+  }
+  .variant { display: none; }
+  .variant.active { display: block; }
+
+  /* ─── Window chrome ─── */
+  .titlebar {
+    display:flex; align-items:center; gap:12px; padding:0 12px; height: 36px;
+    background:var(--bg-1); border-bottom:1px solid var(--border);
+    font-size:12px; color:var(--text-dim);
+  }
+  .titlebar .dots { display:flex; gap:6px; }
+  .titlebar .dot { width:11px; height:11px; border-radius:50%; background:#3a3f4a; }
+  .titlebar .dot.red { background:#ff5f57; }
+  .titlebar .dot.yellow { background:#febc2e; }
+  .titlebar .dot.green { background:#28c840; }
+  .titlebar .title { color:var(--text); font-weight:600; margin-left:8px; }
+  .titlebar .meta { color: var(--text-faint); font-size: 11px; }
+  .titlebar .spacer { flex:1; }
+  .titlebar .right-chips { display:flex; gap:6px; align-items:center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px 2px 8px; height: 22px;
+    color: var(--text-dim); font-size: 11px;
+  }
+  .chip.maestro {
+    background: var(--maestro-2); border-color: var(--maestro); color: var(--maestro);
+  }
+
+  /* ─── Maestro full-screen shell ─── */
+  .mfull {
+    padding: 16px 22px 22px;
+    background: linear-gradient(180deg, rgba(28,23,48,0.6), rgba(28,23,48,0.0));
+  }
+  .mfull-banner {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 12px;
+  }
+  .mfull-glyph { font-size: 22px; }
+  .mfull-text { flex: 1; }
+  .mfull-text h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .mfull-sub { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+  .mfull-controls { display: flex; align-items: center; gap: 10px; }
+  .runnow-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--maestro-2); color: var(--maestro);
+    border: 1px solid rgba(167,139,250,0.4);
+    border-radius: 6px; padding: 5px 12px;
+    cursor: pointer; font-size: 12px; font-weight: 600;
+  }
+  .toggle-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 12px;
+    color: var(--accent); font-size: 11px; cursor: pointer;
+  }
+
+  /* ─── Tab bar (shared across variants) ─── */
+  .tabs {
+    display: inline-flex; background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; margin-bottom: 14px;
+  }
+  .tabs button {
+    background: transparent; border: 0; color: var(--text-dim);
+    padding: 7px 18px; cursor: pointer; font-size: 12px; font-family: inherit;
+  }
+  .tabs button.is-active {
+    background: var(--maestro-2); color: var(--maestro); font-weight: 600;
+  }
+
+  .toolbar {
+    display: flex; gap: 8px; align-items: center;
+    margin: -4px 0 10px;
+    font-size: 11px; color: var(--text-faint);
+  }
+  .toolbar .seg {
+    display: inline-flex; background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 5px; overflow: hidden;
+  }
+  .toolbar .seg button {
+    background: transparent; border: 0; color: var(--text-dim);
+    font-size: 11px; padding: 3px 10px; cursor: pointer; font-family: inherit;
+  }
+  .toolbar .seg button.is-active { background: var(--bg-3); color: var(--text); }
+  .toolbar .toolbar-spacer { flex: 1; }
+  .toolbar .ghost-btn {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-dim); font-size: 11px;
+    padding: 3px 10px; border-radius: 5px;
+    cursor: pointer; font-family: inherit;
+  }
+  .toolbar .ghost-btn:hover { color: var(--text); border-color: var(--border-2); }
+
+  /* ────────────────────── T1 · CHAT THREAD ────────────────────── */
+  .t1-thread {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px;
+    height: 600px;
+    overflow-y: auto;
+    padding: 16px 20px;
+  }
+  .tickmark {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--maestro);
+    font-size: 11px; font-weight: 600;
+    margin: 22px 0 12px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .tickmark:first-child { margin-top: 0; }
+  .tickmark hr { flex: 1; border: 0; border-top: 1px dashed rgba(167,139,250,0.25); margin: 0; }
+  .tickmark .anchor {
+    background: var(--maestro-2);
+    border: 1px solid rgba(167,139,250,0.4);
+    border-radius: 999px;
+    padding: 2px 10px;
+  }
+  .turn { display: flex; gap: 10px; margin-bottom: 12px; }
+  .turn-glyph {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    background: var(--bg-3); font-size: 11px; margin-top: 1px;
+  }
+  .turn.user .turn-glyph      { background: var(--accent-2); color: var(--accent); }
+  .turn.assistant .turn-glyph { background: var(--maestro-2); color: var(--maestro); }
+  .turn-body { flex: 1; min-width: 0; }
+  .turn-meta { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); margin-bottom: 3px; display: flex; gap: 8px; }
+  .turn-time { color: var(--text-faint); font-weight: 400; }
+  .turn-text { color: var(--text); font-size: 12.5px; white-space: pre-wrap; }
+  .turn-text code { font-family: ui-monospace,'SF Mono',Menlo,monospace; background: var(--bg-2); padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+
+  .block-thinking {
+    background: rgba(167,139,250,0.04);
+    border: 1px dashed rgba(167,139,250,0.25);
+    border-radius: 5px;
+    padding: 6px 10px;
+    margin: 6px 0;
+    color: var(--text-dim);
+    font-style: italic;
+    font-size: 11.5px;
+  }
+  .block-thinking summary {
+    color: var(--maestro);
+    font-style: normal;
+    cursor: pointer; font-size: 11px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .block-thinking .body { padding-top: 6px; }
+
+  .block-tool {
+    background: var(--bg-2);
+    border-left: 2px solid var(--maestro);
+    border-radius: 0 5px 5px 0;
+    padding: 6px 10px;
+    margin: 6px 0;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .block-tool .tool-name {
+    color: var(--maestro);
+    font-weight: 600;
+    font-family: inherit;
+    margin-right: 6px;
+  }
+  .block-tool .tool-input { color: var(--text); }
+  .block-result {
+    background: #06080a;
+    border-left: 2px solid var(--done);
+    border-radius: 0 5px 5px 0;
+    padding: 6px 10px;
+    margin: 6px 0;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    max-height: 100px; overflow-y: auto;
+  }
+  .block-result.error { border-left-color: var(--errored); color: var(--errored); }
+  .block-result-label { color: var(--text-faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; display: block; }
+
+  /* ────────────────────── T2 · TICK-GROUPED ACCORDION ────────────── */
+  .t2-list {
+    display: flex; flex-direction: column; gap: 10px;
+    max-height: 600px; overflow-y: auto;
+    padding-right: 4px;
+  }
+  .t2-tick {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden;
+  }
+  .t2-tick-head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 14px;
+    cursor: pointer;
+    background: rgba(167,139,250,0.04);
+    border-bottom: 1px solid transparent;
+  }
+  .t2-tick.open .t2-tick-head { border-bottom-color: var(--border); }
+  .t2-tick-no {
+    background: var(--maestro-2); color: var(--maestro);
+    font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .t2-tick-title { flex: 1; color: var(--text); font-weight: 600; font-size: 12.5px; }
+  .t2-tick-meta { color: var(--text-faint); font-size: 11px; }
+  .t2-tick-arrow { color: var(--text-faint); font-size: 13px; transition: transform 0.15s ease; }
+  .t2-tick.open .t2-tick-arrow { transform: rotate(90deg); }
+  .t2-tick-body { padding: 12px 14px 14px; display: none; }
+  .t2-tick.open .t2-tick-body { display: block; }
+  .t2-tick-error .t2-tick-head { background: rgba(239,84,84,0.06); }
+  .t2-tick-error .t2-tick-no { background: rgba(239,84,84,0.15); color: var(--errored); }
+
+  /* ────────────────────── T3 · MASTER + DETAIL ────────────────── */
+  .t3-split { display: grid; grid-template-columns: 240px 1fr; gap: 14px; height: 600px; }
+  .t3-list {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px; overflow-y: auto;
+  }
+  .t3-list-head {
+    padding: 10px 12px; border-bottom: 1px solid var(--border);
+    font-size: 11px; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .t3-row {
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  }
+  .t3-row:hover { background: var(--bg-2); }
+  .t3-row.selected {
+    background: var(--maestro-2);
+    border-left: 2px solid var(--maestro);
+    padding-left: 10px;
+  }
+  .t3-row-no { color: var(--text); font-weight: 600; font-size: 12px; }
+  .t3-row-time { color: var(--text-faint); font-size: 10.5px; }
+  .t3-row-sub  { color: var(--text-dim); font-size: 10.5px; }
+  .t3-row-error .t3-row-no { color: var(--errored); }
+  .t3-detail {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-y: auto;
+    padding: 14px 18px;
+  }
+  .t3-detail-head {
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 10px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .t3-detail-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .t3-detail-meta { color: var(--text-faint); font-size: 11px; margin-left: auto; }
+
+  /* ────────────────────── T4 · COMPACT LOG ─────────────────────── */
+  .t4-log {
+    background: #06080a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    height: 600px; overflow-y: auto;
+    padding: 12px 14px;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11.5px; line-height: 1.55;
+  }
+  .t4-line {
+    display: grid;
+    grid-template-columns: 78px 56px 1fr;
+    gap: 10px;
+    padding: 2px 0;
+    align-items: baseline;
+    color: var(--text-dim);
+    border-radius: 3px;
+  }
+  .t4-line:hover { background: rgba(167,139,250,0.04); }
+  .t4-line.open { background: rgba(167,139,250,0.06); }
+  .t4-line.expanded-row {
+    grid-template-columns: 78px 1fr;
+    padding-top: 4px; padding-bottom: 4px;
+  }
+  .t4-time { color: var(--text-faint); }
+  .t4-tag {
+    font-weight: 600; text-align: center;
+    background: var(--bg-2);
+    padding: 0 6px; border-radius: 3px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 10px;
+  }
+  .t4-tag.user { color: var(--accent); background: var(--accent-2); border-color: rgba(91,141,239,0.4); }
+  .t4-tag.assist { color: var(--maestro); background: var(--maestro-2); border-color: rgba(167,139,250,0.4); }
+  .t4-tag.tool { color: var(--done); background: rgba(47,191,113,0.08); border-color: rgba(47,191,113,0.3); }
+  .t4-tag.tick { color: var(--needs); background: rgba(240,169,69,0.08); border-color: rgba(240,169,69,0.3); }
+  .t4-tag.error { color: var(--errored); background: rgba(239,84,84,0.08); border-color: rgba(239,84,84,0.3); }
+  .t4-msg { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .t4-msg .dim { color: var(--text-faint); }
+  .t4-line.open .t4-msg { white-space: pre-wrap; color: var(--text); }
+  .t4-line.tickdiv {
+    margin: 8px 0 4px;
+    padding: 4px 0;
+    border-top: 1px dashed rgba(167,139,250,0.25);
+  }
+  .t4-line.tickdiv .t4-msg { color: var(--maestro); font-weight: 600; }
+
+  /* ────────────────────── T5 · CARD-PER-TICK GRID ────────────────── */
+  .t5-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    max-height: 600px; overflow-y: auto;
+    padding-right: 4px;
+  }
+  .t5-card {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px;
+    cursor: pointer;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .t5-card:hover { border-color: var(--maestro); background: var(--bg-2); }
+  .t5-card-head { display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
+  .t5-card-no { color: var(--text); font-weight: 600; }
+  .t5-card-time { color: var(--text-faint); font-size: 11px; }
+  .t5-card-prompt {
+    background: var(--accent-2);
+    color: var(--accent);
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11px;
+    width: fit-content;
+  }
+  .t5-card-summary {
+    color: var(--text-dim);
+    font-size: 11.5px;
+    line-height: 1.5;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 5;
+    -webkit-box-orient: vertical;
+  }
+  .t5-card-foot {
+    display: flex; gap: 8px;
+    font-size: 10.5px;
+    color: var(--text-faint);
+    margin-top: 2px;
+  }
+  .t5-card-foot .badge {
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 5px;
+  }
+  .t5-card.error { border-color: rgba(239,84,84,0.3); }
+  .t5-card.error .t5-card-no { color: var(--errored); }
+  .t5-card.error .t5-card-summary { color: var(--errored); opacity: 0.85; }
+
+  /* ──────────────── T6 · 3-column (ticks / detail / actions) ──────────────── */
+  .t6-split {
+    display: grid;
+    grid-template-columns: 200px 1fr 320px;
+    gap: 12px;
+    height: 600px;
+  }
+  .t6-list, .t6-detail, .t6-actions {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow-y: auto;
+  }
+  .t6-col-head {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10.5px; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    background: rgba(167,139,250,0.04);
+    position: sticky; top: 0; z-index: 1;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .t6-col-head .count {
+    background: var(--bg-2); border: 1px solid var(--border);
+    padding: 1px 7px; border-radius: 3px;
+    color: var(--text-dim); font-weight: 600; font-size: 10px;
+    letter-spacing: normal; text-transform: none;
+  }
+
+  /* Column 1: tick list */
+  .t6-row {
+    padding: 8px 12px; border-bottom: 1px solid var(--border);
+    cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  }
+  .t6-row:hover { background: var(--bg-2); }
+  .t6-row.selected {
+    background: var(--maestro-2);
+    border-left: 2px solid var(--maestro);
+    padding-left: 10px;
+  }
+  .t6-row-no   { color: var(--text); font-weight: 600; font-size: 12px; display: flex; justify-content: space-between; }
+  .t6-row-time { color: var(--text-faint); font-size: 10.5px; font-weight: 400; }
+  .t6-row-sub  { color: var(--text-dim); font-size: 10.5px; }
+  .t6-row.error .t6-row-no { color: var(--errored); }
+  .t6-row.error .t6-row-sub { color: var(--errored); opacity: 0.85; }
+  .t6-row.skip  .t6-row-sub { color: var(--text-faint); font-style: italic; }
+
+  /* Column 2: detail (transcript) */
+  .t6-detail-inner { padding: 12px 16px; }
+  .t6-detail-head {
+    display: flex; align-items: center; gap: 10px;
+    padding-bottom: 10px; margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .t6-detail-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .t6-detail-meta { color: var(--text-faint); font-size: 11px; margin-left: auto; }
+
+  /* Column 3: action cards */
+  .t6-actions-inner { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+  .t6-no-actions {
+    color: var(--text-faint); font-size: 12px; text-align: center;
+    padding: 28px 12px; font-style: italic;
+  }
+  .t6-acard {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 10px 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .t6-acard-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 10.5px;
+  }
+  .t6-acard-project {
+    color: var(--text); font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 200px;
+  }
+  .t6-acard-kind {
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--maestro); font-size: 9.5px; font-weight: 600;
+    background: var(--maestro-2); border: 1px solid rgba(167,139,250,0.3);
+    padding: 1px 6px; border-radius: 3px;
+  }
+  .t6-acard-kind.defer { color: var(--paused); background: var(--bg-3); border-color: var(--border-2); }
+  .t6-acard-prompt {
+    color: var(--text); font-size: 11.5px; line-height: 1.5;
+  }
+  .t6-acard-foot {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 10.5px; color: var(--text-faint);
+    margin-top: 2px;
+  }
+  .t6-conf-bar { display: inline-flex; gap: 2px; vertical-align: middle; }
+  .t6-conf-bar i { width: 5px; height: 9px; background: var(--bg-3); border-radius: 1px; }
+  .t6-conf-bar i.on { background: var(--maestro); }
+  .t6-acard-actions {
+    display: flex; gap: 4px; margin-top: 4px;
+  }
+  .t6-acard-btn {
+    flex: 1; background: transparent; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 3px 6px; cursor: pointer; font-size: 10.5px; font-family: inherit;
+  }
+  .t6-acard-btn.approve { color: var(--done); border-color: rgba(47,191,113,0.3); }
+  .t6-acard-btn.reject  { color: var(--text-faint); }
+  .t6-acard-btn:hover { background: var(--bg-3); }
+
+  .t6-skip-banner {
+    background: rgba(240,169,69,0.06);
+    border: 1px solid rgba(240,169,69,0.25);
+    color: var(--needs); border-radius: 6px;
+    padding: 8px 12px; font-size: 11.5px;
+    margin-bottom: 12px;
+  }
+
+  /* Session button — secondary action next to Run now */
+  .session-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px;
+    cursor: pointer; font-size: 12px; font-weight: 600; font-family: inherit;
+  }
+  .session-btn:hover { color: var(--text); border-color: var(--border-2); }
+  .session-btn.is-active {
+    background: var(--maestro-2); color: var(--maestro);
+    border-color: rgba(167,139,250,0.4);
+  }
+  .session-btn-glyph { font-size: 10px; }
+
+  /* Terminal view (alt-mode, swaps in for the 3-column split) */
+  .t6-terminal {
+    background: #06080a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    height: 600px;
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .t6-terminal-head {
+    background: var(--bg-1);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 14px;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 11px; color: var(--text-faint);
+  }
+  .t6-terminal-head .pill {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 7px;
+    color: var(--text-dim); font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 10.5px;
+  }
+  .t6-terminal-head .dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--done); box-shadow: 0 0 5px var(--done);
+  }
+  .t6-terminal-head .live { color: var(--done); font-weight: 600; }
+  .t6-terminal-head .spacer { flex: 1; }
+  .t6-terminal-body {
+    flex: 1; overflow-y: auto; padding: 12px 16px;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 12px; line-height: 1.55;
+    color: #d4d6db;
+  }
+  .t6-terminal-body .cmt { color: #6b7280; }
+  .t6-terminal-body .cyan { color: #5fc3d4; }
+  .t6-terminal-body .purp { color: #a78bfa; }
+  .t6-terminal-body .grn  { color: #5cc97a; }
+  .t6-terminal-body .yel  { color: #f0c878; }
+  .t6-terminal-body .red  { color: #ef6b6b; }
+  .t6-terminal-body .dim2 { color: #8a8f9a; }
+  .t6-terminal-body .prompt-line {
+    display: flex; gap: 6px; align-items: baseline;
+    margin-top: 14px;
+  }
+  .t6-terminal-body .prompt-marker { color: var(--maestro); font-weight: 600; }
+  .t6-terminal-body .prompt-input {
+    flex: 1; color: var(--text);
+    background: transparent; border: 0; outline: 0;
+    font: inherit;
+  }
+  .t6-terminal-body .cursor {
+    display: inline-block; width: 7px; height: 14px;
+    background: var(--maestro);
+    vertical-align: middle;
+    animation: blink 1s steps(2, start) infinite;
+  }
+  @keyframes blink { to { visibility: hidden; } }
+  .t6-terminal-foot {
+    background: var(--bg-1);
+    border-top: 1px solid var(--border);
+    padding: 7px 14px;
+    font-size: 10.5px; color: var(--text-faint);
+    display: flex; gap: 14px; align-items: center;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  .t6-terminal-foot kbd {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 3px; padding: 0 5px;
+    color: var(--text-dim); font-size: 10px;
+  }
+  /* Only one of these is visible at a time */
+  .t6-mode-split    { display: grid; }
+  .t6-mode-terminal { display: none;  }
+  .variant.is-terminal .t6-mode-split    { display: none; }
+  .variant.is-terminal .t6-mode-terminal { display: flex; }
+
+  /* Notes block */
+  .notes {
+    margin: 16px 0 0;
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px 16px;
+  }
+  .notes h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: var(--maestro); }
+  .notes ul { margin: 0; padding-left: 18px; }
+  .notes li { color: var(--text-dim); margin-bottom: 4px; font-size: 11.5px; }
+  .notes li b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>baton · Maestro transcript-tab mockups</h1>
+  <p>Five ways to surface the master Claude Code session's actual prompts + outputs inside the <b>Session</b> tab.</p>
+  <div class="picker">
+    <button data-tab="t6" class="active"><strong>T6.</strong> 3-column · ticks ↔ detail ↔ actions<span class="pick-sub">selected tick's conversation + its plan output</span></button>
+    <button data-tab="t1"><strong>T1.</strong> Chat thread<span class="pick-sub">chronological bubbles, thinking collapsed</span></button>
+    <button data-tab="t2"><strong>T2.</strong> Tick accordion<span class="pick-sub">one collapsible per tick</span></button>
+    <button data-tab="t3"><strong>T3.</strong> Master + detail<span class="pick-sub">tick list ↔ full conversation</span></button>
+    <button data-tab="t4"><strong>T4.</strong> Compact log<span class="pick-sub">one line per turn, expand to read</span></button>
+    <button data-tab="t5"><strong>T5.</strong> Card-per-tick grid<span class="pick-sub">3-col gallery, click to drill in</span></button>
+  </div>
+</div>
+
+<div class="preview-wrap"><div class="preview">
+
+<!-- ─────────────── T6 · 3-COLUMN (TICKS / DETAIL / ACTIONS) ─────────────── -->
+<div class="variant active" id="t6">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span><span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips"><span class="chip">5h · 6%</span><span class="chip maestro">🎼 full</span></div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session transcript</h2>
+        <div class="mfull-sub">session <span class="mono">a954fcc3</span> · 57 ticks · pick a tick to see its conversation + plan output</div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <button class="session-btn" id="t6-session-btn"><span class="session-btn-glyph">▣</span> Session</button>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="t6-split t6-mode-split">
+
+      <!-- ── Column 1: tick list ──────────────────────────────── -->
+      <div class="t6-list">
+        <div class="t6-col-head">Ticks <span class="count">57</span></div>
+
+        <div class="t6-row error">
+          <span class="t6-row-no">Tick 57 <span class="t6-row-time">23:15</span></span>
+          <span class="t6-row-sub">auth 403</span>
+        </div>
+        <div class="t6-row error">
+          <span class="t6-row-no">Tick 56 <span class="t6-row-time">22:45</span></span>
+          <span class="t6-row-sub">auth 403</span>
+        </div>
+        <div class="t6-row error">
+          <span class="t6-row-no">Tick 55 <span class="t6-row-time">22:11</span></span>
+          <span class="t6-row-sub">auth 403</span>
+        </div>
+        <div class="t6-row selected">
+          <span class="t6-row-no">Tick 27 <span class="t6-row-time">09:14</span></span>
+          <span class="t6-row-sub">4 resume</span>
+        </div>
+        <div class="t6-row">
+          <span class="t6-row-no">Tick 26 <span class="t6-row-time">08:57</span></span>
+          <span class="t6-row-sub">3 resume</span>
+        </div>
+        <div class="t6-row skip">
+          <span class="t6-row-no">Tick 25 <span class="t6-row-time">08:42</span></span>
+          <span class="t6-row-sub">skip · idle gate</span>
+        </div>
+        <div class="t6-row">
+          <span class="t6-row-no">Tick 24 <span class="t6-row-time">08:26</span></span>
+          <span class="t6-row-sub">4 resume · 1 defer</span>
+        </div>
+        <div class="t6-row">
+          <span class="t6-row-no">Tick 23 <span class="t6-row-time">08:09</span></span>
+          <span class="t6-row-sub">2 resume</span>
+        </div>
+        <div class="t6-row">
+          <span class="t6-row-no">Tick 22 <span class="t6-row-time">Yest 22:50</span></span>
+          <span class="t6-row-sub">3 resume</span>
+        </div>
+        <div class="t6-row">
+          <span class="t6-row-no">Tick 21 <span class="t6-row-time">Yest 22:34</span></span>
+          <span class="t6-row-sub">3 resume</span>
+        </div>
+        <div class="t6-row skip">
+          <span class="t6-row-no">Tick 20 <span class="t6-row-time">Yest 22:18</span></span>
+          <span class="t6-row-sub">skip · rate limit</span>
+        </div>
+        <div class="t6-row">
+          <span class="t6-row-no">Tick 19 <span class="t6-row-time">Yest 22:02</span></span>
+          <span class="t6-row-sub">4 resume · 2 defer</span>
+        </div>
+      </div>
+
+      <!-- ── Column 2: conversation detail ──────────────────────── -->
+      <div class="t6-detail">
+        <div class="t6-detail-inner">
+          <div class="t6-detail-head">
+            <h3>Tick 27 · 12 turns</h3>
+            <span class="t6-detail-meta">09:14:53 → 09:16:18 · 1m 25s</span>
+          </div>
+
+          <div class="turn user">
+            <div class="turn-glyph">▶</div>
+            <div class="turn-body">
+              <div class="turn-meta">User <span class="turn-time">09:14:53</span></div>
+              <div class="turn-text">/maestro-tick</div>
+            </div>
+          </div>
+
+          <div class="turn assistant">
+            <div class="turn-glyph">🎼</div>
+            <div class="turn-body">
+              <div class="turn-meta">Maestro <span class="turn-time">09:15:06</span></div>
+              <details class="block-thinking">
+                <summary>Thinking (8s)</summary>
+                <div class="body">Tick 27. Pull inventory first — last tick was 26 about 17 min ago. Want to spot the delta in candidate set, especially around bc8bf45b which dropped out last time.</div>
+              </details>
+              <div class="block-tool"><span class="tool-name">Bash</span><span class="tool-input">USAGE_5H=0.06 node poc/maestro/option1-direct-api/inventory.mjs &gt; /tmp/maestro-inv.json</span></div>
+            </div>
+          </div>
+
+          <div class="turn user">
+            <div class="turn-glyph">⚙</div>
+            <div class="turn-body">
+              <div class="turn-meta">Tool result · Bash <span class="turn-time">09:15:08</span></div>
+              <div class="block-result"><span class="block-result-label">stdout</span>now: 2026-06-16T09:15:08.309Z
+3b146ef1 claude-code running snoozed: false last_summary: Further increase log expanded height
+bd8f27c1 claude-code idle snoozed: false last_summary: Add file content search
+0479daa7 claude-code idle snoozed: false last_summary: Kill process on port 7006
+82d1ea76 shell running snoozed: false …</div>
+            </div>
+          </div>
+
+          <div class="turn assistant">
+            <div class="turn-glyph">🎼</div>
+            <div class="turn-body">
+              <div class="turn-meta">Maestro <span class="turn-time">09:15:21</span></div>
+              <div class="turn-text">Inventory in. ~17min since tick 26.
+
+<b>Key deltas:</b>
+- <code>3b146ef1</code> running again, last_summary "Further increase log expanded height" — user active, drop
+- <code>bc8bf45b</code> is <b>back in inventory</b> with new last_summary "Fix terminal scroll on reload"
+- New shell <code>f7fbf17b</code>, drop</div>
+              <div class="block-tool"><span class="tool-name">Read</span><span class="tool-input">{ file_path: "/tmp/maestro-inv.json", limit: 1 }</span></div>
+            </div>
+          </div>
+
+          <div class="turn assistant">
+            <div class="turn-glyph">🎼</div>
+            <div class="turn-body">
+              <div class="turn-meta">Maestro <span class="turn-time">09:15:34</span></div>
+              <div class="turn-text">Got full inventory. <code>bc8bf45b</code> committed a 15-file feat (<code>2c798ec</code> — replacing History with Turns view), working tree clean. last_summary "Fix terminal scroll on reload" indicates queued-but-not-started work.</div>
+            </div>
+          </div>
+
+          <div class="turn assistant">
+            <div class="turn-glyph">🎼</div>
+            <div class="turn-body">
+              <div class="turn-meta">Maestro <span class="turn-time">09:16:02</span></div>
+              <div class="block-tool"><span class="tool-name">Write</span><span class="tool-input">{ file_path: "poc/maestro/option2-claude-skill/last-plan.json", content: "{ tick_at: \"2026-06-16T09:15:08.309Z\", actions: [4 entries], … }" }</span></div>
+            </div>
+          </div>
+
+          <div class="turn user">
+            <div class="turn-glyph">⚙</div>
+            <div class="turn-body">
+              <div class="turn-meta">Tool result · Write <span class="turn-time">09:16:02</span></div>
+              <div class="block-result">The file …last-plan.json has been updated successfully.</div>
+            </div>
+          </div>
+
+          <div class="turn assistant">
+            <div class="turn-glyph">🎼</div>
+            <div class="turn-body">
+              <div class="turn-meta">Maestro <span class="turn-time">09:16:18</span></div>
+              <div class="turn-text"><b>Tick 27 — 09:15:08Z</b>
+
+usage 5h: 6%
+candidates after F15.1 gate: 4 (8 shells, 2 snoozed, 1 self, 1 user-active dropped)
+delta vs tick 26: 3b146ef1 running again; bc8bf45b back in inventory with commit 2c798ec landed
+
+Calibration: when an agent posts "committed, working tree clean" with no follow-up for 15min+, the resume prompt should target the queued-but-not-started work in last_summary, not redo the commit-and-push flow.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Column 3: actions for this tick ──────────────────── -->
+      <div class="t6-actions">
+        <div class="t6-col-head">Actions <span class="count">4</span></div>
+        <div class="t6-actions-inner">
+
+          <div class="t6-acard">
+            <div class="t6-acard-head">
+              <span class="t6-acard-project">terminal-for-ai · master-mind</span>
+              <span class="t6-acard-kind">resume</span>
+            </div>
+            <div class="t6-acard-prompt">Leave submodule alone — anything left on MR !5512?</div>
+            <div class="t6-acard-foot">
+              <span class="t6-conf-bar"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span>
+              <span>Medium · 0.70</span>
+              <span style="margin-left: auto;">17th re-issue</span>
+            </div>
+            <div class="t6-acard-actions">
+              <button class="t6-acard-btn approve">Approve</button>
+              <button class="t6-acard-btn">Edit</button>
+              <button class="t6-acard-btn reject">Snooze</button>
+            </div>
+          </div>
+
+          <div class="t6-acard">
+            <div class="t6-acard-head">
+              <span class="t6-acard-project">imbee-web · feat/turns</span>
+              <span class="t6-acard-kind">resume</span>
+            </div>
+            <div class="t6-acard-prompt">Commit landed clean — I'll handle push. What's still in flight on this branch?</div>
+            <div class="t6-acard-foot">
+              <span class="t6-conf-bar"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span>
+              <span>Low-medium · 0.50</span>
+              <span style="margin-left: auto;">post-commit</span>
+            </div>
+            <div class="t6-acard-actions">
+              <button class="t6-acard-btn approve">Approve</button>
+              <button class="t6-acard-btn">Edit</button>
+              <button class="t6-acard-btn reject">Snooze</button>
+            </div>
+          </div>
+
+          <div class="t6-acard">
+            <div class="t6-acard-head">
+              <span class="t6-acard-project">codex-bench · main</span>
+              <span class="t6-acard-kind">resume</span>
+            </div>
+            <div class="t6-acard-prompt">codex --version / --help; summarize config flags.</div>
+            <div class="t6-acard-foot">
+              <span class="t6-conf-bar"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>
+              <span>Low · 0.40</span>
+              <span style="margin-left: auto;">25th re-issue</span>
+            </div>
+            <div class="t6-acard-actions">
+              <button class="t6-acard-btn approve">Approve</button>
+              <button class="t6-acard-btn">Edit</button>
+              <button class="t6-acard-btn reject">Snooze</button>
+            </div>
+          </div>
+
+          <div class="t6-acard">
+            <div class="t6-acard-head">
+              <span class="t6-acard-project">audit · content-search</span>
+              <span class="t6-acard-kind">resume</span>
+            </div>
+            <div class="t6-acard-prompt">Close out the content-search audit.</div>
+            <div class="t6-acard-foot">
+              <span class="t6-conf-bar"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span>
+              <span>Low · 0.35</span>
+              <span style="margin-left: auto;">re-issue</span>
+            </div>
+            <div class="t6-acard-actions">
+              <button class="t6-acard-btn approve">Approve</button>
+              <button class="t6-acard-btn">Edit</button>
+              <button class="t6-acard-btn reject">Snooze</button>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </div>
+
+    <div class="t6-terminal t6-mode-terminal">
+      <div class="t6-terminal-head">
+        <span class="dot"></span><span class="live">Live</span>
+        <span class="pill">claude --resume a954fcc3</span>
+        <span>cwd&nbsp;<span style="color:var(--text-dim)">~/Developments/tmp/terminal-for-ai/.baton/worktrees/master-mind</span></span>
+        <div class="spacer"></div>
+        <span>tick 27 · 1,287 turns</span>
+      </div>
+
+      <div class="t6-terminal-body">
+<span class="dim2">╭───────────────────────────────────────────────────────────────────╮</span>
+<span class="dim2">│</span>  <span class="purp">🎼 Maestro · master-mind session</span>                                <span class="dim2">│</span>
+<span class="dim2">│</span>  resumed from <span class="cyan">a954fcc3-03f8-47fd-9eaa-bbe2c4d16923</span>           <span class="dim2">│</span>
+<span class="dim2">│</span>  model: <span class="cyan">claude-sonnet-4-6</span> · mode: <span class="cyan">propose-first</span>                  <span class="dim2">│</span>
+<span class="dim2">│</span>  type <span class="grn">/maestro-tick</span> to run a tick · <span class="grn">/exit</span> to detach              <span class="dim2">│</span>
+<span class="dim2">╰───────────────────────────────────────────────────────────────────╯</span>
+
+<span class="cmt">  (scrollback ↑ shows previous ticks 1–26)</span>
+
+<span class="dim2">─── Tick 27 · 2026-06-16 09:14:53 ─────────────────────────────────────</span>
+
+<span class="purp">›</span> <span class="cyan">/maestro-tick</span>
+
+  <span class="dim2">⏺ Thinking…</span> Tick 27. Pulling inventory; last tick was 26 ~17 min ago.
+
+  <span class="purp">●</span> <span class="grn">Bash</span><span class="dim2">(USAGE_5H=0.06 node poc/maestro/option1-direct-api/inventory.mjs &gt; /tmp/maestro-inv.json)</span>
+    <span class="cmt">└─ stdout (18,266 bytes)</span>
+       now: 2026-06-16T09:15:08.309Z
+       3b146ef1 claude-code <span class="grn">running</span> last_summary: Further increase log expanded height
+       bd8f27c1 claude-code <span class="yel">idle</span>    last_summary: Add file content search
+       0479daa7 claude-code <span class="yel">idle</span>    last_summary: Kill process on port 7006
+       bc8bf45b claude-code <span class="yel">idle</span>    last_summary: Fix terminal scroll on reload
+
+  Inventory in. ~17min since tick 26. <span class="dim2">Key deltas:</span>
+    <span class="dim2">·</span> <span class="cyan">3b146ef1</span> running again → user active, <span class="red">drop</span>
+    <span class="dim2">·</span> <span class="cyan">bc8bf45b</span> back in inventory with commit <span class="grn">2c798ec</span> landed
+    <span class="dim2">·</span> new shell <span class="cyan">f7fbf17b</span> → <span class="red">drop</span>
+
+  <span class="purp">●</span> <span class="grn">Read</span><span class="dim2">(/tmp/maestro-inv.json)</span>
+  <span class="purp">●</span> <span class="grn">Write</span><span class="dim2">(poc/maestro/option2-claude-skill/last-plan.json)</span>
+    <span class="cmt">└─ ok · 4 actions written</span>
+
+  <span class="purp">Tick 27 — 2026-06-16T09:15:08Z</span>
+  ──────────────────────────────────────────────
+  usage 5h: <span class="yel">6%</span>
+  candidates after F15.1 gate: <span class="yel">4</span> (8 shells, 2 snoozed, 1 self, 1 user-active dropped)
+  delta vs tick 26: bc8bf45b back; 3b146ef1 running again
+
+  [<span class="grn">RESUME</span>]  <span class="cyan">b24bf3a5</span>  conf=<span class="yel">0.70</span>  Leave submodule alone — anything left on MR !5512?
+  [<span class="grn">RESUME</span>]  <span class="cyan">bc8bf45b</span>  conf=<span class="yel">0.50</span>  Commit landed clean — I'll handle push. What's queued?
+  [<span class="grn">RESUME</span>]  <span class="cyan">0479daa7</span>  conf=<span class="yel">0.40</span>  codex --version / --help; summarize config.
+  [<span class="grn">RESUME</span>]  <span class="cyan">bd8f27c1</span>  conf=<span class="yel">0.35</span>  Close out the content-search audit.
+
+  <span class="dim2">Calibration:</span> when an agent posts "committed, working tree clean" with
+  no follow-up activity for 15min+, the resume prompt should target the
+  queued-but-not-started work in last_summary, not redo commit-and-push.
+
+<div class="prompt-line"><span class="prompt-marker">›</span><span class="prompt-input">/maestro-tick</span><span class="cursor"></span></div>
+      </div>
+
+      <div class="t6-terminal-foot">
+        <span><kbd>↵</kbd> send</span>
+        <span><kbd>⌃C</kbd> interrupt</span>
+        <span><kbd>esc</kbd> back to triage</span>
+        <div style="flex:1"></div>
+        <span>read-only mirror · use the underlying tty to send input</span>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>T6 · 3-column (ticks · detail · actions)</h4>
+      <ul>
+        <li><b>Column 1 (200 px):</b> chronological tick list, newest on top. Skip / error rows tinted so the recent 403 cluster is visible at a glance.</li>
+        <li><b>Column 2 (flex):</b> selected tick's full conversation — user prompt, thinking, tool calls + results, final summary. Same chat style as T1, scoped to one tick.</li>
+        <li><b>Column 3 (320 px):</b> the action cards <i>that tick produced</i>. Hand-in-glove with column 2: you read what Maestro decided, then see (and Approve / Edit / Snooze) the proposals next to it.</li>
+        <li>Empty / skipped ticks render an inline banner in column 2 ("Tick 25 skipped — idle gate. No plan written.") and an empty placeholder in column 3.</li>
+        <li><b>Tradeoff:</b> action cards are narrower than the dedicated Actions tab — long prompts wrap to 3–4 lines. The trade buys you context: you can't accidentally Approve without seeing the reasoning behind it.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── T1 · CHAT THREAD ─────────────── -->
+<div class="variant" id="t1">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span><span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips"><span class="chip">5h · 6%</span><span class="chip maestro">🎼 full</span></div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session transcript</h2>
+        <div class="mfull-sub">session <span class="mono">a954fcc3</span> · 1,287 turns · 57 ticks · last 09:52</div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button>Actions <span class="dim">(3)</span></button>
+      <button class="is-active">Session</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="seg">
+        <button class="is-active">Last tick</button>
+        <button>Last 5 ticks</button>
+        <button>All</button>
+      </div>
+      <span class="dim">showing tick 27 — 12 turns</span>
+      <div class="toolbar-spacer"></div>
+      <button class="ghost-btn">↻ Refresh</button>
+      <button class="ghost-btn">Reveal JSONL in Finder</button>
+    </div>
+
+    <div class="t1-thread">
+
+      <div class="tickmark"><hr><span class="anchor">Tick 27 · 09:14:53</span><hr></div>
+
+      <div class="turn user">
+        <div class="turn-glyph">▶</div>
+        <div class="turn-body">
+          <div class="turn-meta">User <span class="turn-time">09:14:53</span></div>
+          <div class="turn-text">/maestro-tick</div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="turn-glyph">🎼</div>
+        <div class="turn-body">
+          <div class="turn-meta">Maestro <span class="turn-time">09:15:06</span></div>
+          <details class="block-thinking" open>
+            <summary>Thinking (8s)</summary>
+            <div class="body">Tick 27. Pull inventory first — last tick was 26 about 17 min ago. Want to spot the delta in candidate set, especially around bc8bf45b which dropped out last time.</div>
+          </details>
+          <div class="block-tool"><span class="tool-name">Bash</span><span class="tool-input">USAGE_5H=0.06 USAGE_7D=0.06 node poc/maestro/option1-direct-api/inventory.mjs &gt; /tmp/maestro-inv.json</span></div>
+        </div>
+      </div>
+
+      <div class="turn user">
+        <div class="turn-glyph">⚙</div>
+        <div class="turn-body">
+          <div class="turn-meta">Tool result · Bash <span class="turn-time">09:15:08</span></div>
+          <div class="block-result"><span class="block-result-label">stdout</span>now: 2026-06-16T09:15:08.309Z
+3b146ef1 claude-code running snoozed: false last_summary: Further increase log expanded height
+bd8f27c1 claude-code idle snoozed: false last_summary: Add file content search
+0479daa7 claude-code idle snoozed: false last_summary: Kill process on port 7006
+82d1ea76 shell running snoozed: false …</div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="turn-glyph">🎼</div>
+        <div class="turn-body">
+          <div class="turn-meta">Maestro <span class="turn-time">09:15:21</span></div>
+          <div class="turn-text">Inventory in. ~17min since tick 26.
+
+<b>Key deltas:</b>
+- <code>3b146ef1</code> running again, last_summary "Further increase log expanded height" — user active, drop
+- <code>bc8bf45b</code> is <b>back in inventory</b> with new last_summary "Fix terminal scroll on reload" (was gone in tick 26)
+- New shell <code>f7fbf17b</code>, drop</div>
+          <div class="block-tool"><span class="tool-name">Read</span><span class="tool-input">{ file_path: "/tmp/maestro-inv.json", limit: 1 }</span></div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="turn-glyph">🎼</div>
+        <div class="turn-body">
+          <div class="turn-meta">Maestro <span class="turn-time">09:15:34</span></div>
+          <div class="turn-text">Got full inventory. <code>bc8bf45b</code> committed a 15-file feat (<code>2c798ec</code> — replacing History with Turns view), working tree clean. last_summary "Fix terminal scroll on reload" indicates further work was queued but agent paused after commit.</div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="turn-glyph">🎼</div>
+        <div class="turn-body">
+          <div class="turn-meta">Maestro <span class="turn-time">09:16:02</span></div>
+          <div class="block-tool"><span class="tool-name">Write</span><span class="tool-input">{ file_path: "poc/maestro/option2-claude-skill/last-plan.json", content: "{ tick_at: \"2026-06-16T09:15:08.309Z\", actions: [4 entries], … }" }</span></div>
+        </div>
+      </div>
+
+      <div class="turn user">
+        <div class="turn-glyph">⚙</div>
+        <div class="turn-body">
+          <div class="turn-meta">Tool result · Write <span class="turn-time">09:16:02</span></div>
+          <div class="block-result">The file /Users/kenchu/Developments/tmp/terminal-for-ai/.baton/worktrees/master-mind/poc/maestro/option2-claude-skill/last-plan.json has been updated successfully.</div>
+        </div>
+      </div>
+
+      <div class="turn assistant">
+        <div class="turn-glyph">🎼</div>
+        <div class="turn-body">
+          <div class="turn-meta">Maestro <span class="turn-time">09:16:18</span></div>
+          <div class="turn-text"><b>Tick 27 — 2026-06-16T09:15:08Z</b>
+
+usage 5h: 6%
+candidates after F15.1 gate: 4 (8 shells, 2 snoozed, 1 self, 1 user-active dropped)
+delta vs tick 26: 3b146ef1 running again; bc8bf45b back in inventory with commit 2c798ec landed
+
+[RESUME]  b24bf3a5  conf=0.70  Leave submodule alone — anything left on MR !5512?  (17th re-issue)
+[RESUME]  bc8bf45b  conf=0.50  Commit landed clean — I'll handle push. What's still in flight on this branch?
+[RESUME]  0479daa7  conf=0.40  codex --version / --help; summarize config.  (25th re-issue)
+[RESUME]  bd8f27c1  conf=0.35  Close out the content-search audit. (re-issue)
+
+Calibration: when an agent posts a "committed, working tree clean" status with no follow-up activity for 15min+, the resume prompt should target the queued-but-not-started work in last_summary, not redo the commit-and-push flow.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>T1 · Chat thread</h4>
+      <ul>
+        <li>Mirrors the actual conversation: user prompts, assistant thinking, tool calls, tool results — each as a distinct bubble.</li>
+        <li><b>Thinking</b> blocks collapsed by default behind a <code>Thinking (8s)</code> summary; expand to read.</li>
+        <li>Tool calls compact (<code>name</code> + first ~200 chars of input); tool results capped at ~100 px with internal scroll.</li>
+        <li>Default filter shows just the current tick; <b>Last 5 / All</b> for context. Auto-scroll to bottom on new content.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── T2 · TICK ACCORDION ─────────────── -->
+<div class="variant" id="t2">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span><span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips"><span class="chip">5h · 6%</span><span class="chip maestro">🎼 full</span></div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session transcript</h2>
+        <div class="mfull-sub">57 ticks · click any to expand prompts + outputs</div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button>Actions <span class="dim">(3)</span></button>
+      <button class="is-active">Session</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="seg">
+        <button class="is-active">Newest first</button>
+        <button>Oldest first</button>
+      </div>
+      <span class="dim">showing 57 ticks</span>
+      <div class="toolbar-spacer"></div>
+      <button class="ghost-btn">Expand all</button>
+      <button class="ghost-btn">↻ Refresh</button>
+    </div>
+
+    <div class="t2-list">
+
+      <div class="t2-tick t2-tick-error">
+        <div class="t2-tick-head">
+          <span class="t2-tick-no">Tick 57</span>
+          <span class="t2-tick-title">Failed · auth error 403</span>
+          <span class="t2-tick-meta">23:15:16 · 1 turn</span>
+          <span class="t2-tick-arrow">›</span>
+        </div>
+      </div>
+
+      <div class="t2-tick open">
+        <div class="t2-tick-head">
+          <span class="t2-tick-no">Tick 27</span>
+          <span class="t2-tick-title">4 resume proposals · bc8bf45b post-commit pattern surfaced</span>
+          <span class="t2-tick-meta">09:14:53 · 12 turns · 1m 25s</span>
+          <span class="t2-tick-arrow">›</span>
+        </div>
+        <div class="t2-tick-body">
+
+          <div class="turn user">
+            <div class="turn-glyph">▶</div>
+            <div class="turn-body">
+              <div class="turn-meta">User · 09:14:53</div>
+              <div class="turn-text">/maestro-tick</div>
+            </div>
+          </div>
+
+          <div class="turn assistant">
+            <div class="turn-glyph">🎼</div>
+            <div class="turn-body">
+              <div class="turn-meta">Maestro · 09:15:06</div>
+              <details class="block-thinking">
+                <summary>Thinking (8s)</summary>
+                <div class="body">Tick 27. Pull inventory first — last tick was 26 about 17 min ago…</div>
+              </details>
+              <div class="block-tool"><span class="tool-name">Bash</span><span class="tool-input">node poc/maestro/option1-direct-api/inventory.mjs &gt; /tmp/maestro-inv.json</span></div>
+            </div>
+          </div>
+
+          <div class="turn user">
+            <div class="turn-glyph">⚙</div>
+            <div class="turn-body">
+              <div class="turn-meta">Tool result · Bash · 09:15:08</div>
+              <div class="block-result">now: 2026-06-16T09:15:08.309Z
+3b146ef1 claude-code running snoozed: false last_summary: Further increase log expanded height
+bd8f27c1 claude-code idle snoozed: false last_summary: Add file content search
+0479daa7 claude-code idle snoozed: false last_summary: Kill process on port 7006 …</div>
+            </div>
+          </div>
+
+          <div class="turn assistant">
+            <div class="turn-glyph">🎼</div>
+            <div class="turn-body">
+              <div class="turn-meta">Maestro · 09:16:18</div>
+              <div class="turn-text"><b>Tick 27 — 2026-06-16T09:15:08Z</b>
+
+[RESUME]  b24bf3a5  conf=0.70  Leave submodule alone — anything left on MR !5512?
+[RESUME]  bc8bf45b  conf=0.50  Commit landed clean — I'll handle push.
+[RESUME]  0479daa7  conf=0.40  codex --version / --help; summarize config.
+[RESUME]  bd8f27c1  conf=0.35  Close out the content-search audit.
+
+Calibration: when an agent posts a "committed, working tree clean" status with no follow-up activity for 15min+, the resume prompt should target the queued-but-not-started work in last_summary.</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="t2-tick">
+        <div class="t2-tick-head">
+          <span class="t2-tick-no">Tick 26</span>
+          <span class="t2-tick-title">3 resume · bc8bf45b dropped from inventory</span>
+          <span class="t2-tick-meta">08:57:39 · 14 turns · 1m 12s</span>
+          <span class="t2-tick-arrow">›</span>
+        </div>
+      </div>
+
+      <div class="t2-tick">
+        <div class="t2-tick-head">
+          <span class="t2-tick-no">Tick 25</span>
+          <span class="t2-tick-title">skipped · idle gate</span>
+          <span class="t2-tick-meta">08:42:11 · 0 turns</span>
+          <span class="t2-tick-arrow">›</span>
+        </div>
+      </div>
+
+      <div class="t2-tick">
+        <div class="t2-tick-head">
+          <span class="t2-tick-no">Tick 24</span>
+          <span class="t2-tick-title">4 resume · 1 defer · push routing decided</span>
+          <span class="t2-tick-meta">08:26:48 · 16 turns · 1m 33s</span>
+          <span class="t2-tick-arrow">›</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="notes">
+      <h4>T2 · Tick accordion</h4>
+      <ul>
+        <li>One collapsible row per tick (incl. error/skip rows). Default-open the most recent successful tick; everything else collapsed.</li>
+        <li>Failed ticks distinguished by colour + label so the noisy 403 string of recent ticks is glanceable, not buried.</li>
+        <li>Inside an expanded row: same chat layout as T1, but scoped to that tick. Easier mental model for "what did this tick do?"</li>
+        <li><b>Tradeoff:</b> requires a click to read; if you usually want the latest, T1 is one less interaction.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── T3 · MASTER + DETAIL ─────────────── -->
+<div class="variant" id="t3">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span><span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips"><span class="chip">5h · 6%</span><span class="chip maestro">🎼 full</span></div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session transcript</h2>
+        <div class="mfull-sub">session <span class="mono">a954fcc3</span> · 57 ticks · pick a tick on the left</div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button>Actions <span class="dim">(3)</span></button>
+      <button class="is-active">Session</button>
+    </div>
+
+    <div class="t3-split">
+      <div class="t3-list">
+        <div class="t3-list-head">Ticks (newest)</div>
+
+        <div class="t3-row t3-row-error">
+          <span class="t3-row-no">Tick 57</span>
+          <span class="t3-row-time">Today 23:15</span>
+          <span class="t3-row-sub">auth 403</span>
+        </div>
+        <div class="t3-row t3-row-error">
+          <span class="t3-row-no">Tick 56</span>
+          <span class="t3-row-time">Today 22:45</span>
+          <span class="t3-row-sub">auth 403</span>
+        </div>
+        <div class="t3-row selected">
+          <span class="t3-row-no">Tick 27</span>
+          <span class="t3-row-time">Today 09:14</span>
+          <span class="t3-row-sub">4 resume</span>
+        </div>
+        <div class="t3-row">
+          <span class="t3-row-no">Tick 26</span>
+          <span class="t3-row-time">Today 08:57</span>
+          <span class="t3-row-sub">3 resume</span>
+        </div>
+        <div class="t3-row">
+          <span class="t3-row-no">Tick 25</span>
+          <span class="t3-row-time">Today 08:42</span>
+          <span class="t3-row-sub">skip · idle gate</span>
+        </div>
+        <div class="t3-row">
+          <span class="t3-row-no">Tick 24</span>
+          <span class="t3-row-time">Today 08:26</span>
+          <span class="t3-row-sub">4 resume · 1 defer</span>
+        </div>
+        <div class="t3-row">
+          <span class="t3-row-no">Tick 23</span>
+          <span class="t3-row-time">Today 08:09</span>
+          <span class="t3-row-sub">2 resume</span>
+        </div>
+        <div class="t3-row">
+          <span class="t3-row-no">Tick 22</span>
+          <span class="t3-row-time">Yesterday 22:50</span>
+          <span class="t3-row-sub">3 resume</span>
+        </div>
+      </div>
+
+      <div class="t3-detail">
+        <div class="t3-detail-head">
+          <h3>Tick 27 · 12 turns</h3>
+          <span class="t3-detail-meta">2026-06-16 09:14:53 → 09:16:18 · 1m 25s</span>
+        </div>
+
+        <div class="turn user">
+          <div class="turn-glyph">▶</div>
+          <div class="turn-body">
+            <div class="turn-meta">User · 09:14:53</div>
+            <div class="turn-text">/maestro-tick</div>
+          </div>
+        </div>
+
+        <div class="turn assistant">
+          <div class="turn-glyph">🎼</div>
+          <div class="turn-body">
+            <div class="turn-meta">Maestro · 09:15:06</div>
+            <details class="block-thinking">
+              <summary>Thinking (8s)</summary>
+              <div class="body">Tick 27. Pull inventory first — last tick was 26 about 17 min ago.</div>
+            </details>
+            <div class="block-tool"><span class="tool-name">Bash</span><span class="tool-input">node poc/maestro/option1-direct-api/inventory.mjs &gt; /tmp/maestro-inv.json</span></div>
+          </div>
+        </div>
+
+        <div class="turn user">
+          <div class="turn-glyph">⚙</div>
+          <div class="turn-body">
+            <div class="turn-meta">Tool result · Bash · 09:15:08</div>
+            <div class="block-result">now: 2026-06-16T09:15:08.309Z
+3b146ef1 claude-code running …
+bd8f27c1 claude-code idle …
+0479daa7 claude-code idle …</div>
+          </div>
+        </div>
+
+        <div class="turn assistant">
+          <div class="turn-glyph">🎼</div>
+          <div class="turn-body">
+            <div class="turn-meta">Maestro · 09:16:18</div>
+            <div class="turn-text"><b>Tick 27 — 09:15:08Z</b>
+
+[RESUME]  b24bf3a5  conf=0.70  Leave submodule alone — anything left on MR !5512?
+[RESUME]  bc8bf45b  conf=0.50  Commit landed clean — I'll handle push.
+[RESUME]  0479daa7  conf=0.40  codex --version / --help.
+[RESUME]  bd8f27c1  conf=0.35  Close out the content-search audit.
+
+Calibration: when an agent posts "committed, working tree clean" with no follow-up for 15min+, the resume prompt should target the queued work, not redo commit-and-push.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>T3 · Master + detail</h4>
+      <ul>
+        <li>240 px tick list on the left (chronological, with quick badges) + full conversation of the selected tick on the right.</li>
+        <li>Best for <i>comparing</i> ticks: a side-by-side mental model of how Maestro's reasoning evolves.</li>
+        <li>Error / skip rows tinted in the list so you can scan failure clusters.</li>
+        <li><b>Tradeoff:</b> denser layout; harder to read long turns at this width. Pairs well with a "pop out" button to expand a tick into T1's full-width chat view.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── T4 · COMPACT LOG ─────────────── -->
+<div class="variant" id="t4">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span><span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips"><span class="chip">5h · 6%</span><span class="chip maestro">🎼 full</span></div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session log</h2>
+        <div class="mfull-sub">1,287 turns · 57 ticks · click any line to expand</div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button>Actions <span class="dim">(3)</span></button>
+      <button class="is-active">Session</button>
+    </div>
+
+    <div class="toolbar">
+      <div class="seg">
+        <button class="is-active">All turns</button>
+        <button>Tool calls only</button>
+        <button>Messages only</button>
+      </div>
+      <span class="dim">showing 24 of 1,287 (tail)</span>
+      <div class="toolbar-spacer"></div>
+      <button class="ghost-btn">↻ Refresh</button>
+    </div>
+
+    <div class="t4-log">
+      <div class="t4-line tickdiv">
+        <span class="t4-time">09:14:53</span>
+        <span class="t4-tag tick">TICK 27</span>
+        <span class="t4-msg">— /maestro-tick · 12 turns to follow ———————————</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:14:53</span>
+        <span class="t4-tag user">USER</span>
+        <span class="t4-msg">/maestro-tick</span>
+      </div>
+      <div class="t4-line open">
+        <span class="t4-time">09:15:06</span>
+        <span class="t4-tag assist">ASSIST</span>
+        <span class="t4-msg">[thinking 8s] Tick 27. Pull inventory first — last tick was 26 about 17 min ago. Want to spot the delta in candidate set, especially around bc8bf45b which dropped out last time.</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:15:06</span>
+        <span class="t4-tag tool">TOOL</span>
+        <span class="t4-msg">Bash · USAGE_5H=0.06 node poc/maestro/option1-direct-api/inventory.mjs &gt; /tmp/maestro-inv.json && wc -c …</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:15:08</span>
+        <span class="t4-tag tool">RESULT</span>
+        <span class="t4-msg"><span class="dim">stdout</span>  18266 /tmp/maestro-inv.json; 3b146ef1 claude-code running; bd8f27c1 idle; …</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:15:21</span>
+        <span class="t4-tag assist">ASSIST</span>
+        <span class="t4-msg">Inventory in. ~17min since tick 26. Key deltas: 3b146ef1 running again; bc8bf45b is back in inventory…</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:15:21</span>
+        <span class="t4-tag tool">TOOL</span>
+        <span class="t4-msg">Read · { file_path: "/tmp/maestro-inv.json", limit: 1 }</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:15:22</span>
+        <span class="t4-tag tool">RESULT</span>
+        <span class="t4-msg">1  {"now":"2026-06-16T09:15:08.309Z","usage_pct_5h":0.06,…}</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:15:34</span>
+        <span class="t4-tag assist">ASSIST</span>
+        <span class="t4-msg">Got full inventory. bc8bf45b committed a 15-file feat (2c798ec — replacing History with Turns view), working tree clean.</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:16:02</span>
+        <span class="t4-tag tool">TOOL</span>
+        <span class="t4-msg">Write · { file_path: "poc/maestro/option2-claude-skill/last-plan.json", content: "{ tick_at: \"2026-06-16T09:15:08…" }</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:16:02</span>
+        <span class="t4-tag tool">RESULT</span>
+        <span class="t4-msg">The file …last-plan.json has been updated successfully.</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">09:16:18</span>
+        <span class="t4-tag assist">ASSIST</span>
+        <span class="t4-msg"><b>Tick 27 — 09:15:08Z</b>  4 resume proposals · calibration: post-commit pattern</span>
+      </div>
+
+      <div class="t4-line tickdiv">
+        <span class="t4-time">22:45:51</span>
+        <span class="t4-tag tick">TICK 56</span>
+        <span class="t4-msg">— /maestro-tick · auth failed ———————————</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">22:45:51</span>
+        <span class="t4-tag user">USER</span>
+        <span class="t4-msg">/maestro-tick</span>
+      </div>
+      <div class="t4-line">
+        <span class="t4-time">22:45:51</span>
+        <span class="t4-tag error">ERROR</span>
+        <span class="t4-msg">Failed to authenticate. API Error: 403 {"error":{"type":"forbidden","message":"Request not allowed"}}</span>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>T4 · Compact log</h4>
+      <ul>
+        <li>One line per turn — closest analogue to <code>tail -f</code>. Filter by USER / ASSIST / TOOL / TICK and skim hundreds quickly.</li>
+        <li>Click any row to expand its content inline (no modal). One ASSIST row pre-expanded here to show the look.</li>
+        <li>Tick dividers anchor scroll position. Auth errors / failed ticks tinted.</li>
+        <li>Densest of the five — good for diagnosing daemon behaviour across many ticks, less good for reading a single tick's narrative.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── T5 · CARD-PER-TICK GRID ─────────────── -->
+<div class="variant" id="t5">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span><span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips"><span class="chip">5h · 6%</span><span class="chip maestro">🎼 full</span></div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session transcript</h2>
+        <div class="mfull-sub">57 ticks — each tick's final summary at a glance</div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button>Actions <span class="dim">(3)</span></button>
+      <button class="is-active">Session</button>
+    </div>
+
+    <div class="t5-grid">
+      <div class="t5-card error">
+        <div class="t5-card-head">
+          <span class="t5-card-no">Tick 57</span>
+          <span class="t5-card-time">23:15</span>
+        </div>
+        <div class="t5-card-prompt">/maestro-tick</div>
+        <div class="t5-card-summary">Failed to authenticate. API Error: 403 {"error":{"type":"forbidden","message":"Request not allowed"}}</div>
+        <div class="t5-card-foot"><span class="badge">1 turn</span><span class="badge">0 tools</span></div>
+      </div>
+
+      <div class="t5-card error">
+        <div class="t5-card-head">
+          <span class="t5-card-no">Tick 56</span>
+          <span class="t5-card-time">22:45</span>
+        </div>
+        <div class="t5-card-prompt">/maestro-tick</div>
+        <div class="t5-card-summary">Failed to authenticate. API Error: 403</div>
+        <div class="t5-card-foot"><span class="badge">1 turn</span><span class="badge">0 tools</span></div>
+      </div>
+
+      <div class="t5-card">
+        <div class="t5-card-head">
+          <span class="t5-card-no">Tick 27</span>
+          <span class="t5-card-time">09:14</span>
+        </div>
+        <div class="t5-card-prompt">/maestro-tick</div>
+        <div class="t5-card-summary"><b>4 resume proposals.</b> bc8bf45b is back in inventory with commit 2c798ec landed (15-file feat, replacing History with Turns view). Calibration: when an agent posts "committed, working tree clean" with no follow-up for 15min+, the resume prompt should target queued work, not redo commit-and-push.</div>
+        <div class="t5-card-foot"><span class="badge">12 turns</span><span class="badge">3 tools</span><span class="badge">1m 25s</span></div>
+      </div>
+
+      <div class="t5-card">
+        <div class="t5-card-head">
+          <span class="t5-card-no">Tick 26</span>
+          <span class="t5-card-time">08:57</span>
+        </div>
+        <div class="t5-card-prompt">/maestro-tick</div>
+        <div class="t5-card-summary"><b>3 resume.</b> bc8bf45b dropped from inventory — interpreting as task closed (gone, not paused). Down to 3 candidates; b24bf3a5 16th re-issue still at conf 0.70.</div>
+        <div class="t5-card-foot"><span class="badge">14 turns</span><span class="badge">3 tools</span><span class="badge">1m 12s</span></div>
+      </div>
+
+      <div class="t5-card">
+        <div class="t5-card-head">
+          <span class="t5-card-no">Tick 25</span>
+          <span class="t5-card-time">08:42</span>
+        </div>
+        <div class="t5-card-prompt">/maestro-tick</div>
+        <div class="t5-card-summary"><b>Skip · idle gate.</b> bootstrap-or-tick.sh skipped before any Claude call — user active 4m ago, threshold 15m.</div>
+        <div class="t5-card-foot"><span class="badge">0 turns</span></div>
+      </div>
+
+      <div class="t5-card">
+        <div class="t5-card-head">
+          <span class="t5-card-no">Tick 24</span>
+          <span class="t5-card-time">08:26</span>
+        </div>
+        <div class="t5-card-prompt">/maestro-tick</div>
+        <div class="t5-card-summary"><b>4 resume · 1 defer.</b> imbee-web commit ba60a3d landed; push routing decided. Snooze on baton·marketing respected.</div>
+        <div class="t5-card-foot"><span class="badge">16 turns</span><span class="badge">4 tools</span><span class="badge">1m 33s</span></div>
+      </div>
+
+      <div class="t5-card">
+        <div class="t5-card-head">
+          <span class="t5-card-no">Tick 23</span>
+          <span class="t5-card-time">08:09</span>
+        </div>
+        <div class="t5-card-prompt">/maestro-tick</div>
+        <div class="t5-card-summary"><b>2 resume.</b> Quiet tick; 9 shells dropped, 2 snoozed. Same pattern continues for b24bf3a5 / bd8f27c1.</div>
+        <div class="t5-card-foot"><span class="badge">10 turns</span><span class="badge">2 tools</span><span class="badge">52s</span></div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>T5 · Card-per-tick grid</h4>
+      <ul>
+        <li>3-col gallery of ticks. Each card surfaces only the master's final summary (the bit that's actually decision-shaped) + counts.</li>
+        <li>Click a card to drill into the full transcript (would open T1 / T3 detail in-place).</li>
+        <li>Auth-error ticks distinguishable at a glance — useful for spotting daemon outages.</li>
+        <li><b>Tradeoff:</b> doesn't show the assistant's intermediate reasoning at all — purely "what did this tick decide?" Pairs well with T1 as the drill-in target.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+</div></div>
+
+<script>
+  document.querySelectorAll('.picker button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.picker button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const target = btn.dataset.tab;
+      document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+      document.getElementById(target).classList.add('active');
+    });
+  });
+
+  // T6 · "Session" toggles the 3-column split ↔ terminal mirror
+  const t6Btn = document.getElementById('t6-session-btn');
+  if (t6Btn) {
+    t6Btn.addEventListener('click', () => {
+      const v = document.getElementById('t6');
+      v.classList.toggle('is-terminal');
+      t6Btn.classList.toggle('is-active');
+    });
+  }
+</script>
+
+</body>
+</html>

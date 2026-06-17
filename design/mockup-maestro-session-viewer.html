@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>baton · Maestro session-viewer mockups</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --running:#5b8def; --needs:#f0a945; --done:#2fbf71;
+    --errored:#ef5454; --paused:#6b7280;
+    --maestro:#a78bfa; --maestro-2:#1c1730; --maestro-fg:#0e0a1f;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; min-height:100vh; background:#050608; color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+    font-size:13px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+  .dim  { color:var(--text-dim); }
+  .faint{ color:var(--text-faint); }
+
+  /* ─── Page chrome: picker + preview ─── */
+  .page-head {
+    padding: 18px 24px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky; top: 0; z-index: 50;
+  }
+  .page-head h1 {
+    margin: 0 0 6px 0; font-size: 17px; font-weight: 600; color: var(--text);
+  }
+  .page-head p { margin: 0 0 14px 0; color: var(--text-dim); font-size: 12px; }
+  .picker { display: flex; gap: 6px; flex-wrap: wrap; }
+  .picker button {
+    background: var(--bg-2); color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+  .picker button:hover { background: var(--bg-3); color: var(--text); }
+  .picker button.active {
+    background: var(--maestro-2);
+    color: var(--maestro);
+    border-color: var(--maestro);
+  }
+  .picker button strong { color: inherit; }
+  .picker button .pick-sub { font-size: 10px; color: var(--text-faint); display: block; margin-top: 2px; }
+  .picker button.active .pick-sub { color: var(--maestro); opacity: 0.7; }
+
+  .preview-wrap {
+    padding: 24px;
+    display: flex; justify-content: center;
+  }
+  .preview {
+    width: 1180px;
+    max-width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+  }
+
+  .variant { display: none; }
+  .variant.active { display: block; }
+
+  /* ─── Window chrome (shared) ─── */
+  .titlebar {
+    display:flex; align-items:center; gap:12px; padding:0 12px; height: 36px;
+    background:var(--bg-1); border-bottom:1px solid var(--border);
+    font-size:12px; color:var(--text-dim);
+  }
+  .titlebar .dots { display:flex; gap:6px; }
+  .titlebar .dot { width:11px; height:11px; border-radius:50%; background:#3a3f4a; }
+  .titlebar .dot.red { background:#ff5f57; }
+  .titlebar .dot.yellow { background:#febc2e; }
+  .titlebar .dot.green { background:#28c840; }
+  .titlebar .title { color:var(--text); font-weight:600; margin-left:8px; }
+  .titlebar .meta { color: var(--text-faint); font-size: 11px; }
+  .titlebar .spacer { flex:1; }
+  .titlebar .right-chips { display:flex; gap:6px; align-items:center; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 10px 2px 8px;
+    height: 22px;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .chip.maestro {
+    background: var(--maestro-2);
+    border-color: var(--maestro);
+    color: var(--maestro);
+  }
+  .chip.maestro.active { box-shadow: 0 0 0 1px rgba(167,139,250,0.3); }
+
+  /* ─── Maestro full-screen banner (shared base) ─── */
+  .mfull {
+    padding: 18px 22px 22px;
+    background: linear-gradient(180deg, rgba(28,23,48,0.6), rgba(28,23,48,0.0));
+    min-height: 540px;
+  }
+  .mfull-banner {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 16px;
+  }
+  .mfull-glyph { font-size: 22px; }
+  .mfull-text  { flex: 1; }
+  .mfull-text h2 { margin: 0; font-size: 17px; font-weight: 600; }
+  .mfull-sub { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+  .countdown {
+    color: var(--maestro);
+    background: rgba(167,139,250,0.08);
+    border: 1px solid rgba(167,139,250,0.30);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .countdown.ready {
+    color: var(--done); border-color: var(--accent-2);
+    background: rgba(47,191,113,0.08); font-weight: 600;
+  }
+  .mfull-controls { display: flex; align-items: center; gap: 10px; }
+  .runnow-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--maestro-2);
+    color: var(--maestro);
+    border: 1px solid rgba(167,139,250,0.4);
+    border-radius: 6px;
+    padding: 5px 12px;
+    cursor: pointer;
+    font-size: 12px; font-weight: 600;
+  }
+  .runnow-btn:hover { background: rgba(167,139,250,0.18); border-color: var(--maestro); }
+  .mode-seg { display: inline-flex; background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+  .mode-seg button {
+    background: transparent; border: 0; color: var(--text-faint);
+    padding: 4px 10px; cursor: pointer; font-size: 11px; font-family: inherit;
+  }
+  .mode-seg button.is-active { background: var(--maestro-2); color: var(--maestro); }
+  .toggle-pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 999px; padding: 4px 12px;
+    color: var(--accent); font-size: 11px; cursor: pointer;
+  }
+
+  /* ─── Action card (compact, used in multiple variants) ─── */
+  .acard {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px; padding: 12px 14px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .acard-head {
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 11px; color: var(--text-dim);
+  }
+  .acard-project { color: var(--text); font-weight: 600; }
+  .acard-kind {
+    text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--maestro); font-size: 10px;
+  }
+  .acard-prompt { color: var(--text); font-size: 12px; line-height: 1.5; }
+  .acard-meta { display: flex; gap: 10px; font-size: 11px; color: var(--text-faint); margin-top: 4px; }
+  .conf-bar { display: inline-flex; gap: 2px; vertical-align: middle; }
+  .conf-bar i { width: 6px; height: 10px; background: var(--bg-3); border-radius: 1px; }
+  .conf-bar i.on { background: var(--maestro); }
+
+  /* ─── Generic panel + tabs (S2, S3) ─── */
+  .tabs {
+    display: inline-flex; background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden; margin-bottom: 14px;
+  }
+  .tabs button {
+    background: transparent; border: 0; color: var(--text-dim);
+    padding: 6px 16px; cursor: pointer; font-size: 12px; font-family: inherit;
+  }
+  .tabs button.is-active { background: var(--maestro-2); color: var(--maestro); font-weight: 600; }
+
+  /* ─────────────────────── S1: Side panel ─────────────────────── */
+  .s1-split { display: grid; grid-template-columns: 1fr 360px; gap: 16px; }
+  .s1-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-content: start; }
+  .s1-side {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px; overflow: hidden;
+    display: flex; flex-direction: column;
+    height: 460px;
+  }
+  .s1-side-head {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    background: rgba(167,139,250,0.05);
+  }
+  .s1-side-head h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--text); }
+  .s1-side-meta { font-size: 11px; color: var(--text-faint); }
+  .s1-ticklist { overflow-y: auto; flex: 1; }
+  .s1-tickrow {
+    padding: 10px 14px; border-bottom: 1px solid var(--border);
+    cursor: pointer; display: flex; flex-direction: column; gap: 4px;
+  }
+  .s1-tickrow:hover { background: var(--bg-2); }
+  .s1-tickrow.selected { background: var(--maestro-2); border-left: 2px solid var(--maestro); padding-left: 12px; }
+  .s1-tickrow-top { display: flex; justify-content: space-between; font-size: 12px; }
+  .s1-tickrow-no { color: var(--text); font-weight: 600; }
+  .s1-tickrow-time { color: var(--text-faint); font-size: 11px; }
+  .s1-tickrow-sub { color: var(--text-dim); font-size: 11px; }
+  .s1-tickrow-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-right: 4px; }
+  .s1-tickrow-tag.resume   { background: rgba(91,141,239,0.15); color: var(--running); }
+  .s1-tickrow-tag.defer    { background: rgba(107,114,128,0.15); color: var(--paused); }
+  .s1-tickrow-tag.skip     { background: rgba(240,169,69,0.15); color: var(--needs); }
+
+  /* ─────────────────────── S2: Tabbed view ─────────────────────── */
+  .s2-session-block {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 14px;
+  }
+  .s2-session-head {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 14px; padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .s2-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); }
+  .s2-stat-value { font-size: 14px; color: var(--text); margin-top: 4px; }
+  .s2-stat-value .mono { font-size: 11px; color: var(--text-dim); }
+  .s2-logpane {
+    background: #06080a;
+    border-radius: 0 0 8px 8px;
+    padding: 14px 18px;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11.5px; line-height: 1.55; color: var(--text-dim);
+    overflow-x: auto;
+    white-space: pre;
+    max-height: 240px; overflow-y: auto;
+  }
+  .s2-logpane .ts  { color: var(--text-faint); }
+  .s2-logpane .ok  { color: var(--done); }
+  .s2-logpane .key { color: var(--maestro); }
+  .s2-logpane .num { color: var(--needs); }
+
+  .s2-history-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .s2-history-head h3 { margin: 0; font-size: 13px; font-weight: 600; }
+  .s2-history-list { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  .s2-history-card {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 12px;
+    font-size: 11px; cursor: pointer;
+  }
+  .s2-history-card:hover { border-color: var(--maestro); }
+  .s2-history-card-no { font-weight: 600; color: var(--text); }
+  .s2-history-card-time { color: var(--text-faint); margin-left: 6px; }
+  .s2-history-card-sub { color: var(--text-dim); margin-top: 4px; }
+
+  /* ─────────────────────── S3: JSONL transcript reader ─────────────────────── */
+  .s3-thread {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px;
+    height: 480px;
+    overflow-y: auto;
+    padding: 16px 20px;
+  }
+  .s3-tickmark {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--maestro);
+    font-size: 11px; font-weight: 600;
+    margin: 18px 0 10px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .s3-tickmark:first-child { margin-top: 0; }
+  .s3-tickmark hr { flex: 1; border: 0; border-top: 1px dashed rgba(167,139,250,0.25); margin: 0; }
+  .s3-msg { display: flex; gap: 10px; margin-bottom: 12px; }
+  .s3-msg-glyph {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    background: var(--bg-3); font-size: 11px;
+  }
+  .s3-msg.user .s3-msg-glyph     { background: var(--accent-2); color: var(--accent); }
+  .s3-msg.assistant .s3-msg-glyph{ background: var(--maestro-2); color: var(--maestro); }
+  .s3-msg.tool .s3-msg-glyph     { background: var(--bg-3); color: var(--text-dim); }
+  .s3-msg-body { flex: 1; min-width: 0; }
+  .s3-msg-role { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint); margin-bottom: 2px; }
+  .s3-msg-text { color: var(--text); font-size: 12px; }
+  .s3-msg.assistant .s3-msg-text { color: var(--text); }
+  .s3-msg.tool .s3-msg-text {
+    color: var(--text-dim); font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11px; background: var(--bg-2); padding: 6px 10px;
+    border-radius: 4px; border-left: 2px solid var(--maestro);
+  }
+  .s3-msg-foot { color: var(--text-faint); font-size: 10px; margin-top: 4px; }
+
+  /* ─────────────────────── S4: Inspector drawer ─────────────────────── */
+  .s4-wrap { position: relative; }
+  .s4-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+  .acard .acard-inspect {
+    margin-top: 6px;
+    font-size: 11px; color: var(--maestro);
+    cursor: pointer; align-self: flex-start;
+  }
+  .acard .acard-inspect:hover { text-decoration: underline; }
+  .s4-drawer {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    width: 460px;
+    background: var(--bg-1);
+    border-left: 1px solid var(--maestro);
+    box-shadow: -10px 0 30px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column;
+  }
+  .s4-drawer-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--maestro-2);
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .s4-drawer-head h3 { margin: 0; color: var(--maestro); font-size: 13px; font-weight: 600; }
+  .s4-drawer-close {
+    background: transparent; border: 0; color: var(--maestro);
+    cursor: pointer; font-size: 16px; padding: 0;
+  }
+  .s4-drawer-body { padding: 14px 16px; overflow-y: auto; flex: 1; }
+  .s4-drawer-section { margin-bottom: 14px; }
+  .s4-drawer-section h4 {
+    margin: 0 0 6px 0; font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--text-faint); font-weight: 600;
+  }
+  .s4-drawer-block {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 12px;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11px; color: var(--text-dim); line-height: 1.5;
+    white-space: pre-wrap;
+  }
+  .s4-drawer-reasoning { color: var(--text); font-size: 12px; line-height: 1.55; }
+
+  /* ─────────────────────── S5: Timeline view ─────────────────────── */
+  .s5-timeline {
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px 20px;
+    height: 480px;
+    overflow-y: auto;
+  }
+  .s5-row {
+    display: flex; gap: 14px;
+    padding-bottom: 16px;
+    position: relative;
+  }
+  .s5-row::before {
+    content: ""; position: absolute;
+    left: 11px; top: 26px; bottom: -4px;
+    width: 1px; background: var(--border);
+  }
+  .s5-row:last-child::before { display: none; }
+  .s5-dot {
+    width: 22px; height: 22px; border-radius: 50%;
+    flex-shrink: 0;
+    border: 2px solid var(--maestro);
+    background: var(--maestro-2); color: var(--maestro);
+    font-size: 10px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1;
+  }
+  .s5-row.skip .s5-dot { border-color: var(--paused); background: var(--bg-2); color: var(--paused); }
+  .s5-body { flex: 1; padding-top: 1px; }
+  .s5-row-head { display: flex; justify-content: space-between; font-size: 12px; }
+  .s5-row-title { color: var(--text); font-weight: 600; }
+  .s5-row-time { color: var(--text-faint); font-size: 11px; }
+  .s5-row-tags { margin: 4px 0 6px; display: flex; gap: 4px; flex-wrap: wrap; font-size: 10px; }
+  .s5-tag {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 3px; padding: 1px 6px;
+    color: var(--text-dim);
+  }
+  .s5-tag.resume { color: var(--running); border-color: rgba(91,141,239,0.4); }
+  .s5-tag.defer  { color: var(--paused); }
+  .s5-tag.skip   { color: var(--needs);   border-color: rgba(240,169,69,0.4); }
+  .s5-row-summary {
+    color: var(--text-dim); font-size: 12px;
+    background: var(--bg-2); border-left: 2px solid var(--maestro);
+    padding: 8px 10px; border-radius: 0 4px 4px 0;
+  }
+  .s5-row.skip .s5-row-summary { border-left-color: var(--paused); }
+  .s5-row.open .s5-row-expand {
+    margin-top: 8px;
+    background: #06080a; border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-family: ui-monospace,'SF Mono',Menlo,monospace;
+    font-size: 11px; color: var(--text-dim); white-space: pre-wrap;
+  }
+  .s5-row .s5-row-expand { display: none; }
+
+  /* ─── Notes box at the bottom of each variant ─── */
+  .notes {
+    margin: 18px 0 0;
+    background: var(--bg-1); border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+  .notes h4 { margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: var(--maestro); }
+  .notes ul { margin: 0; padding-left: 18px; }
+  .notes li { color: var(--text-dim); margin-bottom: 4px; font-size: 11.5px; }
+  .notes li b { color: var(--text); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>baton · Maestro session-viewer mockups</h1>
+  <p>Five ways to surface the master-mind's session, reasoning, and tick history inside the existing M9 full-screen view.</p>
+  <div class="picker">
+    <button data-tab="s1" class="active"><strong>S1.</strong> Side panel<span class="pick-sub">cards + tick list + selected log</span></button>
+    <button data-tab="s2"><strong>S2.</strong> Tabbed Session view<span class="pick-sub">Actions ↔ Session toggle</span></button>
+    <button data-tab="s3"><strong>S3.</strong> JSONL transcript<span class="pick-sub">chat-style conversation</span></button>
+    <button data-tab="s4"><strong>S4.</strong> Inspector drawer<span class="pick-sub">slide-in from a card</span></button>
+    <button data-tab="s5"><strong>S5.</strong> Vertical timeline<span class="pick-sub">git-graph for ticks</span></button>
+  </div>
+</div>
+
+<div class="preview-wrap">
+<div class="preview">
+
+<!-- ─────────────── S1 · SIDE PANEL ─────────────── -->
+<div class="variant active" id="s1">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span>
+    <span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips">
+      <span class="chip">5h · 6%</span>
+      <span class="chip maestro active">🎼 full</span>
+    </div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · tick 33</h2>
+        <div class="mfull-sub">3 proposals · 1 deferred · <span class="countdown">idle 8m 23s · 6m 37s to fire</span></div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <div class="mode-seg"><button class="is-active">suggest</button><button>run</button></div>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="s1-split">
+      <div class="s1-grid">
+        <div class="acard">
+          <div class="acard-head"><span class="acard-project">terminal-for-ai · master-mind</span><span class="acard-kind">resume</span></div>
+          <div class="acard-prompt">Leave submodule alone — anything left on MR !5512?</div>
+          <div class="acard-meta">
+            <span>conf <span class="conf-bar"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> Medium</span>
+            <span>23rd re-issue</span>
+          </div>
+        </div>
+        <div class="acard">
+          <div class="acard-head"><span class="acard-project">imbee-web · feat/dashboards</span><span class="acard-kind">resume</span></div>
+          <div class="acard-prompt">Commit ba60a3d landed — I'll handle push. What's queued next?</div>
+          <div class="acard-meta">
+            <span>conf <span class="conf-bar"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span> Low-medium</span>
+            <span>just landed</span>
+          </div>
+        </div>
+        <div class="acard">
+          <div class="acard-head"><span class="acard-project">codex-bench · main</span><span class="acard-kind">resume</span></div>
+          <div class="acard-prompt">codex --version / --help; summarize config flags.</div>
+          <div class="acard-meta">
+            <span>conf <span class="conf-bar"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span> Low</span>
+            <span>31st re-issue</span>
+          </div>
+        </div>
+        <div class="acard">
+          <div class="acard-head"><span class="acard-project">baton · marketing</span><span class="acard-kind">defer</span></div>
+          <div class="acard-prompt">Snoozed by user 14:02 — respect until reset.</div>
+          <div class="acard-meta">
+            <span>conf <span class="conf-bar"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span> High</span>
+            <span>1 deferred</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="s1-side">
+        <div class="s1-side-head">
+          <h3>Session</h3>
+          <span class="s1-side-meta mono">a954fcc3…</span>
+        </div>
+        <div class="s1-ticklist">
+          <div class="s1-tickrow selected">
+            <div class="s1-tickrow-top">
+              <span class="s1-tickrow-no">Tick 33</span>
+              <span class="s1-tickrow-time">14:11:04</span>
+            </div>
+            <div class="s1-tickrow-sub">
+              <span class="s1-tickrow-tag resume">3 resume</span>
+              <span class="s1-tickrow-tag defer">1 defer</span>
+              bc8bf45b closed entirely.
+            </div>
+          </div>
+          <div class="s1-tickrow">
+            <div class="s1-tickrow-top">
+              <span class="s1-tickrow-no">Tick 32</span>
+              <span class="s1-tickrow-time">13:55:42</span>
+            </div>
+            <div class="s1-tickrow-sub">
+              <span class="s1-tickrow-tag resume">4 resume</span>
+              Re-issue calibration; bd8f27c1 was needs-input.
+            </div>
+          </div>
+          <div class="s1-tickrow">
+            <div class="s1-tickrow-top">
+              <span class="s1-tickrow-no">Tick 31</span>
+              <span class="s1-tickrow-time">13:40:11</span>
+            </div>
+            <div class="s1-tickrow-sub">
+              <span class="s1-tickrow-tag skip">skip</span>
+              user-active &lt;15m, gate held.
+            </div>
+          </div>
+          <div class="s1-tickrow">
+            <div class="s1-tickrow-top">
+              <span class="s1-tickrow-no">Tick 30</span>
+              <span class="s1-tickrow-time">13:24:55</span>
+            </div>
+            <div class="s1-tickrow-sub">
+              <span class="s1-tickrow-tag resume">2 resume</span>
+              <span class="s1-tickrow-tag defer">2 defer</span>
+              First snooze respected.
+            </div>
+          </div>
+          <div class="s1-tickrow">
+            <div class="s1-tickrow-top">
+              <span class="s1-tickrow-no">Tick 29</span>
+              <span class="s1-tickrow-time">13:09:18</span>
+            </div>
+            <div class="s1-tickrow-sub">
+              <span class="s1-tickrow-tag resume">3 resume</span>
+              Initial commit landed on imbee-web.
+            </div>
+          </div>
+          <div class="s1-tickrow">
+            <div class="s1-tickrow-top">
+              <span class="s1-tickrow-no">Tick 28</span>
+              <span class="s1-tickrow-time">12:54:02</span>
+            </div>
+            <div class="s1-tickrow-sub">
+              <span class="s1-tickrow-tag resume">4 resume</span>
+              Push-routing decided.
+            </div>
+          </div>
+          <div class="s1-tickrow">
+            <div class="s1-tickrow-top">
+              <span class="s1-tickrow-no">Tick 27</span>
+              <span class="s1-tickrow-time">12:38:40</span>
+            </div>
+            <div class="s1-tickrow-sub">
+              <span class="s1-tickrow-tag resume">3 resume</span>
+              codex-bench appeared in candidate set.
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>S1 · Side panel</h4>
+      <ul>
+        <li><b>Tradeoff:</b> action cards shrink to 2-column to make room for the 360 px panel. Comparison-friendly but loses some breathing room per card.</li>
+        <li>Selecting a tick swaps the per-tick reasoning into a sub-pane (not shown here — could replace this list or expand inline).</li>
+        <li>Always visible — you see "what Maestro thought last time" while triaging the current cards.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── S2 · TABBED SESSION VIEW ─────────────── -->
+<div class="variant" id="s2">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span>
+    <span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips">
+      <span class="chip">5h · 6%</span>
+      <span class="chip maestro active">🎼 full</span>
+    </div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · tick 33</h2>
+        <div class="mfull-sub">session id <span class="mono">a954fcc3</span> · started Jun 14 09:41 · <span class="countdown ready">ready · runs on next poll</span></div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <div class="mode-seg"><button class="is-active">suggest</button><button>run</button></div>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button>Actions <span class="dim">(3)</span></button>
+      <button class="is-active">Session</button>
+    </div>
+
+    <div class="s2-session-block">
+      <div class="s2-session-head">
+        <div>
+          <div class="s2-stat-label">Session id</div>
+          <div class="s2-stat-value mono">a954fcc3-03f8</div>
+        </div>
+        <div>
+          <div class="s2-stat-label">Ticks fired</div>
+          <div class="s2-stat-value">33 <span class="mono">· last 14:11</span></div>
+        </div>
+        <div>
+          <div class="s2-stat-label">Idle threshold</div>
+          <div class="s2-stat-value">15m <span class="mono">· poll 60s</span></div>
+        </div>
+        <div>
+          <div class="s2-stat-label">Conversation</div>
+          <div class="s2-stat-value">4.2 MB <span class="mono">· 1,287 msgs</span></div>
+        </div>
+      </div>
+      <div class="s2-logpane"><span class="ts">2026-06-16T14:11:04+08:00</span> <span class="ok">tick ok</span>  session=a954fcc3-03f8-47fd-9eaa-bbe2c4d16923  count=<span class="num">33</span>
+--- plan summary ---
+**Tick 33 — 2026-06-16T14:10:02Z**
+
+```
+usage 5h: <span class="num">6%</span>
+candidates after F15.1 gate: <span class="num">3</span> (7 shells, 2 snoozed, 1 self, 1 user-active dropped; bc8bf45b closed)
+delta vs tick 32: bc8bf45b session closed entirely; 3b146ef1 running on new work; bd8f27c1 committed ba60a3d
+
+[<span class="key">RESUME</span>]  b24bf3a5  conf=<span class="num">0.70</span>  Leave submodule alone — anything left on MR !5512?  (23rd re-issue)
+[<span class="key">RESUME</span>]  bd8f27c1  conf=<span class="num">0.60</span>  Commit ba60a3d landed — I'll handle push. What's queued?
+[<span class="key">RESUME</span>]  0479daa7  conf=<span class="num">0.40</span>  codex --version / --help; summarize config.  (31st re-issue)
+```
+
+Calibration: when a session is **gone from inventory entirely** (bc8bf45b),
+that's a strong "task completed and cleaned up" signal — distinct from
+paused-with-content (still alive) or snoozed (deliberately silenced).
+The "commit landed → route push → ask what's queued" pattern is now a
+stable Maestro response template for the post-commit `needs-input` state.</div>
+    </div>
+
+    <div class="s2-history-head">
+      <h3>Tick history</h3>
+      <span class="dim">last 33 ticks · click to load</span>
+    </div>
+
+    <div class="s2-history-list">
+      <div class="s2-history-card">
+        <span class="s2-history-card-no">Tick 32</span>
+        <span class="s2-history-card-time">13:55</span>
+        <div class="s2-history-card-sub">4 resume · re-issue calibration tightened.</div>
+      </div>
+      <div class="s2-history-card">
+        <span class="s2-history-card-no">Tick 31</span>
+        <span class="s2-history-card-time">13:40</span>
+        <div class="s2-history-card-sub">skip · user-active &lt;15m gate.</div>
+      </div>
+      <div class="s2-history-card">
+        <span class="s2-history-card-no">Tick 30</span>
+        <span class="s2-history-card-time">13:24</span>
+        <div class="s2-history-card-sub">2 resume · 2 defer · snooze respected.</div>
+      </div>
+      <div class="s2-history-card">
+        <span class="s2-history-card-no">Tick 29</span>
+        <span class="s2-history-card-time">13:09</span>
+        <div class="s2-history-card-sub">3 resume · imbee-web commit landed.</div>
+      </div>
+      <div class="s2-history-card">
+        <span class="s2-history-card-no">Tick 28</span>
+        <span class="s2-history-card-time">12:54</span>
+        <div class="s2-history-card-sub">4 resume · push routing.</div>
+      </div>
+      <div class="s2-history-card">
+        <span class="s2-history-card-no">Tick 27</span>
+        <span class="s2-history-card-time">12:38</span>
+        <div class="s2-history-card-sub">3 resume · codex-bench joined.</div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>S2 · Tabbed Session view</h4>
+      <ul>
+        <li><b>Actions</b> tab keeps the existing M9 grid; <b>Session</b> swaps in this view. Banner stays put so chrome doesn't shift.</li>
+        <li>Top block surfaces the session id you asked for earlier — once-and-done glance for "is the master alive, how many ticks, what's its budget."</li>
+        <li>Log pane shows the master's most recent reasoning verbatim (the same text the daemon's <span class="mono">last-tick.log</span> already writes).</li>
+        <li>Past ticks rendered as cards (3-col); click to load that snapshot into the log pane.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── S3 · JSONL TRANSCRIPT READER ─────────────── -->
+<div class="variant" id="s3">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span>
+    <span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips">
+      <span class="chip">5h · 6%</span>
+      <span class="chip maestro active">🎼 full</span>
+    </div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session transcript</h2>
+        <div class="mfull-sub">session <span class="mono">a954fcc3</span> · 1,287 messages · 4.2 MB · scrolling tail of last 5 ticks</div>
+      </div>
+      <div class="mfull-controls">
+        <div class="mode-seg"><button>Actions</button><button class="is-active">Session</button></div>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="s3-thread">
+      <div class="s3-tickmark"><hr><span>Tick 32 · 13:55:42</span><hr></div>
+      <div class="s3-msg user">
+        <div class="s3-msg-glyph">▶</div>
+        <div class="s3-msg-body">
+          <div class="s3-msg-role">/maestro-tick</div>
+          <div class="s3-msg-text">Run a Maestro tick. Inventory the candidate sessions, propose actions per the skill, write the plan JSON.</div>
+        </div>
+      </div>
+      <div class="s3-msg tool">
+        <div class="s3-msg-glyph">⚙</div>
+        <div class="s3-msg-body">
+          <div class="s3-msg-role">tool · inventory.mjs</div>
+          <div class="s3-msg-text">$ node poc/maestro/option1-direct-api/inventory.mjs
+→ 11 sessions, 7 shells dropped, 2 snoozed, 1 self
+→ 4 candidates: b24bf3a5, bd8f27c1, 0479daa7, 3b146ef1</div>
+        </div>
+      </div>
+      <div class="s3-msg assistant">
+        <div class="s3-msg-glyph">🎼</div>
+        <div class="s3-msg-body">
+          <div class="s3-msg-role">Maestro</div>
+          <div class="s3-msg-text">Four candidates after the runtime gate. bd8f27c1 is at needs-input on a commit-and-push flow — pattern-match against tick 29/30 ("commit landed → route push → ask what's queued"). b24bf3a5 still showing the submodule MR question (23rd re-issue, conf drops to 0.7).</div>
+          <div class="s3-msg-foot">written to last-plan.json · 4 actions · 1 calibration note</div>
+        </div>
+      </div>
+
+      <div class="s3-tickmark"><hr><span>Tick 33 · 14:11:04</span><hr></div>
+      <div class="s3-msg user">
+        <div class="s3-msg-glyph">▶</div>
+        <div class="s3-msg-body">
+          <div class="s3-msg-role">/maestro-tick</div>
+          <div class="s3-msg-text">Run a Maestro tick. Inventory the candidate sessions, propose actions per the skill, write the plan JSON.</div>
+        </div>
+      </div>
+      <div class="s3-msg tool">
+        <div class="s3-msg-glyph">⚙</div>
+        <div class="s3-msg-body">
+          <div class="s3-msg-role">tool · inventory.mjs</div>
+          <div class="s3-msg-text">→ 10 sessions (was 11; bc8bf45b removed entirely)
+→ 3 candidates: b24bf3a5, bd8f27c1, 0479daa7</div>
+        </div>
+      </div>
+      <div class="s3-msg assistant">
+        <div class="s3-msg-glyph">🎼</div>
+        <div class="s3-msg-body">
+          <div class="s3-msg-role">Maestro</div>
+          <div class="s3-msg-text">bc8bf45b is <b>gone from inventory entirely</b> — that's a strong "task completed and cleaned up" signal. Updating the calibration: distinct from paused-with-content (still alive) and snoozed (deliberately silenced). 3 resume actions; same pattern continues for bd8f27c1.</div>
+          <div class="s3-msg-foot">written to last-plan.json · 3 actions</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>S3 · JSONL transcript</h4>
+      <ul>
+        <li>Renders the master's actual JSONL conversation as chat bubbles. Tick boundaries visualised with dashed dividers.</li>
+        <li>Closest to "watching the master mind think" — you see system prompts, tool calls, reasoning steps in order.</li>
+        <li><b>Cost:</b> JSONL parse + virtualized scroll for 1,287+ messages; needs filtering to hide skill boilerplate or it's noisy.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── S4 · INSPECTOR DRAWER ─────────────── -->
+<div class="variant" id="s4">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span>
+    <span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips">
+      <span class="chip">5h · 6%</span>
+      <span class="chip maestro active">🎼 full</span>
+    </div>
+  </div>
+
+  <div class="mfull s4-wrap">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · tick 33</h2>
+        <div class="mfull-sub">3 proposals · 1 deferred · <span class="countdown ready">ready · runs on next poll</span></div>
+      </div>
+      <div class="mfull-controls">
+        <button class="runnow-btn"><span>▶</span> Run now</button>
+        <div class="mode-seg"><button class="is-active">suggest</button><button>run</button></div>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="s4-grid" style="margin-right: 470px;">
+      <div class="acard">
+        <div class="acard-head"><span class="acard-project">terminal-for-ai · master-mind</span><span class="acard-kind">resume</span></div>
+        <div class="acard-prompt">Leave submodule alone — anything left on MR !5512?</div>
+        <div class="acard-meta">
+          <span>conf <span class="conf-bar"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span> Medium</span>
+          <span>23rd re-issue</span>
+        </div>
+        <a class="acard-inspect">🎼 Why did Maestro propose this? →</a>
+      </div>
+      <div class="acard">
+        <div class="acard-head"><span class="acard-project">imbee-web · feat/dashboards</span><span class="acard-kind">resume</span></div>
+        <div class="acard-prompt">Commit ba60a3d landed — I'll handle push. What's queued?</div>
+        <div class="acard-meta">
+          <span>conf <span class="conf-bar"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span> Low-medium</span>
+          <span>just landed</span>
+        </div>
+        <a class="acard-inspect">🎼 Why did Maestro propose this? →</a>
+      </div>
+      <div class="acard" style="border-color: var(--maestro);">
+        <div class="acard-head"><span class="acard-project">codex-bench · main</span><span class="acard-kind">resume</span></div>
+        <div class="acard-prompt">codex --version / --help; summarize config flags.</div>
+        <div class="acard-meta">
+          <span>conf <span class="conf-bar"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span> Low</span>
+          <span>31st re-issue</span>
+        </div>
+        <a class="acard-inspect" style="color: var(--text-faint);">🎼 inspecting…</a>
+      </div>
+    </div>
+
+    <div class="s4-drawer">
+      <div class="s4-drawer-head">
+        <h3>🎼 Inspector · codex-bench</h3>
+        <button class="s4-drawer-close">×</button>
+      </div>
+      <div class="s4-drawer-body">
+        <div class="s4-drawer-section">
+          <h4>From tick 33 · 14:11</h4>
+          <div class="s4-drawer-block s4-drawer-reasoning">31st re-issue but still no answer in the transcript. The session is alive (idle, not closed), and the prompt is small + reversible. Confidence drops a tick — at some point the user will either answer or close the session; meanwhile re-issuing keeps it on their radar without churn.</div>
+        </div>
+        <div class="s4-drawer-section">
+          <h4>Plan JSON</h4>
+          <div class="s4-drawer-block">{
+  "action_id": "a-0479daa7-31",
+  "kind": "resume",
+  "target_session_id": "0479daa7-…",
+  "prompt": "codex --version / --help; summarize config.",
+  "confidence": 0.40,
+  "rationale": "31st re-issue; still alive.",
+  "assumptions_made": [
+    { "question": "Is the user actively reading?",
+      "assumed_answer": "No (15m idle gate)" }
+  ]
+}</div>
+        </div>
+        <div class="s4-drawer-section">
+          <h4>Master's previous take on this session</h4>
+          <div class="s4-drawer-block s4-drawer-reasoning faint">Tick 30: conf 0.55 · "30th re-issue feels like noise but the cost is one short prompt."
+Tick 27: conf 0.70 · "First time codex-bench showed up in candidate set; fresh idea."</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>S4 · Inspector drawer</h4>
+      <ul>
+        <li>One inspect link per card → 460 px drawer slides in from the right with that tick's reasoning, plan JSON, and the master's history with this same session.</li>
+        <li>Best when you care about <i>this specific decision</i> rather than the master's overall state.</li>
+        <li><b>Tradeoff:</b> only contextual — no overview view of "all the ticks." Pairs well with S1 or S2 as the primary entry point.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ─────────────── S5 · VERTICAL TIMELINE ─────────────── -->
+<div class="variant" id="s5">
+  <div class="titlebar">
+    <div class="dots"><div class="dot red"></div><div class="dot yellow"></div><div class="dot green"></div></div>
+    <span class="title">baton</span>
+    <span class="meta">v0.0.1</span>
+    <div class="spacer"></div>
+    <div class="right-chips">
+      <span class="chip">5h · 6%</span>
+      <span class="chip maestro active">🎼 full</span>
+    </div>
+  </div>
+
+  <div class="mfull">
+    <div class="mfull-banner">
+      <span class="mfull-glyph">🎼</span>
+      <div class="mfull-text">
+        <h2>Maestro · session timeline</h2>
+        <div class="mfull-sub">33 ticks since Jun 14 · click any tick to expand</div>
+      </div>
+      <div class="mfull-controls">
+        <div class="mode-seg"><button>Actions</button><button class="is-active">Session</button></div>
+        <button class="toggle-pill">● active</button>
+      </div>
+    </div>
+
+    <div class="s5-timeline">
+      <div class="s5-row open">
+        <div class="s5-dot">33</div>
+        <div class="s5-body">
+          <div class="s5-row-head">
+            <span class="s5-row-title">Tick 33 · 3 proposals</span>
+            <span class="s5-row-time">14:11:04</span>
+          </div>
+          <div class="s5-row-tags">
+            <span class="s5-tag resume">resume × 3</span>
+            <span class="s5-tag defer">defer × 1</span>
+            <span class="s5-tag">2 calibration notes</span>
+          </div>
+          <div class="s5-row-summary">bc8bf45b closed entirely → new calibration: gone-from-inventory is a stronger task-done signal than paused-with-content.</div>
+          <div class="s5-row-expand">[RESUME]  b24bf3a5  conf=0.70  Leave submodule alone — anything left on MR !5512?
+[RESUME]  bd8f27c1  conf=0.60  Commit ba60a3d landed — I'll handle push. What's queued?
+[RESUME]  0479daa7  conf=0.40  codex --version / --help.
+
+Calibration: gone-from-inventory ≠ paused-with-content ≠ snoozed.</div>
+        </div>
+      </div>
+
+      <div class="s5-row">
+        <div class="s5-dot">32</div>
+        <div class="s5-body">
+          <div class="s5-row-head">
+            <span class="s5-row-title">Tick 32 · 4 proposals</span>
+            <span class="s5-row-time">13:55:42</span>
+          </div>
+          <div class="s5-row-tags">
+            <span class="s5-tag resume">resume × 4</span>
+            <span class="s5-tag">re-issue calibration tightened</span>
+          </div>
+          <div class="s5-row-summary">bd8f27c1 hit needs-input on commit-and-push; pattern-match against tick 29/30.</div>
+        </div>
+      </div>
+
+      <div class="s5-row skip">
+        <div class="s5-dot">31</div>
+        <div class="s5-body">
+          <div class="s5-row-head">
+            <span class="s5-row-title">Tick 31 · skip</span>
+            <span class="s5-row-time">13:40:11</span>
+          </div>
+          <div class="s5-row-tags">
+            <span class="s5-tag skip">idle gate</span>
+            <span class="s5-tag">user active 4m ago</span>
+          </div>
+          <div class="s5-row-summary">Gate held — bootstrap-or-tick.sh skipped before any Claude call.</div>
+        </div>
+      </div>
+
+      <div class="s5-row">
+        <div class="s5-dot">30</div>
+        <div class="s5-body">
+          <div class="s5-row-head">
+            <span class="s5-row-title">Tick 30 · 4 proposals</span>
+            <span class="s5-row-time">13:24:55</span>
+          </div>
+          <div class="s5-row-tags">
+            <span class="s5-tag resume">resume × 2</span>
+            <span class="s5-tag defer">defer × 2</span>
+          </div>
+          <div class="s5-row-summary">First user-driven snooze → respected. New rule observed: don't re-propose for snoozed sessions until reset.</div>
+        </div>
+      </div>
+
+      <div class="s5-row">
+        <div class="s5-dot">29</div>
+        <div class="s5-body">
+          <div class="s5-row-head">
+            <span class="s5-row-title">Tick 29 · 3 proposals</span>
+            <span class="s5-row-time">13:09:18</span>
+          </div>
+          <div class="s5-row-tags">
+            <span class="s5-tag resume">resume × 3</span>
+          </div>
+          <div class="s5-row-summary">imbee-web commit ba60a3d landed; push routing decided.</div>
+        </div>
+      </div>
+
+      <div class="s5-row skip">
+        <div class="s5-dot">28</div>
+        <div class="s5-body">
+          <div class="s5-row-head">
+            <span class="s5-row-title">Tick 28 · skip</span>
+            <span class="s5-row-time">12:54:02</span>
+          </div>
+          <div class="s5-row-tags">
+            <span class="s5-tag skip">rate limit</span>
+            <span class="s5-tag">last tick 4m ago</span>
+          </div>
+          <div class="s5-row-summary">Rate-limited by previous successful tick.</div>
+        </div>
+      </div>
+
+      <div class="s5-row">
+        <div class="s5-dot">27</div>
+        <div class="s5-body">
+          <div class="s5-row-head">
+            <span class="s5-row-title">Tick 27 · 3 proposals</span>
+            <span class="s5-row-time">12:38:40</span>
+          </div>
+          <div class="s5-row-tags">
+            <span class="s5-tag resume">resume × 3</span>
+          </div>
+          <div class="s5-row-summary">codex-bench appeared in candidate set for the first time.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h4>S5 · Vertical timeline</h4>
+      <ul>
+        <li>Git-graph-style chronology of ticks. Skip rows visually demoted (grey dot, faded tag).</li>
+        <li>Each row shows the per-tick "what changed" summary up front; click to expand the raw plan / calibration text.</li>
+        <li>Best at showing <i>evolution</i> — how Maestro's reasoning sharpens across ticks. Trade: less dense, scrolls more than S1/S2.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+</div>
+</div>
+
+<script>
+  document.querySelectorAll('.picker button').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.picker button').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const target = btn.dataset.tab;
+      document.querySelectorAll('.variant').forEach(v => v.classList.remove('active'));
+      document.getElementById(target).classList.add('active');
+    });
+  });
+</script>
+
+</body>
+</html>

@@ -2,10 +2,14 @@
 #
 # poc/maestro/option3-master-session/maestrod.sh
 #
-# The Maestro daemon: sleep `MAESTRO_TICK_INTERVAL_MIN` minutes,
-# call bootstrap-or-tick.sh, repeat. Exits cleanly on SIGINT/SIGTERM
-# so it can be foreground'd in a shell, backgrounded with `&`, run
-# under launchd/systemd, or piped through `nohup`.
+# The Maestro daemon: poll every `MAESTRO_POLL_INTERVAL_SEC`,
+# call bootstrap-or-tick.sh, repeat. The tick script enforces an
+# idle gate (no input from the user for MAESTRO_IDLE_MIN_MIN minutes)
+# and rate-limits itself, so the daemon's only job is to wake up
+# often enough that the gate fires shortly after the user goes idle.
+# Exits cleanly on SIGINT/SIGTERM so it can be foreground'd in a
+# shell, backgrounded with `&`, run under launchd/systemd, or piped
+# through `nohup`.
 #
 #   Foreground:
 #     ./maestrod.sh
@@ -14,20 +18,18 @@
 #     nohup ./maestrod.sh > ~/.baton/maestro/daemon.log 2>&1 &
 #     echo $! > ~/.baton/maestro/daemon.pid
 #
-#   Custom interval (env or CLI):
-#     MAESTRO_TICK_INTERVAL_MIN=5 ./maestrod.sh
-#     ./maestrod.sh --interval 5
+#   Custom cadence (env or CLI):
+#     MAESTRO_POLL_INTERVAL_SEC=30 ./maestrod.sh
+#     ./maestrod.sh --poll 30
 #
 #   Stop:
 #     kill $(cat ~/.baton/maestro/daemon.pid)
 #     # or just Ctrl-C if foreground
 #
 # Configurable knobs (env, with sensible defaults):
-#   MAESTRO_TICK_INTERVAL_MIN   minutes between ticks                 (15)
-#   MAESTRO_COMPACT_EVERY       compact every N ticks                  (25)
-#   MAESTRO_TICK_JITTER_SEC     ± random jitter on each sleep         (30)
-#                               (helps prompt-cache hit unreliability
-#                               when interval == 5 min and TTL == 5 min)
+#   MAESTRO_POLL_INTERVAL_SEC   seconds between gate checks            (60)
+#   MAESTRO_IDLE_MIN_MIN        idle threshold before a tick fires    (15)
+#   MAESTRO_TICK_JITTER_SEC     ± random jitter on each sleep         (10)
 #   USAGE_5H / USAGE_7D         5h/7d plan usage hints (0..1)       (.06)
 #
 # State is per-machine in ~/.baton/maestro/. The pinned session-id
@@ -40,30 +42,37 @@ LOG_DIR="$HOME/.baton/maestro"
 mkdir -p "$LOG_DIR"
 
 # ------------------------------------------------------------------
-# CLI parsing: only --interval is special; everything else hands off
+# CLI parsing: only --poll is special; everything else hands off
 # to bootstrap-or-tick.sh on each call.
 # ------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --interval) MAESTRO_TICK_INTERVAL_MIN="$2"; shift 2 ;;
+    --poll) MAESTRO_POLL_INTERVAL_SEC="$2"; shift 2 ;;
     --help|-h)
-      sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,31p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) echo "unknown flag: $1" >&2; exit 64 ;;
   esac
 done
 
-INTERVAL_MIN="${MAESTRO_TICK_INTERVAL_MIN:-15}"
-JITTER_SEC="${MAESTRO_TICK_JITTER_SEC:-30}"
+POLL_SEC="${MAESTRO_POLL_INTERVAL_SEC:-60}"
+JITTER_SEC="${MAESTRO_TICK_JITTER_SEC:-10}"
+IDLE_MIN_MIN="${MAESTRO_IDLE_MIN_MIN:-15}"
+# Re-export so bootstrap-or-tick.sh sees the same value.
+export MAESTRO_IDLE_MIN_MIN="$IDLE_MIN_MIN"
 
 # Validate
-if ! [[ "$INTERVAL_MIN" =~ ^[0-9]+$ ]] || (( INTERVAL_MIN < 1 )); then
-  echo "MAESTRO_TICK_INTERVAL_MIN must be a positive integer (got: $INTERVAL_MIN)" >&2
+if ! [[ "$POLL_SEC" =~ ^[0-9]+$ ]] || (( POLL_SEC < 5 )); then
+  echo "MAESTRO_POLL_INTERVAL_SEC must be ≥ 5 (got: $POLL_SEC)" >&2
   exit 64
 fi
 if ! [[ "$JITTER_SEC" =~ ^[0-9]+$ ]]; then
   echo "MAESTRO_TICK_JITTER_SEC must be a non-negative integer (got: $JITTER_SEC)" >&2
+  exit 64
+fi
+if ! [[ "$IDLE_MIN_MIN" =~ ^[0-9]+$ ]] || (( IDLE_MIN_MIN < 1 )); then
+  echo "MAESTRO_IDLE_MIN_MIN must be a positive integer (got: $IDLE_MIN_MIN)" >&2
   exit 64
 fi
 
@@ -107,11 +116,12 @@ cleanup() {
 trap shutdown SIGINT SIGTERM
 trap cleanup  EXIT
 
-echo "$(date -Iseconds) maestrod up  interval=${INTERVAL_MIN}m  jitter=±${JITTER_SEC}s  pid=$$"
+echo "$(date -Iseconds) maestrod up  poll=${POLL_SEC}s  idle-threshold=${IDLE_MIN_MIN}m  jitter=±${JITTER_SEC}s  pid=$$"
 
 while (( SHUTDOWN == 0 )); do
-  # Tick. bootstrap-or-tick.sh handles its own lockfile, so overlapping
-  # daemon instances are safe (the later one will just skip).
+  # Tick gate. bootstrap-or-tick.sh decides whether to actually fire
+  # based on the idle-since-last-input check + rate limit; cheap when
+  # the user is active (just two stat() calls + exit 0).
   set +e
   "$HERE/bootstrap-or-tick.sh"
   rc=$?
@@ -122,15 +132,14 @@ while (( SHUTDOWN == 0 )); do
 
   if (( SHUTDOWN != 0 )); then break; fi
 
-  # Sleep with jitter. The jitter is the only protection against
-  # synchronized cache misses across many machines (and against
-  # accidentally hitting Anthropic's 5-min cache TTL right on the dot).
-  SLEEP_SEC=$(( INTERVAL_MIN * 60 ))
+  # Short poll cadence with a little jitter to spread out repeated
+  # gate checks across daemons / machines.
+  SLEEP_SEC=$POLL_SEC
   if (( JITTER_SEC > 0 )); then
     JITTER=$(( (RANDOM % (JITTER_SEC * 2 + 1)) - JITTER_SEC ))
     SLEEP_SEC=$(( SLEEP_SEC + JITTER ))
+    if (( SLEEP_SEC < 5 )); then SLEEP_SEC=5; fi
   fi
-  echo "$(date -Iseconds) sleeping ${SLEEP_SEC}s until next tick"
 
   # Interruptible sleep: poll SHUTDOWN every 5 s.
   while (( SLEEP_SEC > 0 && SHUTDOWN == 0 )); do

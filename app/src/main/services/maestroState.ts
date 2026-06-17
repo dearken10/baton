@@ -13,7 +13,7 @@
  * when the popup is open.
  */
 
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync, openSync, closeSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync, openSync, closeSync, utimesSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -53,6 +53,7 @@ const CACHE_TTL_MS = 2000;
 let cache: { at: number; value: State } | null = null;
 
 const DEFAULT_INTERVAL_MIN = 15;
+const DEFAULT_IDLE_MIN_MIN = 15;
 
 /** Maestro's per-machine state lives in ~/.baton/maestro/ alongside
  *  daemon.pid and the bloat marker. The PAUSED flag is just file
@@ -67,6 +68,13 @@ function pausedFlagPath(): string {
  *  bootstrap-or-tick.sh's --mode flag writes. */
 function modeFilePath(): string {
   return join(homedir(), '.baton', 'maestro', 'mode');
+}
+
+/** Heartbeat path the daemon stats to compute idle time. mtime is the
+ *  source of truth; the file body just carries the ISO timestamp for
+ *  human inspection (`ls -l` + `cat`). */
+function lastActivityPath(): string {
+  return join(homedir(), '.baton', 'maestro', 'last-activity');
 }
 
 function readMode(): Mode {
@@ -123,6 +131,13 @@ function readIntervalMin(): number {
   const n = env ? Number.parseInt(env, 10) : NaN;
   if (Number.isFinite(n) && n > 0) return n;
   return DEFAULT_INTERVAL_MIN;
+}
+
+function readIdleThresholdMin(): number {
+  const env = process.env.MAESTRO_IDLE_MIN_MIN;
+  const n = env ? Number.parseInt(env, 10) : NaN;
+  if (Number.isFinite(n) && n > 0) return n;
+  return DEFAULT_IDLE_MIN_MIN;
 }
 
 function daemonPidPath(): string {
@@ -263,9 +278,20 @@ export function getMaestroState(): State {
 
   const lastTickAt = fileMtimeIso(join(stateDir, 'last-tick.log'));
   const tickIntervalMin = readIntervalMin();
+  const idleThresholdMin = readIdleThresholdMin();
   const nextTickEtaAt = lastTickAt
     ? new Date(Date.parse(lastTickAt) + tickIntervalMin * 60_000).toISOString()
     : null;
+
+  // Read the heartbeat file's mtime (the daemon's idle gate uses the
+  // same value). When absent return null; the renderer falls back to
+  // its own local activity tracker.
+  let lastActivityAt: number | null = null;
+  try {
+    if (existsSync(lastActivityPath())) {
+      lastActivityAt = Math.floor(statSync(lastActivityPath()).mtimeMs);
+    }
+  } catch { /* ignore */ }
 
   const planDisk = readJsonSafe<PlanFromDisk>(
     join(stateRoot, 'last-plan.json')
@@ -278,6 +304,8 @@ export function getMaestroState(): State {
     lastTickAt,
     nextTickEtaAt,
     tickIntervalMin,
+    idleThresholdMin,
+    lastActivityAt,
     daemonRunning: isDaemonRunning(),
     paused: existsSync(pausedFlagPath()),
     mode: readMode(),
@@ -361,6 +389,110 @@ export function reconcileMaestroOnStartup(): {
     return { acted: 'killed', reason: 'paused flag set' };
   }
   return { acted: 'noop' };
+}
+
+/** Renderer heartbeat. Stamps ~/.baton/maestro/last-activity with the
+ *  current time so the daemon's idle gate (mtime-based) sees a recent
+ *  value. Throttled in the renderer to ~5 s; we still write on every
+ *  call here because the cost is just a touch + brief file write.
+ *
+ *  We don't invalidate the state cache — the chip's lastActivityAt is
+ *  read from disk on the next 5-s poll, which is plenty fresh given
+ *  the 15-min idle threshold. */
+export function reportMaestroActivity(atMs: number): { ok: true } {
+  const p = lastActivityPath();
+  try {
+    mkdirSync(join(p, '..'), { recursive: true });
+  } catch { /* ok */ }
+  try {
+    // Write the ISO string so a sysadmin can `cat` the file and see
+    // when the UI last reported activity. The daemon only stats it.
+    writeFileSync(p, new Date(atMs).toISOString() + '\n');
+    // Force mtime to the renderer-supplied value so a slow disk +
+    // chip-supplied client clock stay aligned. The daemon's idle
+    // calc subtracts mtime from `date +%s`.
+    const secs = atMs / 1000;
+    utimesSync(p, secs, secs);
+  } catch { /* best-effort */ }
+  return { ok: true as const };
+}
+
+/** Hard cap on how long we'll wait for the tick to complete before
+ *  resolving the IPC anyway. The tick is still detached so it keeps
+ *  running past this — we just stop blocking the renderer. A real
+ *  Maestro tick is 30 s–2 min; 10 min is a generous "definitely
+ *  something went wrong" threshold. */
+const RUN_NOW_MAX_WAIT_MS = 10 * 60_000;
+
+/** "Run now" — fire a one-shot tick that bypasses the idle gate.
+ *
+ *  Spawns bootstrap-or-tick.sh --force as a detached child (survives
+ *  Electron quit) but the main process keeps a handle on it and
+ *  awaits exit, so the renderer's "Running…" spinner can run until
+ *  the tick actually finishes. `detached: true` makes the child a
+ *  process-group leader; we deliberately do NOT `unref()` so the
+ *  parent's event loop holds the wait until exit. */
+export function runMaestroNow(): Promise<{ ok: boolean; reason: string | null }> {
+  const script = join(maestroStateDir(), '..', 'bootstrap-or-tick.sh');
+  if (!existsSync(script)) {
+    return Promise.resolve({ ok: false, reason: `bootstrap-or-tick.sh not found at ${script}` });
+  }
+  if (existsSync(pausedFlagPath())) {
+    return Promise.resolve({ ok: false, reason: 'Maestro is paused — resume before running' });
+  }
+
+  return new Promise((resolve) => {
+    const logFd = openSync(daemonLogPath(), 'a');
+    let proc;
+    try {
+      proc = spawn(script, ['--force'], {
+        detached: true,
+        cwd: repoRootForMaestrod(),
+        stdio: ['ignore', logFd, logFd],
+        env: {
+          ...process.env,
+          MAESTRO_IDLE_MIN_MIN: String(readIdleThresholdMin()),
+          USAGE_5H: process.env.USAGE_5H ?? '0.06',
+          USAGE_7D: process.env.USAGE_7D ?? '0.06',
+        },
+      });
+    } catch (e) {
+      closeSync(logFd);
+      resolve({ ok: false, reason: (e as Error).message });
+      return;
+    }
+
+    let settled = false;
+    const finish = (result: { ok: boolean; reason: string | null }): void => {
+      if (settled) return;
+      settled = true;
+      try { closeSync(logFd); } catch { /* already closed */ }
+      resolve(result);
+    };
+
+    // Safety net so the renderer's spinner never hangs forever on a
+    // wedged tick. The detached child keeps running past this; the
+    // user can refresh the view manually to pick up the eventual plan.
+    const timer = setTimeout(() => {
+      finish({ ok: true, reason: 'still running after 10m — refresh manually for the result' });
+    }, RUN_NOW_MAX_WAIT_MS);
+    timer.unref();
+
+    proc.once('error', (err) => {
+      clearTimeout(timer);
+      finish({ ok: false, reason: err.message });
+    });
+    proc.once('exit', (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) {
+        finish({ ok: true, reason: null });
+      } else if (signal) {
+        finish({ ok: false, reason: `killed by ${signal}` });
+      } else {
+        finish({ ok: false, reason: `tick exited ${code}` });
+      }
+    });
+  });
 }
 
 /** Test helper: drops the cache so a follow-up call re-reads disk. */
