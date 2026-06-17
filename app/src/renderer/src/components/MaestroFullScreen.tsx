@@ -21,13 +21,16 @@ import { MaestroSessionTerminal } from './MaestroSessionTerminal.js';
 
 type State = ResponseOf<'maestro.getState'>;
 type Session = ResponseOf<'maestro.getSession'>;
+type ActionRecord = ResponseOf<'maestro.listActions'>['actions'][number];
 
 const POLL_MS = 5_000;
 const SESSION_POLL_MS = 10_000;
+const RECORDS_POLL_MS = 10_000;
 
 export function MaestroFullScreen(): JSX.Element {
   const [state, setState] = useState<State | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [actionRecords, setActionRecords] = useState<Map<string, ActionRecord>>(new Map());
   const [runNowPending, setRunNowPending] = useState(false);
   const [runNowError, setRunNowError] = useState<string | null>(null);
   const [terminalMode, setTerminalMode] = useState(false);
@@ -61,6 +64,15 @@ export function MaestroFullScreen(): JSX.Element {
     } catch { /* keep previous */ }
   }, []);
 
+  const refreshRecords = useCallback(async (): Promise<void> => {
+    try {
+      const r = await window.baton.call('maestro.listActions', {});
+      const map = new Map<string, ActionRecord>();
+      for (const rec of r.actions) map.set(rec.actionId, rec);
+      setActionRecords(map);
+    } catch { /* keep previous */ }
+  }, []);
+
   useEffect(() => {
     void refresh();
     const id = window.setInterval(() => { void refresh(); }, POLL_MS);
@@ -72,6 +84,12 @@ export function MaestroFullScreen(): JSX.Element {
     const id = window.setInterval(() => { void refreshSession(); }, SESSION_POLL_MS);
     return () => window.clearInterval(id);
   }, [refreshSession]);
+
+  useEffect(() => {
+    void refreshRecords();
+    const id = window.setInterval(() => { void refreshRecords(); }, RECORDS_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [refreshRecords]);
 
   // Auto-select the latest tick when (a) the user hasn't picked one
   // yet, or (b) the selected one has scrolled off the tail-window.
@@ -236,6 +254,8 @@ export function MaestroFullScreen(): JSX.Element {
           session={session}
           selectedIndex={selectedTickIndex}
           onSelect={onPickTick}
+          actionRecords={actionRecords}
+          onRecordsChanged={refreshRecords}
         />
       )}
     </div>

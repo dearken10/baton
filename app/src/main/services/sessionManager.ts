@@ -1663,6 +1663,30 @@ export class SessionManager {
     });
   }
 
+  /** Kill + wait-for-exit, suppressing the natural "errored" event
+   *  burst so the renderer doesn't briefly flash red between this kill
+   *  and the caller's follow-up respawn. Mirrors the YOLO-toggle and
+   *  Maestro-revert patterns — both want the same "stop the pty,
+   *  fiddle with disk, bring it back" sequence without exposing the
+   *  transient teardown to the rest of the app.
+   *
+   *  Returns once the live entry is gone (process exited, or we hit
+   *  the timeout and force-cleared). Always safe to call: a no-op
+   *  when the session isn't live. */
+  async killAndAwait(sessionId: string, timeoutMs = 2_000): Promise<void> {
+    if (!this.live.has(sessionId)) return;
+    this.intentionalKills.add(sessionId);
+    try { this.live.get(sessionId)?.handle.kill('SIGTERM'); }
+    catch { /* already gone */ }
+    const deadline = Date.now() + timeoutMs;
+    while (this.live.has(sessionId) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    }
+    // Even if the exit handler hasn't fired, force-clear so the
+    // caller's spawn() doesn't refuse with "Already live".
+    this.live.delete(sessionId);
+  }
+
   /**
    * Rename a worktree session's branch + move its dir to match.
    * Refuses for live sessions (files would shift while Claude is

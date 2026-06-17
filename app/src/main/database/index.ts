@@ -305,6 +305,53 @@ function runMigrations(d: Database.Database): void {
   );
   seedGlobal.run('global-claude-code', 'Global (machine login)', 'claude-code', now);
   seedGlobal.run('global-codex', 'Global (machine login)', 'codex', now);
+
+  // Maestro action ledger (PRD F15.6). Every Approve writes a row
+  // BEFORE the prompt is sent to the target agent — the prompt write
+  // is gated on a successful checkpoint. Revert reads the row, runs
+  // `git reset --hard <pre_tag>` + `git stash apply <stash_ref>`, then
+  // marks state='reverted'.
+  //
+  // We intentionally don't FK target_session_id with CASCADE: deleting
+  // a session shouldn't lose its action history (you might still want
+  // to know what was approved before the session row went away).
+  try {
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS maestro_actions (
+        action_id          TEXT PRIMARY KEY,
+        kind               TEXT NOT NULL,
+        target_session_id  TEXT,
+        target_project_id  TEXT,
+        worktree_path      TEXT NOT NULL,
+        pre_tag            TEXT,
+        stash_ref          TEXT,
+        prompt             TEXT NOT NULL,
+        rationale          TEXT,
+        confidence         REAL,
+        state              TEXT NOT NULL,
+        state_detail       TEXT,
+        created_at         INTEGER NOT NULL,
+        reverted_at        INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS maestro_actions_state_idx
+        ON maestro_actions(state);
+      CREATE INDEX IF NOT EXISTS maestro_actions_target_session_idx
+        ON maestro_actions(target_session_id);
+    `);
+  } catch { /* already migrated */ }
+
+  // Maestro session backup pointers — added so Revert can rewind the
+  // agent's Claude Code transcript as well as the worktree. We record
+  // the absolute path of the agent's JSONL and the byte offset at the
+  // moment we sent the prompt; truncating the file to that offset on
+  // revert + respawning `claude --resume <uuid>` rebuilds the agent
+  // with zero memory of the action we just rolled back.
+  try {
+    d.exec('ALTER TABLE maestro_actions ADD COLUMN jsonl_path TEXT');
+  } catch { /* already migrated */ }
+  try {
+    d.exec('ALTER TABLE maestro_actions ADD COLUMN jsonl_offset INTEGER');
+  } catch { /* already migrated */ }
 }
 
 export function getDatabase(): Database.Database {

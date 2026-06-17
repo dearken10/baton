@@ -566,6 +566,61 @@ const MaestroSessionTick = z.object({
   }).nullable(),
 });
 
+/** Approve a Maestro action: checkpoint + persist + inject prompt
+ *  into the target session's live PTY (PRD F15.6). Main returns
+ *  ok=true only after the prompt has been written. */
+const MaestroApproveActionRequest = z.object({
+  action: MaestroAction,
+});
+const MaestroApproveActionResponse = z.object({
+  ok:       z.boolean(),
+  actionId: z.string(),
+  /** Human-readable reason on ok=false (target busy, session gone,
+   *  ledger write failed, etc.). Null on success. */
+  reason:   z.string().nullable(),
+});
+
+/** Revert an in-flight Maestro action: `git reset --hard <pre_tag>`
+ *  + `git stash apply <stash_ref>` in the target worktree, then mark
+ *  the ledger row state='reverted'. */
+const MaestroRevertActionRequest = z.object({
+  actionId: z.string(),
+});
+const MaestroRevertActionResponse = z.object({
+  ok:     z.boolean(),
+  /** On stash-apply conflict we return ok=true with a non-null reason
+   *  explaining the partial revert (tree restored, but the stash
+   *  needs manual recovery). */
+  reason: z.string().nullable(),
+});
+
+/** Action ledger record returned by `maestro.listActions`. */
+const MaestroActionRecord = z.object({
+  actionId:        z.string(),
+  kind:            z.enum(['resume', 'initiate']),
+  targetSessionId: z.string().nullable(),
+  targetProjectId: z.string().nullable(),
+  worktreePath:    z.string(),
+  preTag:          z.string().nullable(),
+  stashRef:        z.string().nullable(),
+  prompt:          z.string(),
+  rationale:       z.string().nullable(),
+  confidence:      z.number().nullable(),
+  state:           z.enum(['in_flight', 'reverted', 'failed']),
+  stateDetail:     z.string().nullable(),
+  createdAt:       z.number().int().nonnegative(),
+  revertedAt:      z.number().int().nullable(),
+});
+
+const MaestroListActionsRequest = z.object({
+  /** When set, only return actions targeting this session id; else
+   *  return the full ledger. */
+  targetSessionId: z.string().optional(),
+});
+const MaestroListActionsResponse = z.object({
+  actions: z.array(MaestroActionRecord),
+});
+
 const MaestroGetSessionRequest = z.object({
   /** Max number of ticks to return, counted from the tail. Default
    *  50 — enough for "yesterday + today" without dragging
@@ -1420,6 +1475,9 @@ export const ControlVerbs = {
   'maestro.reportActivity': { request: MaestroReportActivityRequest, response: MaestroReportActivityResponse },
   'maestro.runNow':         { request: MaestroRunNowRequest,         response: MaestroRunNowResponse },
   'maestro.getSession':     { request: MaestroGetSessionRequest,     response: MaestroGetSessionResponse },
+  'maestro.approveAction':  { request: MaestroApproveActionRequest,  response: MaestroApproveActionResponse },
+  'maestro.revertAction':   { request: MaestroRevertActionRequest,   response: MaestroRevertActionResponse },
+  'maestro.listActions':    { request: MaestroListActionsRequest,    response: MaestroListActionsResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },

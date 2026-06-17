@@ -65,6 +65,7 @@ import {
   runMaestroNow,
 } from '../services/maestroState.js';
 import { getMaestroSession } from '../services/maestroSession.js';
+import { approveAction, revertAction, listActions } from '../services/maestroAction.js';
 import { getDatabase } from '../database/index.js';
 import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
 
@@ -295,6 +296,9 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'maestro.reportActivity': (req) => reportMaestroActivity(req.at),
   'maestro.runNow':         () => runMaestroNow(),
   'maestro.getSession':     (req) => getMaestroSession(req.tickLimit),
+  'maestro.approveAction':  (req) => approveAction({ action: req.action }),
+  'maestro.revertAction':   (req) => revertAction(req.actionId),
+  'maestro.listActions':    (req) => listActions(req.targetSessionId),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);

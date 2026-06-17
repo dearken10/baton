@@ -19,7 +19,7 @@
  * when the parent passes a refreshed payload.
  */
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { ResponseOf } from '@shared/ipc.js';
 import { useAppStore } from '../store.js';
 
@@ -29,6 +29,7 @@ type Turn = Tick['turns'][number];
 type Block = Turn['blocks'][number];
 type Plan = NonNullable<Tick['plan']>;
 type Action = Plan['actions'][number];
+type ActionRecord = ResponseOf<'maestro.listActions'>['actions'][number];
 
 interface Props {
   session: Session;
@@ -36,10 +37,18 @@ interface Props {
    *  to keep selection sticky across refreshes. */
   selectedIndex: number | null;
   onSelect: (tickIndex: number) => void;
+  /** Map of action_id → ledger record (in_flight / reverted / failed),
+   *  fetched by the parent every ~10 s. When an action's id is present
+   *  the card renders the appropriate post-approve state instead of
+   *  the default Approve / Snooze buttons. */
+  actionRecords: Map<string, ActionRecord>;
+  /** Refresh the action ledger after an Approve / Revert resolves so
+   *  the card flips state without waiting for the next poll. */
+  onRecordsChanged: () => void;
 }
 
 export function MaestroSessionView({
-  session, selectedIndex, onSelect,
+  session, selectedIndex, onSelect, actionRecords, onRecordsChanged,
 }: Props): JSX.Element {
   const ticksDesc = useMemo(() => [...session.ticks].reverse(), [session.ticks]);
   const selected = useMemo(
@@ -56,7 +65,11 @@ export function MaestroSessionView({
         onSelect={onSelect}
       />
       <TickDetail tick={selected} />
-      <TickActions tick={selected} />
+      <TickActions
+        tick={selected}
+        actionRecords={actionRecords}
+        onRecordsChanged={onRecordsChanged}
+      />
     </div>
   );
 }
@@ -220,7 +233,13 @@ function BlockRow({ block }: { block: Block }): JSX.Element | null {
 
 /* ────────────────────── Column 3 — actions ────────────────────── */
 
-function TickActions({ tick }: { tick: Tick | null }): JSX.Element {
+function TickActions({
+  tick, actionRecords, onRecordsChanged,
+}: {
+  tick: Tick | null;
+  actionRecords: Map<string, ActionRecord>;
+  onRecordsChanged: () => void;
+}): JSX.Element {
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
 
@@ -265,7 +284,13 @@ function TickActions({ tick }: { tick: Tick | null }): JSX.Element {
           <div className="mss-empty">Plan was written with no actions.</div>
         ) : (
           acts.map((a) => (
-            <SessionActionCard key={a.actionId} action={a} lookup={lookup} />
+            <SessionActionCard
+              key={a.actionId}
+              action={a}
+              lookup={lookup}
+              record={actionRecords.get(a.actionId) ?? null}
+              onRecordsChanged={onRecordsChanged}
+            />
           ))
         )}
       </div>
@@ -274,29 +299,85 @@ function TickActions({ tick }: { tick: Tick | null }): JSX.Element {
 }
 
 function SessionActionCard({
-  action: a, lookup,
+  action: a, lookup, record, onRecordsChanged,
 }: {
   action: Action;
   lookup: (sid: string | null) => { projectName?: string; branch?: string } | undefined;
+  record: ActionRecord | null;
+  onRecordsChanged: () => void;
 }): JSX.Element {
   const info = lookup(a.targetSessionId);
   const project = info?.projectName ?? (a.targetSessionId?.slice(0, 8) ?? '—');
   const branch = info?.branch;
   const conf = confidenceBucket(a.confidence);
 
-  // Defer actions carry a single-line rationale ("why deferred") and
-  // nothing else worth surfacing in the card.
   const isDefer = a.kind === 'defer';
-
   const [firstAssumption, ...moreAssumptions] = a.assumptionsMade;
 
+  // Per-action pending flags so multiple cards can act in parallel.
+  const [pending, setPending] = useState<null | 'approve' | 'revert' | 'snooze'>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const ledgerState = record?.state ?? null; // 'in_flight' | 'reverted' | 'failed' | null
+
+  const onApprove = useCallback(async () => {
+    if (pending) return;
+    setPending('approve');
+    setError(null);
+    try {
+      const r = await window.baton.call('maestro.approveAction', { action: a });
+      if (!r.ok) setError(r.reason ?? 'Approve failed');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending(null);
+      onRecordsChanged();
+    }
+  }, [a, pending, onRecordsChanged]);
+
+  const onRevert = useCallback(async () => {
+    if (pending || !record) return;
+    setPending('revert');
+    setError(null);
+    try {
+      const r = await window.baton.call('maestro.revertAction', { actionId: record.actionId });
+      if (!r.ok) setError(r.reason ?? 'Revert failed');
+      else if (r.reason) setError(r.reason); // partial-revert warning
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending(null);
+      onRecordsChanged();
+    }
+  }, [pending, record, onRecordsChanged]);
+
+  const onSnooze = useCallback(async () => {
+    if (pending || !a.targetSessionId) return;
+    setPending('snooze');
+    setError(null);
+    try {
+      await window.baton.call('session.setSnoozed', {
+        sessionId: a.targetSessionId,
+        snoozed: true,
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPending(null);
+    }
+  }, [a.targetSessionId, pending]);
+
   return (
-    <div className={`mss-acard mss-acard-${a.kind}`}>
+    <div className={`mss-acard mss-acard-${a.kind}${ledgerState ? ` is-${ledgerState}` : ''}`}>
       <div className="mss-acard-head">
         <span className="mss-acard-project" title={project + (branch ? ` · ${branch}` : '')}>
           {project}{branch ? <span className="mss-acard-branch"> / {branch}</span> : null}
         </span>
-        <span className={`mss-acard-kind mss-acard-kind-${a.kind}`}>{a.kind}</span>
+        {/* Only badge non-default kinds — resume is the overwhelming
+            majority, so the label is just noise. */}
+        {a.kind !== 'resume' ? (
+          <span className={`mss-acard-kind mss-acard-kind-${a.kind}`}>{a.kind}</span>
+        ) : null}
       </div>
 
       {isDefer ? (
@@ -325,10 +406,7 @@ function SessionActionCard({
             ) : null}
           </div>
 
-          {firstAssumption ? (
-            <AssumptionBlock assumption={firstAssumption} />
-          ) : null}
-
+          {firstAssumption ? <AssumptionBlock assumption={firstAssumption} /> : null}
           {moreAssumptions.length > 0 ? (
             <details className="mss-acard-more">
               <summary>
@@ -346,15 +424,73 @@ function SessionActionCard({
             <div className="mss-acard-revert">↻ {a.reversibilityNote}</div>
           ) : null}
 
+          {/* Status banner — only when the ledger says this action has
+              been touched. Pre-approve, the card stays clean. */}
+          {record && ledgerState === 'in_flight' ? (
+            <div className="mss-acard-status mss-acard-status-flight">
+              ✓ Sent to agent at {fmtClockTime(record.createdAt)}
+            </div>
+          ) : null}
+          {record && ledgerState === 'reverted' ? (
+            <div className="mss-acard-status mss-acard-status-reverted">
+              ↻ Reverted{record.revertedAt ? ` at ${fmtClockTime(record.revertedAt)}` : ''}
+              {record.stateDetail ? <div className="mss-acard-status-detail">{record.stateDetail}</div> : null}
+            </div>
+          ) : null}
+          {record && ledgerState === 'failed' ? (
+            <div className="mss-acard-status mss-acard-status-failed">
+              ✗ {record.stateDetail ?? 'Failed'}
+            </div>
+          ) : null}
+          {error ? (
+            <div className="mss-acard-status mss-acard-status-failed">✗ {error}</div>
+          ) : null}
+
           <div className="mss-acard-buttons">
-            <button type="button" className="mss-acard-btn mss-acard-btn-approve">Approve</button>
-            <button type="button" className="mss-acard-btn">Edit</button>
-            <button type="button" className="mss-acard-btn">Snooze</button>
+            {ledgerState === 'in_flight' ? (
+              <button
+                type="button"
+                className="mss-acard-btn mss-acard-btn-revert"
+                onClick={() => void onRevert()}
+                disabled={pending !== null}
+              >
+                {pending === 'revert' ? 'Reverting…' : '↻ Revert'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="mss-acard-btn mss-acard-btn-approve"
+                onClick={() => void onApprove()}
+                disabled={pending !== null}
+                title={a.targetSessionId
+                  ? 'Checkpoint + send the prompt to the target agent'
+                  : 'No target session — nothing to approve'}
+              >
+                {pending === 'approve'
+                  ? 'Approving…'
+                  : ledgerState === 'reverted' || ledgerState === 'failed'
+                    ? 'Re-approve'
+                    : 'Approve'}
+              </button>
+            )}
+            <button
+              type="button"
+              className="mss-acard-btn"
+              onClick={() => void onSnooze()}
+              disabled={pending !== null || !a.targetSessionId}
+              title="Snooze the target session — Maestro stops proposing for it"
+            >
+              {pending === 'snooze' ? 'Snoozing…' : 'Snooze'}
+            </button>
           </div>
         </>
       )}
     </div>
   );
+}
+
+function fmtClockTime(epochMs: number): string {
+  return new Date(epochMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 function AssumptionBlock({

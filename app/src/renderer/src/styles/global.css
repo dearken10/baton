@@ -4170,9 +4170,60 @@ button.terminal-tab,
   color: var(--done);
   border-color: rgba(47, 191, 113, 0.3);
 }
-.mss-acard-btn-approve:hover {
+.mss-acard-btn-approve:hover:not(:disabled) {
   background: rgba(47, 191, 113, 0.08);
   color: var(--done);
+}
+.mss-acard-btn-revert {
+  color: var(--needs);
+  border-color: rgba(240, 169, 69, 0.3);
+}
+.mss-acard-btn-revert:hover:not(:disabled) {
+  background: rgba(240, 169, 69, 0.08);
+  color: var(--needs);
+}
+.mss-acard-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Action ledger states. Coloured left border + a one-liner banner so
+ * you can scan a column of cards and see what's been approved/reverted
+ * without reading each row's status block. */
+.mss-acard.is-in_flight {
+  border-left: 2px solid var(--done);
+}
+.mss-acard.is-reverted {
+  border-left: 2px solid var(--paused);
+  opacity: 0.85;
+}
+.mss-acard.is-failed {
+  border-left: 2px solid var(--errored);
+}
+.mss-acard-status {
+  font-size: 11px;
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+.mss-acard-status-flight {
+  background: rgba(47, 191, 113, 0.08);
+  color: var(--done);
+  border: 1px solid rgba(47, 191, 113, 0.25);
+}
+.mss-acard-status-reverted {
+  background: rgba(107, 114, 128, 0.10);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.mss-acard-status-failed {
+  background: rgba(239, 84, 84, 0.08);
+  color: var(--errored);
+  border: 1px solid rgba(239, 84, 84, 0.25);
+}
+.mss-acard-status-detail {
+  margin-top: 3px;
+  color: var(--text-faint);
+  font-style: italic;
 }
 
 /* ── Maestro session terminal mirror (T6 Session toggle) ──── */
