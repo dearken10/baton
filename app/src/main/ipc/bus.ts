@@ -226,6 +226,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
         ? { newWorktreeBranch: req.newWorktreeBranch }
         : {}),
       ...(req.skipPermissions ? { skipPermissions: true } : {}),
+      ...(req.model !== undefined ? { model: req.model } : {}),
     });
     return { session };
   },
@@ -243,6 +244,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'session.toggleYolo': async (req) => {
     const session = await getSessionManager().toggleYolo(req.sessionId);
+    return { session };
+  },
+  'session.setModel': async (req) => {
+    const session = await getSessionManager().setModel(req.sessionId, req.model);
     return { session };
   },
   'session.delete': async (req) => {

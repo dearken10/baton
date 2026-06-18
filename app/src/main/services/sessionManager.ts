@@ -69,6 +69,11 @@ interface LiveSession {
 
 const RECENT_PTY_CAP = 1_000_000;
 
+/** Default claude --model when the caller doesn't pin one. Persisted
+ *  on the row so the chip always reflects what's actually running.
+ *  Keep this in sync with DEFAULT_CLAUDE_MODEL in MiddleColumn.tsx. */
+const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-7';
+
 /** Default idle threshold for auto-pause. Per-project override (F11.4)
  *  comes later; for now a single global value. Override at runtime
  *  with BATON_IDLE_PAUSE_AFTER_SEC for testing (e.g. 30 = 30 sec). */
@@ -498,7 +503,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, ended_at, tokens_in, tokens_out, last_summary,
-                claude_session_id, skip_permissions, snoozed_at
+                claude_session_id, skip_permissions, model, snoozed_at
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
@@ -509,6 +514,7 @@ export class SessionManager {
         tokens_in: number; tokens_out: number; last_summary: string | null;
         claude_session_id: string | null;
         skip_permissions: number;
+        model: string | null;
         snoozed_at: number | null;
       }[];
 
@@ -529,6 +535,7 @@ export class SessionManager {
         lastSummary: r.last_summary,
         claudeSessionId: r.claude_session_id,
         skipPermissions: r.skip_permissions === 1,
+        model: r.model,
         snoozedAt: r.snoozed_at,
       };
     });
@@ -555,6 +562,9 @@ export class SessionManager {
     /** When true, launch Claude with --dangerously-skip-permissions.
      *  Defaults to false. */
     skipPermissions?: boolean;
+    /** Optional `--model <name>` alias (claude-code only). Null/
+     *  undefined → don't pass the flag. */
+    model?: string | null;
   }): Promise<Session> {
     await this.startHookServer();
 
@@ -618,6 +628,12 @@ export class SessionManager {
       const branch = (await readCurrentBranch(batonFs, cwd)) ?? 'no git';
 
       const skipPermissions = opts.skipPermissions ?? false;
+      // claude-code sessions default to the newest Opus when the caller
+      // doesn't pin a model. We persist the resolved id so the chip
+      // always reflects what's actually running and so a future
+      // "default" change doesn't silently swap models under live sessions.
+      const model = opts.model
+        ?? (opts.backendId === 'claude-code' ? DEFAULT_CLAUDE_MODEL : null);
       const spawnOpts: {
         sessionId: string;
         cwd: string;
@@ -625,6 +641,7 @@ export class SessionManager {
         rows: number;
         resumeAgentSessionId?: string;
         skipPermissions?: boolean;
+        model?: string | null;
         fs?: typeof batonFs;
       } = {
         sessionId,
@@ -637,6 +654,7 @@ export class SessionManager {
         spawnOpts.resumeAgentSessionId = opts.resumeAgentSessionId;
       }
       if (skipPermissions) spawnOpts.skipPermissions = true;
+      if (model && opts.backendId === 'claude-code') spawnOpts.model = model;
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
       // When reusing an existing row (resume / respawn / auto-resume on
@@ -681,6 +699,7 @@ export class SessionManager {
         lastSummary: savedSummary,
         claudeSessionId: opts.resumeAgentSessionId ?? null,
         skipPermissions,
+        model,
         snoozedAt: savedSnoozedAt,
       };
 
@@ -698,13 +717,14 @@ export class SessionManager {
       // may have flipped YOLO mode between runs.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, skip_permissions)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, skip_permissions, model)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              status           = excluded.status,
              ended_at         = NULL,
              worktree_path    = excluded.worktree_path,
-             skip_permissions = excluded.skip_permissions`
+             skip_permissions = excluded.skip_permissions,
+             model            = excluded.model`
         )
         .run(
           session.id,
@@ -719,7 +739,8 @@ export class SessionManager {
           0,
           null,
           session.claudeSessionId,
-          session.skipPermissions ? 1 : 0
+          session.skipPermissions ? 1 : 0,
+          session.model
         );
 
       // Wire pty → renderer via the dedicated pty.data channel.
@@ -807,7 +828,7 @@ export class SessionManager {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path,
-                claude_session_id, skip_permissions
+                claude_session_id, skip_permissions, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
@@ -819,6 +840,7 @@ export class SessionManager {
           worktree_path: string;
           claude_session_id: string | null;
           skip_permissions: number;
+          model: string | null;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -858,6 +880,7 @@ export class SessionManager {
       reuseSessionId: row.id,
       resumeAgentSessionId: row.claude_session_id,
       skipPermissions: row.skip_permissions === 1,
+      model: row.model,
     });
   }
 
@@ -871,13 +894,14 @@ export class SessionManager {
   async respawn(sessionId: string): Promise<Session> {
     const row = getDatabase()
       .prepare(
-        `SELECT id, project_id, backend_id, worktree_path, skip_permissions
+        `SELECT id, project_id, backend_id, worktree_path, skip_permissions, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
       | {
           id: string; project_id: string; backend_id: string;
           worktree_path: string; skip_permissions: number;
+          model: string | null;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -887,6 +911,7 @@ export class SessionManager {
       backendId: row.backend_id as AgentBackendId,
       cwd: row.worktree_path,
       skipPermissions: row.skip_permissions === 1,
+      model: row.model,
       reuseSessionId: row.id,
     });
   }
@@ -904,7 +929,7 @@ export class SessionManager {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, worktree_path,
-                claude_session_id, skip_permissions
+                claude_session_id, skip_permissions, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
@@ -912,6 +937,7 @@ export class SessionManager {
           id: string; project_id: string; backend_id: string;
           worktree_path: string; claude_session_id: string | null;
           skip_permissions: number;
+          model: string | null;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -957,6 +983,75 @@ export class SessionManager {
       cwd: row.worktree_path,
       reuseSessionId: row.id,
       skipPermissions: next,
+      model: row.model,
+      ...(useResume && row.claude_session_id
+        ? { resumeAgentSessionId: row.claude_session_id }
+        : {}),
+    });
+  }
+
+  /**
+   * Persist a new model choice for the session and restart it with
+   * the new `--model` (using `--resume` so the conversation history
+   * survives). `model: null` clears the override so Claude uses the
+   * user's configured default. Mirrors toggleYolo's kill/respawn
+   * dance — including the intentionalKills marker so the chip doesn't
+   * briefly flash `errored` between the kill and the new spawn.
+   */
+  async setModel(sessionId: string, model: string | null): Promise<Session> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, worktree_path,
+                claude_session_id, skip_permissions, model
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string; project_id: string; backend_id: string;
+          worktree_path: string; claude_session_id: string | null;
+          skip_permissions: number;
+          model: string | null;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+
+    // Persist BEFORE the kill so a crash mid-change still leaves the
+    // intended state in the DB.
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET model = ? WHERE id = ?')
+        .run(model, sessionId);
+    } catch { /* best-effort */ }
+
+    // No-op when the model didn't actually change AND the session is
+    // already in its desired state — just return the persisted row.
+    if ((row.model ?? null) === (model ?? null) && !this.live.has(sessionId)) {
+      const session = this.listAll().find((s) => s.id === sessionId);
+      if (session) return session;
+    }
+
+    const wasLive = this.live.has(sessionId);
+    if (wasLive) {
+      this.intentionalKills.add(sessionId);
+      try { this.live.get(sessionId)?.handle.kill('SIGTERM'); }
+      catch { /* already gone */ }
+      await new Promise<void>((resolve) => setTimeout(resolve, 600));
+      this.live.delete(sessionId);
+    }
+
+    const useResume =
+      !!row.claude_session_id &&
+      (await transcriptExistsFor(
+        row.project_id, row.worktree_path, row.claude_session_id,
+      ));
+
+    return this.spawn({
+      projectId: row.project_id,
+      backendId: row.backend_id as AgentBackendId,
+      cwd: row.worktree_path,
+      reuseSessionId: row.id,
+      skipPermissions: row.skip_permissions === 1,
+      model,
       ...(useResume && row.claude_session_id
         ? { resumeAgentSessionId: row.claude_session_id }
         : {}),
@@ -990,7 +1085,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, ended_at, tokens_in, tokens_out, last_summary,
-                  claude_session_id, skip_permissions, snoozed_at
+                  claude_session_id, skip_permissions, model, snoozed_at
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -1001,6 +1096,7 @@ export class SessionManager {
             tokens_in: number; tokens_out: number;
             last_summary: string | null; claude_session_id: string | null;
             skip_permissions: number;
+            model: string | null;
             snoozed_at: number | null;
           }
         | undefined;
@@ -1046,6 +1142,7 @@ export class SessionManager {
         lastSummary: row.last_summary,
         claudeSessionId: row.claude_session_id,
         skipPermissions: row.skip_permissions === 1,
+        model: row.model,
       };
       emit({
         type: 'session.renamed',

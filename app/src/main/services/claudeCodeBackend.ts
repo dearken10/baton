@@ -40,6 +40,10 @@ export interface ClaudeCodeSpawnOpts extends AgentSpawnOpts {
   /** When true, also pass `--dangerously-skip-permissions` so Claude
    *  auto-approves every tool use (YOLO mode). */
   skipPermissions?: boolean;
+  /** Optional `--model <name>` alias (e.g. "sonnet"/"opus"/"haiku").
+   *  Undefined → don't pass the flag (Claude uses its configured
+   *  default). */
+  model?: string | null;
   /** The Fs whose host actually runs claude. LocalFs → claude runs on
    *  this Mac (the original path). RemoteFs → claude runs on the
    *  remote box, pty streamed over SSH. */
@@ -140,6 +144,9 @@ export class ClaudeCodeBackend implements AgentBackend {
     }
     if (opts.skipPermissions) {
       args.push('--dangerously-skip-permissions');
+    }
+    if (opts.model) {
+      args.push('--model', opts.model);
     }
 
     const ptyProcess = pty.spawn('claude', args, {
@@ -284,6 +291,9 @@ export class ClaudeCodeBackend implements AgentBackend {
     }
     if (opts.skipPermissions) {
       claudeArgs.push('--dangerously-skip-permissions');
+    }
+    if (opts.model) {
+      claudeArgs.push('--model', opts.model);
     }
 
     const remoteEnv: Record<string, string> = {

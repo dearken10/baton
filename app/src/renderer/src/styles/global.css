@@ -810,6 +810,38 @@ button {
   border-color: rgba(91, 141, 239, 0.25);
   color: var(--text-dim);
 }
+/* Model selector — sibling of the skip-perm chip. Same pill shape,
+   but a native <select> so the user can pick from a small list
+   without an extra menu component. The default-vs-explicit state
+   tints the border slightly so the chip reads as "active" when the
+   user has overridden Claude's configured default. */
+.model-chip {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 4px 22px 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: filter 0.1s;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 9px top 50%, right 5px top 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.model-chip:hover:not(:disabled) { filter: brightness(1.1); }
+.model-chip:disabled { opacity: 0.5; cursor: wait; }
+.model-chip.active {
+  background-color: rgba(124, 192, 124, 0.10);
+  border-color: rgba(124, 192, 124, 0.35);
+  color: #7cc07c;
+}
 /* Vertical split inside the center pane (PRD F6.3):
    editor on top, live terminal on bottom, draggable handle between. */
 .middle-split {

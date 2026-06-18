@@ -122,6 +122,11 @@ export const Session = z.object({
    *  permissions, i.e. Claude auto-approves every tool use. Persisted
    *  per row so toggling survives respawn/resume. */
   skipPermissions: z.boolean(),
+  /** Optional Claude model alias passed via `--model <name>` (e.g.
+   *  "sonnet", "opus", "haiku"). Null means "don't pass --model" —
+   *  Claude picks the user's configured default. Persisted per row so
+   *  the choice survives respawn/resume. */
+  model: z.string().nullable(),
   /** Wall-clock ms when the user snoozed this session, or null when
    *  active. While snoozed, the renderer hides the status chip (like
    *  the default `idle` treatment) so false-positive needs-input
@@ -354,6 +359,9 @@ const SessionSpawnRequest = z.object({
    *  Defaults to false; the user can flip it later from the middle
    *  column. */
   skipPermissions: z.boolean().optional(),
+  /** Optional model alias passed via `--model <name>` (Claude only for
+   *  now). Omit/null to let Claude use the user's configured default. */
+  model: z.string().nullable().optional(),
 });
 const SessionSpawnResponse = z.object({ session: Session });
 const SessionKillRequest = z.object({ sessionId: SessionId });
@@ -366,6 +374,16 @@ const SessionResumeResponse = z.object({ session: Session });
  *  value (using `--resume` so conversation history survives). */
 const SessionToggleYoloRequest = z.object({ sessionId: SessionId });
 const SessionToggleYoloResponse = z.object({ session: Session });
+
+/** Persist a new model choice for the session and restart it with
+ *  `--model <name>` (using `--resume` so the conversation history
+ *  survives). `model: null` clears the override so Claude uses the
+ *  user's configured default. */
+const SessionSetModelRequest = z.object({
+  sessionId: SessionId,
+  model: z.string().nullable(),
+});
+const SessionSetModelResponse = z.object({ session: Session });
 
 /** Start a fresh Claude session inside an existing (ended) session's
  *  cwd, reusing the same baton session id. No `--resume` — the prior
@@ -822,6 +840,7 @@ export const ControlVerbs = {
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },
   'session.respawn':    { request: SessionRespawnRequest,    response: SessionRespawnResponse },
   'session.toggleYolo': { request: SessionToggleYoloRequest, response: SessionToggleYoloResponse },
+  'session.setModel':   { request: SessionSetModelRequest,   response: SessionSetModelResponse },
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },

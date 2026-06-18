@@ -116,6 +116,15 @@ function runMigrations(d: Database.Database): void {
     // already migrated
   }
 
+  // model = optional Claude `--model <name>` alias for this session
+  // (e.g. "sonnet"/"opus"/"haiku"). NULL means "don't pass --model" —
+  // Claude uses the user's configured default.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN model TEXT');
+  } catch {
+    // already migrated
+  }
+
   // The locally-aggregated usage tables we used before switching to
   // Anthropic's OAuth usage API. Drop them — they're dead weight.
   try { d.exec('DROP TABLE IF EXISTS token_usage_events'); } catch { /* ignore */ }

@@ -6,6 +6,13 @@ import { HSplitHandle } from './HSplitHandle.js';
 import { EditorErrorBoundary } from './EditorErrorBoundary.js';
 import type { Session } from '@shared/ipc.js';
 
+/** Newest Opus. Used as the implicit choice for any claude-code
+ *  session whose persisted `model` is null (legacy rows, freshly
+ *  spawned sessions before the user has clicked the chip). The "no
+ *  --model passed" passthrough option has been removed from the
+ *  dropdown, so the chip always reflects a concrete model id. */
+const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-7';
+
 const VIEW_LS_KEY = 'baton:middle:view';
 type MiddleView = 'live' | 'turns';
 function loadView(): MiddleView {
@@ -153,6 +160,29 @@ export function MiddleColumn(): JSX.Element {
     });
   }, []);
 
+  const [modelBusy, setModelBusy] = useState(false);
+  async function changeModel(s: Session, next: string): Promise<void> {
+    if (modelBusy) return;
+    const current = s.model ?? DEFAULT_CLAUDE_MODEL;
+    if (current === next) return;
+    const isLive = s.status !== 'done' && s.status !== 'errored';
+    const lines = [`Switch this session's model to "${next}"?`];
+    if (isLive) lines.push('', 'The session will restart briefly to apply the change.');
+    if (!window.confirm(lines.join('\n'))) return;
+    setModelBusy(true);
+    try {
+      const { session } = await window.baton.call('session.setModel', {
+        sessionId: s.id,
+        model: next,
+      });
+      selectSession(session.id);
+    } catch (err) {
+      alert(`Model change failed: ${String(err)}`);
+    } finally {
+      setModelBusy(false);
+    }
+  }
+
   const [skipPermBusy, setSkipPermBusy] = useState(false);
   async function toggleSkipPermissions(s: Session): Promise<void> {
     if (skipPermBusy) return;
@@ -222,6 +252,31 @@ export function MiddleColumn(): JSX.Element {
                   Turns
                 </button>
               </div>
+            ) : null}
+            {selected.backendId === 'claude-code' ? (
+              <select
+                className="model-chip active"
+                value={selected.model ?? DEFAULT_CLAUDE_MODEL}
+                disabled={modelBusy}
+                onChange={(e) => {
+                  void changeModel(selected, e.currentTarget.value);
+                }}
+                title={`Model: ${selected.model ?? DEFAULT_CLAUDE_MODEL} — passed to claude as --model. Change restarts session.`}
+              >
+                <optgroup label="Latest in tier">
+                  <option value="sonnet">Sonnet (latest)</option>
+                  <option value="opus">Opus (latest)</option>
+                  <option value="haiku">Haiku (latest)</option>
+                </optgroup>
+                <optgroup label="Pinned version">
+                  <option value="claude-opus-4-7">Opus 4.7</option>
+                  <option value="claude-opus-4-6">Opus 4.6</option>
+                  <option value="claude-opus-4-5">Opus 4.5</option>
+                  <option value="claude-sonnet-4-6">Sonnet 4.6</option>
+                  <option value="claude-sonnet-4-5">Sonnet 4.5</option>
+                  <option value="claude-haiku-4-5">Haiku 4.5</option>
+                </optgroup>
+              </select>
             ) : null}
             {(selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
               <button
