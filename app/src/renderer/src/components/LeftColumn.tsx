@@ -15,6 +15,29 @@ function randomHex(n: number): string {
     .slice(0, n);
 }
 
+/** Per-project collapse state. Persisted as a sparse map of
+ *  `{ [projectId]: true }` — only collapsed projects are recorded, so
+ *  newly-added projects default to expanded without needing to touch
+ *  every existing entry. */
+const PROJECT_COLLAPSED_LS_KEY = 'baton:project:collapsed';
+function loadProjectCollapsed(id: string): boolean {
+  try {
+    const raw = localStorage.getItem(PROJECT_COLLAPSED_LS_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as Record<string, boolean>;
+    return parsed[id] === true;
+  } catch { return false; }
+}
+function saveProjectCollapsed(id: string, collapsed: boolean): void {
+  try {
+    const raw = localStorage.getItem(PROJECT_COLLAPSED_LS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, boolean>) : {};
+    if (collapsed) parsed[id] = true;
+    else delete parsed[id];
+    localStorage.setItem(PROJECT_COLLAPSED_LS_KEY, JSON.stringify(parsed));
+  } catch { /* localStorage quota / disabled — best-effort */ }
+}
+
 export function LeftColumn(): JSX.Element {
   const projectsRecord = useAppStore((s) => s.projects);
   const sessionsRecord = useAppStore((s) => s.sessions);
@@ -594,6 +617,35 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
     busy, pendingSessionIds,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => loadProjectCollapsed(project.id));
+  function toggleCollapsed(): void {
+    setCollapsed((prev) => {
+      const next = !prev;
+      saveProjectCollapsed(project.id, next);
+      return next;
+    });
+  }
+  // While collapsed, surface the project's most-attention-worthy child
+  // state so the user doesn't have to expand to know something is up.
+  // Priority: running > needs-input > nothing. The filter has to mirror
+  // the per-row chip's `showStatusChip` — otherwise the aggregate would
+  // light up for child rows that themselves show no chip, which reads
+  // as a bug:
+  //   - Snoozed sessions are explicitly muted; they shouldn't pull focus.
+  //   - Shell sessions are always `running` for their lifetime (a login
+  //     shell, a dev server, …) — counting them would pin the project
+  //     to RUNNING even after every agent child has gone idle.
+  const aggregateStatus = useMemo<'running' | 'needs-input' | null>(() => {
+    if (!collapsed) return null;
+    let needs = false;
+    for (const s of sessions) {
+      if (s.snoozedAt != null) continue;
+      if (s.backendId === 'shell') continue;
+      if (s.status === 'running') return 'running';
+      if (s.status === 'needs-input') needs = true;
+    }
+    return needs ? 'needs-input' : null;
+  }, [collapsed, sessions]);
   const isSnoozed = project.snoozedAt != null;
   const isRemote = !!connection && connection.kind !== 'local';
   const remoteSublabel = isRemote && connection
@@ -626,6 +678,16 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
       }}
     >
       <div className="project-head">
+        <button
+          type="button"
+          className="project-collapse-btn"
+          onClick={toggleCollapsed}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Expand project' : 'Collapse project'}
+          title={collapsed ? 'Expand' : 'Collapse'}
+        >
+          <span className="project-collapse-caret">{collapsed ? '▶' : '▼'}</span>
+        </button>
         <span className="project-name" title={remoteSublabel}>
           {isRemote ? (
             <span
@@ -638,7 +700,22 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           ) : null}
           {project.name}
           {isSnoozed ? <span className="snooze-meta">snoozed</span> : null}
+          {collapsed && sessions.length > 0 ? (
+            <span className="project-collapsed-count dim" aria-label={`${sessions.length} hidden sessions`}>
+              · {sessions.length}
+            </span>
+          ) : null}
         </span>
+        {aggregateStatus ? (
+          <span
+            className={`status status-${aggregateStatus} project-agg-status`}
+            title={aggregateStatus === 'running'
+              ? 'At least one session in this project is running'
+              : 'At least one session in this project needs input'}
+          >
+            {aggregateStatus}
+          </span>
+        ) : null}
         <SpawnMenu
           isSnoozed={isSnoozed}
           onSpawnSession={onSpawnSession}
@@ -651,7 +728,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           busy={busy}
         />
       </div>
-      {sessions.length === 0 ? null : (
+      {collapsed || sessions.length === 0 ? null : (
         <div className="sessions-list">
           {sessions.map((s) => {
             const isEnded = s.status === 'done' || s.status === 'errored';

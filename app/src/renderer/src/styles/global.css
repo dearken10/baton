@@ -461,6 +461,43 @@ button {
   padding: 4px 4px 6px;
 }
 .project-name { font-weight: 600; font-size: 13px; }
+/* Caret toggle that collapses the project's session list. Hugs the
+   left edge of the head, no border/background so it reads as an icon
+   rather than another action button (the spawn menu owns that role).
+   Uses its own caret style (not .tree-caret) so it can be bigger and
+   more visible than the file-tree carets without affecting them. */
+.project-collapse-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  margin-left: -2px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.project-collapse-btn:hover { background: var(--bg-3); }
+.project-collapse-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+.project-collapse-caret {
+  font-size: 10px;
+  line-height: 1;
+  color: var(--text-dim);
+  /* Filled triangles render slightly off-center vertically in most
+     UI fonts — nudge down a hair so they look optically centred. */
+  transform: translateY(0.5px);
+}
+.project-collapse-btn:hover .project-collapse-caret { color: var(--text); }
+.project-collapsed-count {
+  margin-left: 6px;
+  font-weight: 400;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+/* Push the aggregate chip away from the name so it doesn't crowd it,
+   and let the spawn-menu's margin-left:auto still pin to the right. */
+.project-agg-status { margin-left: 8px; }
 .project-path {
   font-size: 11px;
   color: var(--text-faint);
