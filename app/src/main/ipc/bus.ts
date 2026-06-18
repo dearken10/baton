@@ -783,7 +783,19 @@ async function runGitGrep(
   req: RequestOf<'worktree.search'>,
 ): Promise<ResponseOf<'worktree.search'>> {
   const maxMatches = req.maxMatches ?? 2000;
-  const args: string[] = [
+  // Shared flags for both passes. `--untracked` and `--recurse-submodules`
+  // are mutually exclusive in git grep, so we run two passes and merge:
+  //   pass A: --untracked          — catches not-yet-`git add`'d files
+  //                                  in the root repo
+  //   pass B: --recurse-submodules — descends into submodule trees that
+  //                                  pass A silently skips
+  // Most repos hit only one of the two paths in practice (a repo with
+  // no submodules makes pass B a no-op; a repo with no untracked
+  // changes makes pass A return the same as pass B). Running both
+  // covers users with monorepo-style submodule layouts (which was the
+  // bug report: searching a repo where the whole backend is a submodule
+  // returned zero results because the root grep can't see in.)
+  const baseArgs: string[] = [
     'grep',
     '--no-color',
     '--line-number',
@@ -791,23 +803,70 @@ async function runGitGrep(
     '--null',
     '--full-name',
     '-I',
-    '--untracked',
   ];
-  if (!req.caseSensitive) args.push('--ignore-case');
-  if (req.wholeWord)      args.push('--word-regexp');
-  if (req.regex) args.push('--extended-regexp');
-  else           args.push('--fixed-strings');
-  args.push('-e', req.query, '--');
+  if (!req.caseSensitive) baseArgs.push('--ignore-case');
+  if (req.wholeWord)      baseArgs.push('--word-regexp');
+  if (req.regex) baseArgs.push('--extended-regexp');
+  else           baseArgs.push('--fixed-strings');
+
   const includes = splitGlobs(req.includeGlob);
   const excludes = splitGlobs(req.excludeGlob);
-  for (const g of includes) args.push(g);
-  for (const g of excludes) args.push(`:!${g}`);
+  const buildArgs = (extra: readonly string[]): string[] => {
+    const a = [...baseArgs, ...extra, '-e', req.query, '--'];
+    for (const g of includes) a.push(g);
+    for (const g of excludes) a.push(`:!${g}`);
+    return a;
+  };
 
+  const [passA, passB] = await Promise.all([
+    runOneGrep(fs, cwd, buildArgs(['--untracked']), maxMatches, req),
+    runOneGrep(fs, cwd, buildArgs(['--recurse-submodules']), maxMatches, req),
+  ]);
+
+  // Pass B (recurses into submodules) is the more complete tracked
+  // view, so prefer it as the primary ordering. Pass A then contributes
+  // anything new — mostly untracked files in the root repo.
+  type Match = ResponseOf<'worktree.search'>['matches'][number];
+  const seen = new Set<string>();
+  const merged: Match[] = [];
+  const pushFrom = (src: Match[]): void => {
+    for (const m of src) {
+      const key = `${m.file}\0${m.line}\0${m.col}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(m);
+      if (merged.length >= maxMatches) return;
+    }
+  };
+  pushFrom(passB.matches);
+  if (merged.length < maxMatches) pushFrom(passA.matches);
+  const truncated =
+    passA.truncated || passB.truncated || merged.length >= maxMatches;
+  // Surface a real error only if BOTH passes failed for the same
+  // reason; one pass tripping (e.g. a stale submodule) shouldn't hide
+  // the other pass's results.
+  const error =
+    merged.length > 0
+      ? null
+      : passB.error ?? passA.error ?? null;
+  return { matches: merged, truncated, error };
+}
+
+/** One `git grep` invocation. Factored out so runGitGrep can run an
+ *  untracked-aware pass and a submodule-recursing pass in parallel and
+ *  merge them. */
+async function runOneGrep(
+  fs: import('../services/fs/types.js').BatonFs,
+  cwd: string,
+  args: readonly string[],
+  maxMatches: number,
+  req: RequestOf<'worktree.search'>,
+): Promise<ResponseOf<'worktree.search'>> {
   let stdout = '';
   let stderr = '';
   let exitCode: number | null = null;
   try {
-    const res = await fs.exec('git', args, {
+    const res = await fs.exec('git', args as string[], {
       cwd,
       timeoutMs: 30_000,
       maxStdoutBytes: 32 * 1024 * 1024,
