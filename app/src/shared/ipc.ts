@@ -570,6 +570,10 @@ const FileReadGitDiffResponse = z.object({
     z.literal('conflicted'),
     z.literal('clean'),
   ]),
+  /** True iff the file lives inside a git work-tree. Lets the editor
+   *  tell "no repo / no diff to show" from "tracked + clean", so the
+   *  dirty-diff gutter can decide whether to track HEAD for live edits. */
+  inRepo: z.boolean(),
   /** mtime of the working file (0 when deleted). */
   mtimeMs: z.number(),
 });

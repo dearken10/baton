@@ -176,6 +176,24 @@ export function EditorPane(): JSX.Element {
   const subsRef = useRef<Map<string, monaco.IDisposable>>(new Map());
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
 
+  // Dirty-diff gutter. A single hidden DiffEditor computes line-level
+  // changes between each file's HEAD content and its working model;
+  // `onDidUpdateDiff` fires whenever either side mutates (including
+  // live edits in the main editor, since both editors share the same
+  // working-side model instance). We then paint the line numbers in
+  // the main editor's gutter with the result.
+  // Files outside a git repo skip head-model creation entirely so
+  // their edits don't get painted as additions against a phantom base.
+  const headModelsRef = useRef<Map<string, monaco.editor.ITextModel>>(new Map());
+  const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null);
+  const diffHostRef = useRef<HTMLDivElement | null>(null);
+  const diffSubRef = useRef<monaco.IDisposable | null>(null);
+  const decorationsRef = useRef<string[]>([]);
+  // Tracks which file the hidden DiffEditor is currently pointed at,
+  // so async onDidUpdateDiff callbacks can ignore stale results that
+  // arrive after the user has switched tabs.
+  const diffActivePathRef = useRef<string | null>(null);
+
   const updateMeta = useCallback(
     (absPath: string, patch: Partial<FileMeta>): void => {
       setMetaMap((prev) => {
@@ -331,6 +349,28 @@ export function EditorPane(): JSX.Element {
             monaco.Uri.file(p)
           );
           modelsRef.current.set(p, model);
+
+          // Best-effort: fetch HEAD in parallel so the dirty-diff
+          // gutter can show changes vs. the last commit. Outside a git
+          // repo we skip entirely so live edits don't render as a sea
+          // of "added" markers against a phantom base.
+          void window.baton.call('file.readGitDiff', {
+            absPath: p,
+            ...(selectedSessionId ? { sessionId: selectedSessionId } : {}),
+          }).then((g) => {
+            if (cancelled) return;
+            if (!g.inRepo) return;
+            const existing = headModelsRef.current.get(p);
+            if (existing) {
+              try { existing.dispose(); } catch { /* ignore */ }
+            }
+            const headModel = monaco.editor.createModel(g.head, languageFor(p));
+            headModelsRef.current.set(p, headModel);
+            // If this file is what the user is currently looking at,
+            // rebind the hidden diff editor so decorations appear
+            // without waiting for the next tab switch.
+            rebindDiffEditorRef.current?.();
+          }).catch(() => { /* best-effort */ });
           // Track dirty per-file by comparing live value to baseline.
           // First edit on a preview tab also promotes it to sticky
           // (PRD F6.5).
@@ -378,6 +418,19 @@ export function EditorPane(): JSX.Element {
         subsRef.current.delete(p);
       }
     }
+    // Same cleanup for head-side models. Clear the diff editor first
+    // if it's currently pointed at one of the to-be-disposed models,
+    // otherwise Monaco throws when the model goes away under it.
+    for (const [p, model] of headModelsRef.current) {
+      if (!allOpenUnion.has(p)) {
+        if (diffActivePathRef.current === p) {
+          try { diffEditorRef.current?.setModel(null); } catch { /* ignore */ }
+          diffActivePathRef.current = null;
+        }
+        try { model.dispose(); } catch { /* ignore */ }
+        headModelsRef.current.delete(p);
+      }
+    }
 
     return () => { cancelled = true; };
     // metaMap intentionally left out — we don't want to re-run for
@@ -398,6 +451,84 @@ export function EditorPane(): JSX.Element {
     const model = modelsRef.current.get(activeFilePath);
     if (model) ed.setModel(model);
   }, [activeFilePath, metaMap[activeFilePath ?? '']?.status]);
+
+  // Rebind the hidden DiffEditor to the active file's head+working
+  // model pair. Stored in a ref so the file-load IPC callback (which
+  // creates the head model asynchronously) can trigger a rebind once
+  // the model lands, without depending on activeFilePath in its scope.
+  const rebindDiffEditorRef = useRef<(() => void) | null>(null);
+  const rebindDiffEditor = useCallback((): void => {
+    const de = diffEditorRef.current;
+    if (!de) return;
+    // Diff tabs already use their own DiffEditor — don't double-paint.
+    const path = activeFilePath && !isDiffTab(activeFilePath) ? activeFilePath : null;
+    if (!path) {
+      try { de.setModel(null); } catch { /* ignore */ }
+      diffActivePathRef.current = null;
+      const ed = editorRef.current;
+      if (ed) decorationsRef.current = ed.deltaDecorations(decorationsRef.current, []);
+      return;
+    }
+    const working = modelsRef.current.get(path);
+    const head = headModelsRef.current.get(path);
+    if (!working || !head) {
+      // No head model means we're outside a git repo OR the head fetch
+      // is still in flight. Either way, clear any stale decorations.
+      try { de.setModel(null); } catch { /* ignore */ }
+      diffActivePathRef.current = null;
+      const ed = editorRef.current;
+      if (ed) decorationsRef.current = ed.deltaDecorations(decorationsRef.current, []);
+      return;
+    }
+    diffActivePathRef.current = path;
+    try { de.setModel({ original: head, modified: working }); } catch { /* ignore */ }
+  }, [activeFilePath]);
+  rebindDiffEditorRef.current = rebindDiffEditor;
+  useEffect(() => { rebindDiffEditor(); }, [rebindDiffEditor]);
+
+  // Translate Monaco's ILineChange[] into linesDecorations on the
+  // main editor's gutter. Mirrors VS Code's SCM dirty-diff bars:
+  //   added     — modified-side range, no original lines
+  //   modified  — modified-side range, with original lines
+  //   deleted   — a marker on the line where the deletion happened
+  const applyGutterDecorations = useCallback((): void => {
+    const ed = editorRef.current;
+    const de = diffEditorRef.current;
+    if (!ed || !de) return;
+    // Only paint when the diff editor is computing for the file the
+    // user is currently looking at. Otherwise a late onDidUpdateDiff
+    // would paint stale results onto the new tab's model.
+    if (diffActivePathRef.current !== activeFilePath) return;
+    const changes = de.getLineChanges() ?? [];
+    const next: monaco.editor.IModelDeltaDecoration[] = [];
+    for (const c of changes) {
+      const isPureAdd = c.originalEndLineNumber === 0;
+      const isPureDel = c.modifiedEndLineNumber === 0;
+      if (isPureDel) {
+        // Deletion has no modified-side lines to attach to. Anchor on
+        // the line below the deletion (Monaco reports the line ABOVE
+        // which the deleted block sat as `modifiedStartLineNumber`).
+        const anchor = Math.max(1, c.modifiedStartLineNumber);
+        next.push({
+          range: new monaco.Range(anchor, 1, anchor, 1),
+          options: { linesDecorationsClassName: 'git-gutter git-gutter-deleted' },
+        });
+        continue;
+      }
+      const cls = isPureAdd ? 'git-gutter git-gutter-added' : 'git-gutter git-gutter-modified';
+      const startLine = c.modifiedStartLineNumber;
+      const endLine = c.modifiedEndLineNumber;
+      for (let l = startLine; l <= endLine; l++) {
+        next.push({
+          range: new monaco.Range(l, 1, l, 1),
+          options: { linesDecorationsClassName: cls },
+        });
+      }
+    }
+    decorationsRef.current = ed.deltaDecorations(decorationsRef.current, next);
+  }, [activeFilePath]);
+  const applyGutterDecorationsRef = useRef<() => void>(applyGutterDecorations);
+  applyGutterDecorationsRef.current = applyGutterDecorations;
 
   // Consume a pending "go to line N" set by the Search panel. We
   // wait until the target file's model is in place — that's when
@@ -488,6 +619,39 @@ export function EditorPane(): JSX.Element {
       monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
       () => { void save(); }
     );
+
+    // Lazy-create the hidden DiffEditor on first mount. It lives in an
+    // offscreen 1×1 host so it doesn't paint anything, but Monaco still
+    // runs its diff worker on the model pair we feed it. We read the
+    // result via getLineChanges() and project it onto the visible
+    // editor's gutter.
+    if (!diffEditorRef.current) {
+      const host = document.createElement('div');
+      host.style.position = 'absolute';
+      host.style.left = '-9999px';
+      host.style.top = '-9999px';
+      host.style.width = '1px';
+      host.style.height = '1px';
+      host.style.overflow = 'hidden';
+      host.style.pointerEvents = 'none';
+      document.body.appendChild(host);
+      diffHostRef.current = host;
+      const de = monaco.editor.createDiffEditor(host, {
+        automaticLayout: false,
+        renderSideBySide: false,
+        readOnly: true,
+        enableSplitViewResizing: false,
+        ignoreTrimWhitespace: false,
+        // Cheap mode is fine — we only consume line-level changes.
+        diffWordWrap: 'off',
+      });
+      diffEditorRef.current = de;
+      diffSubRef.current = de.onDidUpdateDiff(() => {
+        applyGutterDecorationsRef.current();
+      });
+      // Bind for whatever's currently active.
+      rebindDiffEditorRef.current?.();
+    }
   }, [activeFilePath, save]);
 
   useEffect(() => {
@@ -511,6 +675,21 @@ export function EditorPane(): JSX.Element {
         try { model.dispose(); } catch { /* ignore */ }
       }
       modelsRef.current.clear();
+      // Hidden diff editor + head-side models.
+      try { diffSubRef.current?.dispose(); } catch { /* ignore */ }
+      diffSubRef.current = null;
+      try { diffEditorRef.current?.setModel(null); } catch { /* ignore */ }
+      try { diffEditorRef.current?.dispose(); } catch { /* ignore */ }
+      diffEditorRef.current = null;
+      if (diffHostRef.current?.parentNode) {
+        diffHostRef.current.parentNode.removeChild(diffHostRef.current);
+      }
+      diffHostRef.current = null;
+      for (const model of headModelsRef.current.values()) {
+        try { model.dispose(); } catch { /* ignore */ }
+      }
+      headModelsRef.current.clear();
+      decorationsRef.current = [];
     };
   }, []);
 

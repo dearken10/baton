@@ -1178,6 +1178,34 @@ button {
 .editor-tab-close:hover { color: var(--text); background: var(--bg-3); }
 
 .editor-monaco { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* Dirty-diff gutter bars vs. HEAD, painted as Monaco linesDecorations.
+   The container Monaco gives us is `.margin-view-overlays .cgmr` (a
+   span that spans the entire line height in the margin); we draw a
+   thin 3px bar at its left edge using a ::before so the bar respects
+   the line height regardless of font-size. */
+.git-gutter { position: relative; }
+.git-gutter::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  pointer-events: none;
+}
+.git-gutter-added::before    { background: var(--running, #2fbf71); }
+.git-gutter-modified::before { background: var(--needs,   #f0a945); }
+/* Deletions have no modified-side line — render a small downward-
+   pointing triangle anchored to the top of the line below the
+   deletion, so the user can tell *something* was removed there. */
+.git-gutter-deleted::before {
+  width: 0;
+  height: 0;
+  background: transparent;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid var(--errored, #ef5454);
+}
 
 /* Shown by EditorErrorBoundary when Monaco crashes. Keeps the rest
    of the app working while the user closes the offending tabs. */

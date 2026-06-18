@@ -529,6 +529,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
         head: working,
         working,
         state: 'clean' as const,
+        inRepo: false,
         mtimeMs: stat?.mtimeMs ?? 0,
       };
     }
@@ -538,6 +539,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
         head: working,
         working,
         state: 'clean' as const,
+        inRepo: false,
         mtimeMs: stat?.mtimeMs ?? 0,
       };
     }
@@ -561,6 +563,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       head,
       working,
       state,
+      inRepo: true,
       mtimeMs: stat?.mtimeMs ?? 0,
     };
   },
