@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAppStore } from '../store.js';
 
 interface Props {
   sessionId: string;
@@ -35,6 +36,9 @@ interface SessionTurn {
 export function TurnsPane({ sessionId }: Props): JSX.Element {
   const [turns, setTurns] = useState<SessionTurn[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Drive the "working" indicator off the same status the sidebar /
+  // header use, so all three views agree on whether Claude is busy.
+  const isWorking = useAppStore((s) => s.sessions[sessionId]?.status === 'running');
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Track whether the user is "stuck to the bottom". If they've
   // scrolled up to read older turns we leave them alone; if they're at
@@ -70,9 +74,10 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
   }, [sessionId]);
 
   // After every render that changes the content height (i.e. when the
-  // `turns` array changes), pin to the bottom if we were tracking it.
-  // Run inside requestAnimationFrame so the DOM has measured the new
-  // content height before we read scrollHeight.
+  // `turns` array changes, or the "working" indicator toggles), pin to
+  // the bottom if we were tracking it. Run inside requestAnimationFrame
+  // so the DOM has measured the new content height before we read
+  // scrollHeight.
   useEffect(() => {
     if (!stickToBottomRef.current) return;
     const el = scrollRef.current;
@@ -81,7 +86,7 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
       el.scrollTop = el.scrollHeight;
     });
     return () => cancelAnimationFrame(id);
-  }, [turns]);
+  }, [turns, isWorking]);
 
   // Mark stick-to-bottom on scroll. 32 px threshold — a finger-flick
   // can overshoot the bottom by a few px without meaning "I want to
@@ -95,7 +100,7 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
   return (
     <div className="turns-pane">
       <div className="turns-scroll" ref={scrollRef} onScroll={onScroll}>
-        <TurnsBody turns={turns} error={error} />
+        <TurnsBody turns={turns} error={error} isWorking={isWorking} />
       </div>
       <Composer sessionId={sessionId} />
     </div>
@@ -103,16 +108,19 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
 }
 
 function TurnsBody({
-  turns, error,
-}: { turns: SessionTurn[] | null; error: string | null }): JSX.Element {
+  turns, error, isWorking,
+}: { turns: SessionTurn[] | null; error: string | null; isWorking: boolean }): JSX.Element {
   if (error) return <div className="empty"><p className="dim">{error}</p></div>;
   if (turns === null) return <div className="empty"><p className="dim">Loading turns…</p></div>;
   if (turns.length === 0) {
+    // First prompt may already be in-flight before any turn has been
+    // written to the transcript — show the indicator so the user isn't
+    // staring at an empty pane.
     return (
       <div className="empty">
-        <p className="dim">
-          No turns yet. Type below to send your first prompt.
-        </p>
+        {isWorking
+          ? <WorkingIndicator />
+          : <p className="dim">No turns yet. Type below to send your first prompt.</p>}
       </div>
     );
   }
@@ -121,6 +129,18 @@ function TurnsBody({
   return (
     <div className="turns-list">
       {turns.map((t) => <TurnCard key={t.id} turn={t} />)}
+      {isWorking ? <WorkingIndicator /> : null}
+    </div>
+  );
+}
+
+function WorkingIndicator(): JSX.Element {
+  return (
+    <div className="turns-working" role="status" aria-live="polite">
+      <span className="turns-working-dots" aria-hidden="true">
+        <span /><span /><span />
+      </span>
+      <span className="turns-working-label">Claude is working…</span>
     </div>
   );
 }
