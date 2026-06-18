@@ -88,9 +88,29 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     const fit = new FitAddon();
     term.loadAddon(fit);
     let webglOk = false;
+    let webglAddon: WebglAddon | null = null;
     try {
-      const webgl = new WebglAddon();
-      term.loadAddon(webgl);
+      webglAddon = new WebglAddon();
+      // Chromium has a per-page WebGL-context budget (~16). When many
+      // TerminalPanes are mounted (we keep every live session's xterm
+      // alive in MiddleColumn) the browser silently evicts the oldest
+      // context and the canvas freezes mid-frame — that's what showed
+      // up as the "white-out" middle pane. WebglAddon surfaces this as
+      // `onContextLoss`; disposing the addon lets xterm fall back to
+      // the built-in DOM renderer for the remaining lifetime of this
+      // pane. Slower, but visible and correct.
+      webglAddon.onContextLoss(() => {
+        try {
+          // eslint-disable-next-line no-console
+          console.warn(`[terminal ${sessionId.slice(0, 8)}] webgl context lost — falling back to DOM renderer`);
+          webglAddon?.dispose();
+          webglAddon = null;
+          // Repaint so the visible viewport switches over right away
+          // instead of waiting for the next pty frame.
+          try { term.refresh(0, term.rows - 1); } catch { /* term may be tearing down */ }
+        } catch { /* ignore — best-effort recovery */ }
+      });
+      term.loadAddon(webglAddon);
       webglOk = true;
     } catch {
       // Fall back to canvas — webgl can fail on some sandboxed contexts.
