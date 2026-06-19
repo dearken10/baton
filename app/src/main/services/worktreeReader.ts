@@ -154,6 +154,12 @@ export interface GitStatusFile {
   path: string;
   /** A coarse bucket the UI groups by. */
   state: 'modified' | 'staged' | 'untracked' | 'deleted' | 'conflicted';
+  /** True iff this entry is a submodule container (porcelain v2 `sub`
+   *  field starts with `S`). Used by readGitStatus to decide which
+   *  entries to expand into their inner file changes; stripped before
+   *  the IPC zod schema serialises the response, so the renderer never
+   *  sees it. */
+  submodule?: boolean;
 }
 
 export interface GitStatusReport {
@@ -165,8 +171,87 @@ export interface GitStatusReport {
 }
 
 export async function readGitStatus(batonFs: BatonFs, dir: string): Promise<GitStatusReport> {
-  if (batonFs.isLocal) return readGitStatusLocal(dir);
-  return readGitStatusRemote(batonFs, dir);
+  const root = batonFs.isLocal
+    ? await readGitStatusLocal(dir)
+    : await readGitStatusRemote(batonFs, dir);
+  return expandSubmodules(batonFs, dir, root);
+}
+
+/**
+ * Replace each submodule container entry (`SC..`, `SM..`, etc.) in the
+ * report with that submodule's own file-level status, prefixed by the
+ * submodule's relative path.
+ *
+ * Without this, a repo whose `backend/` is a submodule appears in the
+ * Git tab as a single "Modified: backend" row — the whole point of
+ * tracking changes there is invisible. Reuses readGitStatus*Local|Remote
+ * directly (not the public readGitStatus) so we don't recurse into
+ * nested submodules; one level handles the common monorepo case
+ * without unbounded work.
+ */
+async function expandSubmodules(
+  batonFs: BatonFs,
+  dir: string,
+  report: GitStatusReport,
+): Promise<GitStatusReport> {
+  const submoduleEntries = report.files.filter((f) => f.submodule);
+  if (submoduleEntries.length === 0) {
+    // Strip the (always undefined) submodule field on the way out so the
+    // IPC schema doesn't see fields it doesn't know about.
+    return { ...report, files: report.files.map(stripSubmoduleFlag) };
+  }
+
+  // For each submodule, record both its container entry and its
+  // expanded inner files. We keep the container row when the
+  // expansion is empty — that's the "submodule HEAD moved but no
+  // working-tree changes inside" case (porcelain sub-flags SC..),
+  // and dropping it would hide the only signal the user has that
+  // something changed in there.
+  const expansions = await Promise.all(
+    submoduleEntries.map(async (sm): Promise<GitStatusFile[]> => {
+      const childDir = joinForFs(batonFs, dir, sm.path);
+      try {
+        const child = batonFs.isLocal
+          ? await readGitStatusLocal(childDir)
+          : await readGitStatusRemote(batonFs, childDir);
+        return child.files.map((f) => ({
+          path: `${sm.path}/${f.path}`,
+          state: f.state,
+        }));
+      } catch {
+        // Submodule not initialised / not a repo / SSH blip — silently
+        // skip; container row stays so the user knows something is up.
+        return [];
+      }
+    }),
+  );
+
+  const droppedContainers = new Set<string>();
+  for (let i = 0; i < submoduleEntries.length; i++) {
+    if (expansions[i].length > 0) droppedContainers.add(submoduleEntries[i].path);
+  }
+
+  const merged: GitStatusFile[] = [
+    ...report.files
+      .filter((f) => !droppedContainers.has(f.path))
+      .map(stripSubmoduleFlag),
+    ...expansions.flat(),
+  ];
+  return { ...report, files: merged, dirty: merged.length > 0 };
+}
+
+function stripSubmoduleFlag(f: GitStatusFile): GitStatusFile {
+  if (f.submodule === undefined) return f;
+  const { submodule: _drop, ...rest } = f;
+  void _drop;
+  return rest;
+}
+
+/** Path-join that respects the fs's separator convention: native on
+ *  local (handles Windows `\`), POSIX `/` on remote. */
+function joinForFs(batonFs: BatonFs, parent: string, child: string): string {
+  if (batonFs.isLocal) return path.join(parent, child);
+  return `${parent.replace(/\/$/, '')}/${child}`;
 }
 
 const EMPTY_STATUS: GitStatusReport = {
@@ -331,6 +416,12 @@ function parseChangedEntry(rec: string, pathIndex: number): GitStatusFile | null
   const xy = parts[1] ?? '';
   const x = xy[0];
   const y = xy[1];
+  // `sub` is the third field. Porcelain v2 spec: `N...` for non-submodule
+  // entries; `S` followed by 3 letters (each `C/M/U/.`) for submodules.
+  // We only need to know "is this a submodule entry" — the sub-flags
+  // themselves don't change how we render.
+  const sub = parts[2] ?? '';
+  const isSubmodule = sub[0] === 'S';
   const filePath = parts.slice(pathIndex).join(' ');
   if (!filePath) return null;
   let state: GitStatusFile['state'];
@@ -338,5 +429,7 @@ function parseChangedEntry(rec: string, pathIndex: number): GitStatusFile | null
   else if (x === 'D') state = 'deleted';
   else if (x && x !== '.') state = 'staged';
   else state = 'modified';
-  return { path: filePath, state };
+  return isSubmodule
+    ? { path: filePath, state, submodule: true }
+    : { path: filePath, state };
 }
