@@ -786,6 +786,59 @@ button {
   flex: 0 0 auto;
 }
 .conv-head .title { font-weight: 600; font-size: 14px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Info icon next to the title. Borderless so it reads as an icon rather
+   than another action chip; the view-toggle / skip-perm chip own the
+   "click to do something" weight. */
+.conv-info-btn {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.conv-info-btn:hover { background: var(--bg-3); color: var(--text); }
+.conv-info-btn:focus-visible { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+/* SessionInfoDialog — label/value rows with an optional Copy button. */
+.sid-row {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+.sid-row + .sid-row { border-top: 1px solid var(--border); }
+.sid-row-label {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.sid-row-value {
+  font-size: 12.5px;
+  color: var(--text);
+  word-break: break-all;
+  min-width: 0;
+}
+.sid-row-value.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+.sid-row-copy {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  color: var(--text-dim);
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.sid-row-copy:hover { color: var(--text); border-color: var(--accent); }
 .skip-perm-chip {
   font-size: 10.5px;
   font-weight: 600;

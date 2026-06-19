@@ -4,6 +4,7 @@ import { TerminalPane } from './TerminalPane.js';
 import { TurnsPane } from './TurnsPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
 import { EditorErrorBoundary } from './EditorErrorBoundary.js';
+import { SessionInfoDialog } from './SessionInfoDialog.js';
 import type { Session } from '@shared/ipc.js';
 
 /** Newest Opus. Used as the implicit choice for any claude-code
@@ -184,6 +185,10 @@ export function MiddleColumn(): JSX.Element {
   }
 
   const [skipPermBusy, setSkipPermBusy] = useState(false);
+  // Session-info dialog is keyed on the actual session rather than a
+  // boolean so the dialog disappears cleanly if the user switches to
+  // another session while it's open.
+  const [infoFor, setInfoFor] = useState<Session | null>(null);
   async function toggleSkipPermissions(s: Session): Promise<void> {
     if (skipPermBusy) return;
     const turningOn = !s.skipPermissions;
@@ -229,6 +234,15 @@ export function MiddleColumn(): JSX.Element {
             <span className="title">
               {selectedProject?.name ?? 'project'} · {sessionLabel(selected)}
             </span>
+            <button
+              type="button"
+              className="conv-info-btn"
+              onClick={() => setInfoFor(selected)}
+              title="Session info — agent session id, worktree, baton id"
+              aria-label="Show session info"
+            >
+              ⓘ
+            </button>
             {(selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
               <div className="middle-view-toggle" role="tablist" aria-label="Terminal view">
                 <button
@@ -401,6 +415,7 @@ export function MiddleColumn(): JSX.Element {
           ) : null}
         </div>
       </div>
+      <SessionInfoDialog session={infoFor} onClose={() => setInfoFor(null)} />
     </main>
   );
 }
