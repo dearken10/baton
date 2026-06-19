@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { ConnectionProfile, Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
+import { NewTerminalDialog, type NewTerminalChoice } from './NewTerminalDialog.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
@@ -253,16 +254,31 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
-  /** Spawn a plain shell session — same xterm + scrollback path as
-   *  Claude sessions, just a login shell instead of `claude`. */
-  async function spawnTerminal(projectId: string): Promise<void> {
+  // "New terminal" opens a picker so the user can choose project root /
+  // existing worktree / new worktree from base. The actual spawn fires
+  // in submitNewTerminal() once they confirm. A direct one-click spawn
+  // in the project root would skip the choice; the dialog adds one
+  // click but unlocks the worktree cases without growing the menu.
+  const [terminalDialogProject, setTerminalDialogProject] =
+    useState<{ id: string; name: string; path: string } | null>(null);
+  function openTerminalDialog(p: Project): void {
+    setTerminalDialogProject({ id: p.id, name: p.name, path: p.path });
+  }
+  async function submitNewTerminal(choice: NewTerminalChoice): Promise<void> {
+    const target = terminalDialogProject;
+    if (!target) return;
     setBusy(true);
     try {
-      const { session } = await window.baton.call('session.spawn', {
-        projectId,
+      const params: Parameters<typeof window.baton.call<'session.spawn'>>[1] = {
+        projectId: target.id,
         backendId: 'shell',
-      });
+      };
+      if (choice.mode === 'existing') {
+        params.existingWorktreePath = choice.worktreePath;
+      }
+      const { session } = await window.baton.call('session.spawn', params);
       selectSession(session.id);
+      setTerminalDialogProject(null);
     } catch (err) {
       alert(`Terminal spawn failed: ${String(err)}`);
     } finally {
@@ -537,7 +553,7 @@ export function LeftColumn(): JSX.Element {
                 ];
                 window.alert(lines.join('\n'));
               }}
-              onNewTerminal={() => void spawnTerminal(p.id)}
+              onNewTerminal={() => openTerminalDialog(p)}
               onRenameProject={() => renameProjectInList(p)}
               onRemoveProject={() => void removeProjectFromList(p)}
               onToggleSnooze={() => void toggleSnoozeProject(p)}
@@ -556,6 +572,12 @@ export function LeftColumn(): JSX.Element {
         defaultBranch={worktreeDefault}
         onCancel={() => setWorktreeDialogProject(null)}
         onCreate={(branch) => void createWorktreeFromDialog(branch)}
+        busy={busy}
+      />
+      <NewTerminalDialog
+        project={terminalDialogProject}
+        onCancel={() => setTerminalDialogProject(null)}
+        onConfirm={(choice) => void submitNewTerminal(choice)}
         busy={busy}
       />
       {renamingProject ? (
