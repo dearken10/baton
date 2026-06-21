@@ -134,12 +134,29 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     term.loadAddon(webLinks);
 
     term.open(host);
+    // `fit.fit()` recomputes the row count from the host's current
+    // pixel height but it KEEPS the buffer-absolute scroll position.
+    // So when the container shrinks even by one row (split-handle
+    // drag, editor pane toggling, an inactive terminal-slot flipping
+    // from display:none back to flex) the viewport can land above
+    // the cursor — that's the "bottom is cut off until I press a
+    // key" symptom. Re-stick to the bottom after every fit when the
+    // user wasn't already scrolled up reading history.
+    const fitAndStick = (): void => {
+      let wasAtBottom = true;
+      try {
+        const buf = term.buffer.active;
+        wasAtBottom = buf.viewportY >= buf.baseY;
+      } catch { /* buffer not ready yet — treat as at-bottom */ }
+      try { fit.fit(); } catch { /* host may be unmounting */ }
+      if (wasAtBottom) {
+        try { term.scrollToBottom(); } catch { /* term may be tearing down */ }
+      }
+    };
     // Defer the first fit() so the host element has measured layout.
     // Without this, xterm throws "Cannot read properties of undefined
     // (reading 'dimensions')" on early ANSI input.
-    requestAnimationFrame(() => {
-      try { fit.fit(); } catch { /* host may be unmounting */ }
-    });
+    requestAnimationFrame(fitAndStick);
 
     // Replay previous scrollback BEFORE we attach the live pty data
     // subscription. Any live frames that arrive while we're loading
@@ -171,7 +188,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       if (pendingFit != null) return;
       pendingFit = requestAnimationFrame(() => {
         pendingFit = null;
-        try { fit.fit(); } catch { /* ignore */ }
+        fitAndStick();
       });
     });
     ro.observe(host);
@@ -215,9 +232,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     const saveInterval = window.setInterval(saveSnapshot, SCROLLBACK_SAVE_MS);
 
     // Fit on window resize.
-    const onWinResize = (): void => {
-      try { fit.fit(); } catch { /* ignore mid-mount fit errors */ }
-    };
+    const onWinResize = (): void => { fitAndStick(); };
     window.addEventListener('resize', onWinResize);
 
     // Live-restyle on theme toggle. xterm v5+ exposes per-property
