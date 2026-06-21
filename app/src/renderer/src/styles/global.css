@@ -360,10 +360,15 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* Snoozed project blocks render dimmer + with a subtle dashed
-   border so they don't look identical to live projects. */
-.project-block.snoozed .project-name { color: var(--text-dim); }
-.project-block.snoozed { opacity: 0.85; }
+/* Snoozed project blocks render dimmer so they don't look identical to
+   live projects. Dim via `color` rather than `opacity` — any ancestor
+   with `opacity < 1` (or filter / transform) creates a new stacking
+   context that traps the row-menu / spawn-menu popups beneath the next
+   sibling project block, leaving them un-clickable. */
+.project-block.snoozed .project-name,
+.project-block.snoozed .session-row .branch { color: var(--text-dim); }
+.project-block.snoozed .project-path,
+.project-block.snoozed .session-row .session-intent { color: var(--text-faint); }
 .snooze-meta {
   margin-left: 6px;
   color: var(--text-faint);
@@ -615,7 +620,12 @@ button {
   border-color: var(--accent);
   box-shadow: inset 3px 0 0 var(--accent);
 }
-.session-row.ended { opacity: 0.7; }
+/* Fade ended-row content but NOT the row itself — applying opacity to
+   `.session-row` would create a new stacking context that traps the
+   `.row-menu-pop` (z-index: 60) beneath the next sibling row's content,
+   leaving the menu items un-clickable. Scoping opacity to the
+   non-menu children keeps the visual fade without the stacking trap. */
+.session-row.ended > :not(.row-menu) { opacity: 0.7; }
 .session-row.ended .branch { color: var(--text-dim); }
 .session-row:disabled { cursor: progress; }
 /* Row-actions menu — hidden until the row is hovered, or while the
@@ -768,10 +778,10 @@ button {
 /* Pending session row: dim slightly + treat as inert. The spinner
    chip alone gives a strong "Starting…" signal; the dimming reinforces
    it for users who scan the list peripherally. */
-.session-row.pending {
-  cursor: progress;
-  opacity: 0.78;
-}
+.session-row.pending { cursor: progress; }
+/* Same opacity-stacking-context guard as .session-row.ended above — fade
+   the content but skip `.row-menu` so its popup stays clickable. */
+.session-row.pending > :not(.row-menu) { opacity: 0.78; }
 .session-row.pending .branch { color: var(--text-dim); }
 
 /* ── Middle column ────────────────────────────────────────── */
