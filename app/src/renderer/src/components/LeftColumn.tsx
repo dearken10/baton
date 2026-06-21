@@ -427,6 +427,28 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  async function cloneSession(s: Session): Promise<void> {
+    if (s.backendId !== 'claude-code' && s.backendId !== 'codex') return;
+    if (!s.claudeSessionId) {
+      alert(
+        'Cannot clone — the agent session id has not been captured yet. ' +
+        'Send the agent a first prompt and try again.'
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      const { session } = await window.baton.call('session.clone', {
+        sessionId: s.id,
+      });
+      selectSession(session.id);
+    } catch (err) {
+      alert(`Clone failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function deleteSession(s: Session): Promise<void> {
     const project = projectsRecord[s.projectId];
     const isWorktreeSession =
@@ -539,6 +561,7 @@ export function LeftColumn(): JSX.Element {
               onResume={resumeSession}
               onRename={renameSession}
               onDelete={deleteSession}
+              onClone={cloneSession}
               onToggleSessionSnooze={toggleSnoozeSession}
               onGetInfo={() => {
                 const conn = connections[p.connectionId];
@@ -612,6 +635,7 @@ interface ProjectBlockProps {
   onResume: (id: string) => void;
   onRename: (s: Session) => void;
   onDelete: (s: Session) => void;
+  onClone: (s: Session) => void;
   onToggleSessionSnooze: (s: Session) => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
@@ -634,7 +658,7 @@ const DRAG_SESSION = 'application/x-baton-session';
 function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, connection, sessions, selectedId,
-    onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onToggleSessionSnooze,
+    onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onToggleSessionSnooze,
     onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
     busy, pendingSessionIds,
   } = props;
@@ -797,6 +821,14 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
             // Rename is shown for ALL worktree sessions; for live ones
             // the handler will offer to stop the session first.
             const canRename = isWorktreeSession;
+            // Clone is only meaningful for the two agent backends and
+            // only once the agent's own session id has been captured
+            // (without it we have nothing to --resume). Hidden entirely
+            // for shell / pending / not-yet-captured rows so the menu
+            // doesn't gain a permanently-disabled item.
+            const canClone =
+              (s.backendId === 'claude-code' || s.backendId === 'codex') &&
+              !!s.claudeSessionId;
             return (
               <div
                 key={s.id}
@@ -860,9 +892,11 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                 ) : null}
                 <SessionRowMenu
                   canRename={canRename}
+                  canClone={canClone}
                   isSnoozed={isSnoozed}
                   onRename={() => onRename(s)}
                   onDelete={() => onDelete(s)}
+                  onClone={() => onClone(s)}
                   onToggleSnooze={() => onToggleSessionSnooze(s)}
                   busy={busy}
                 />
@@ -877,9 +911,11 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
 
 function SessionRowMenu(props: {
   canRename: boolean;
+  canClone: boolean;
   isSnoozed: boolean;
   onRename: () => void;
   onDelete: () => void;
+  onClone: () => void;
   onToggleSnooze: () => void;
   busy: boolean;
 }): JSX.Element {
@@ -928,6 +964,16 @@ function SessionRowMenu(props: {
               onClick={() => { setOpen(false); props.onRename(); }}
             >
               Rename
+            </button>
+          )}
+          {props.canClone && (
+            <button
+              className="row-menu-item"
+              role="menuitem"
+              onClick={() => { setOpen(false); props.onClone(); }}
+              title="Copy this session's transcript under a new id and resume it as a new session"
+            >
+              Clone
             </button>
           )}
           <button

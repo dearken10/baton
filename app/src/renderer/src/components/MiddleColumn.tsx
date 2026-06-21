@@ -415,7 +415,11 @@ export function MiddleColumn(): JSX.Element {
           ) : null}
         </div>
       </div>
-      <SessionInfoDialog session={infoFor} onClose={() => setInfoFor(null)} />
+      <SessionInfoDialog
+        session={infoFor}
+        onClose={() => setInfoFor(null)}
+        onCloned={(s) => selectSession(s.id)}
+      />
     </main>
   );
 }

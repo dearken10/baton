@@ -136,6 +136,25 @@ function claudeTranscriptExists(cwd: string, claudeSessionId: string): boolean {
   }
 }
 
+/** Where to land a freshly-minted Codex transcript when cloning.
+ *  Mirrors Codex's own `rollout-<isoTs>-<sessionId>.jsonl` shape inside
+ *  today's `~/.codex/sessions/YYYY/MM/DD` bucket so `findCodexTranscript`
+ *  picks it up on the next resume. */
+function newCodexTranscriptPath(newSessionId: string): string {
+  const root = process.env['CODEX_HOME']
+    ? path.join(process.env['CODEX_HOME'] as string, 'sessions')
+    : path.join(os.homedir(), '.codex', 'sessions');
+  const d = new Date();
+  const yyyy = String(d.getUTCFullYear());
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mi = String(d.getUTCMinutes()).padStart(2, '0');
+  const ss = String(d.getUTCSeconds()).padStart(2, '0');
+  const ts = `${yyyy}-${mm}-${dd}T${hh}-${mi}-${ss}`;
+  return path.join(root, yyyy, mm, dd, `rollout-${ts}-${newSessionId}.jsonl`);
+}
+
 /** True when the session's project lives on this Mac (local fs). For
  *  remote-pinned projects we can't easily check the transcript from
  *  here — it lives on the remote host under that user's `~/.claude`.
@@ -913,6 +932,87 @@ export class SessionManager {
       skipPermissions: row.skip_permissions === 1,
       model: row.model,
       reuseSessionId: row.id,
+    });
+  }
+
+  /**
+   * Fork a claude-code / codex session: copy the on-disk transcript
+   * under a fresh agent session id, then spawn a brand new baton
+   * session that --resumes from the copy. The original row is
+   * untouched, so the user can branch into an alternate timeline
+   * without giving up the trunk. Local-fs projects only — remote
+   * clone would need an SSH copy of the agent's transcript dir, which
+   * we haven't built yet.
+   */
+  async clone(sessionId: string): Promise<Session> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, worktree_path,
+                claude_session_id, skip_permissions, model
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string; project_id: string; backend_id: string;
+          worktree_path: string; claude_session_id: string | null;
+          skip_permissions: number; model: string | null;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+    if (row.backend_id !== 'claude-code' && row.backend_id !== 'codex') {
+      throw new Error(
+        `Cannot clone a ${row.backend_id} session — only claude-code and codex are supported.`
+      );
+    }
+    if (!row.claude_session_id) {
+      throw new Error(
+        'Cannot clone — no agent session id was captured for this session yet.'
+      );
+    }
+    if (!isLocalSessionProject(row.project_id)) {
+      throw new Error(
+        'Cannot clone — the source session lives on a remote host, ' +
+        'and remote transcript copy is not supported yet.'
+      );
+    }
+
+    const newAgentId = randomUUID();
+    if (row.backend_id === 'claude-code') {
+      const src = claudeTranscriptPath(row.worktree_path, row.claude_session_id);
+      if (!fs.existsSync(src)) {
+        throw new Error(
+          'Cannot clone — Claude has no transcript for this session ' +
+          '(it likely ended before any user message was sent).'
+        );
+      }
+      const dst = claudeTranscriptPath(row.worktree_path, newAgentId);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+    } else {
+      const src = findCodexTranscript(row.claude_session_id);
+      if (!src) {
+        throw new Error(
+          'Cannot clone — Codex has no transcript for this session ' +
+          '(it likely ended before any user message was sent).'
+        );
+      }
+      // Codex looks up by sessionId regardless of the date folder, so
+      // we land the copy in today's bucket: matches how a fresh codex
+      // session would name its own file. `findCodexTranscript` walks
+      // YYYY/MM/DD back 14 days from "today" — placing the clone in
+      // today's folder keeps it discoverable for the longest window.
+      const dst = newCodexTranscriptPath(newAgentId);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+    }
+
+    return this.spawn({
+      projectId: row.project_id,
+      backendId: row.backend_id as AgentBackendId,
+      cwd: row.worktree_path,
+      resumeAgentSessionId: newAgentId,
+      skipPermissions: row.skip_permissions === 1,
+      model: row.model,
     });
   }
 

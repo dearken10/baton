@@ -392,6 +392,13 @@ const SessionSetModelResponse = z.object({ session: Session });
 const SessionRespawnRequest = z.object({ sessionId: SessionId });
 const SessionRespawnResponse = z.object({ session: Session });
 
+/** Fork a claude-code / codex session: copy the on-disk transcript
+ *  under a fresh agent session id, then spawn a new baton session that
+ *  resumes from the copy. The original is untouched, so the user can
+ *  explore an alternate path without losing the trunk. */
+const SessionCloneRequest = z.object({ sessionId: SessionId });
+const SessionCloneResponse = z.object({ session: Session });
+
 const SessionDeleteRequest = z.object({
   sessionId: SessionId,
   /** Also `git worktree remove` and delete the worktree dir.
@@ -839,6 +846,7 @@ export const ControlVerbs = {
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },
   'session.respawn':    { request: SessionRespawnRequest,    response: SessionRespawnResponse },
+  'session.clone':      { request: SessionCloneRequest,      response: SessionCloneResponse },
   'session.toggleYolo': { request: SessionToggleYoloRequest, response: SessionToggleYoloResponse },
   'session.setModel':   { request: SessionSetModelRequest,   response: SessionSetModelResponse },
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },

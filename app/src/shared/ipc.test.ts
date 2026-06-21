@@ -67,6 +67,7 @@ describe('control verb registry', () => {
         "pty.write",
         "scrollback.load",
         "scrollback.save",
+        "session.clone",
         "session.delete",
         "session.kill",
         "session.list",

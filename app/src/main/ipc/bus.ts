@@ -242,6 +242,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const session = await getSessionManager().respawn(req.sessionId);
     return { session };
   },
+  'session.clone': async (req) => {
+    const session = await getSessionManager().clone(req.sessionId);
+    return { session };
+  },
   'session.toggleYolo': async (req) => {
     const session = await getSessionManager().toggleYolo(req.sessionId);
     return { session };

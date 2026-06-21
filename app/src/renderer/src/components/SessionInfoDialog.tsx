@@ -5,6 +5,10 @@ interface Props {
   /** Open when non-null. */
   session: Session | null;
   onClose: () => void;
+  /** Called once `session.clone` succeeds with the new session, so the
+   *  parent can select it in the UI. The dialog closes itself either
+   *  way. Omit to hide the Clone button. */
+  onCloned?: (session: Session) => void;
 }
 
 /**
@@ -18,7 +22,10 @@ interface Props {
  * `claudeSessionId` field (the column is named after Claude for
  * historical reasons); we label the row dynamically based on backendId.
  */
-export function SessionInfoDialog({ session, onClose }: Props): JSX.Element | null {
+export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.Element | null {
+  const [cloning, setCloning] = useState(false);
+  const [cloneError, setCloneError] = useState<string | null>(null);
+
   // Esc to close — match the other dialogs' behaviour.
   useEffect(() => {
     if (!session) return;
@@ -29,12 +36,43 @@ export function SessionInfoDialog({ session, onClose }: Props): JSX.Element | nu
     return () => document.removeEventListener('keydown', onKey);
   }, [session, onClose]);
 
+  // Reset transient clone state when the dialog opens for a different
+  // session — otherwise a leftover error from one session would haunt
+  // the next.
+  useEffect(() => {
+    setCloning(false);
+    setCloneError(null);
+  }, [session?.id]);
+
   if (!session) return null;
 
   const backendLabel = backendLabelFor(session.backendId);
   const agentSessionLabel =
     session.backendId === 'codex' ? 'Codex session id' : 'Claude session id';
   const agentSessionId = session.claudeSessionId;
+  // Cloning forks the transcript: only supported on the two agent
+  // backends and only once the agent's own session id has been captured.
+  const cloneSupported =
+    onCloned !== undefined &&
+    (session.backendId === 'claude-code' || session.backendId === 'codex');
+  const canClone = cloneSupported && agentSessionId != null;
+
+  async function handleClone(): Promise<void> {
+    if (!session || !onCloned || !canClone || cloning) return;
+    setCloning(true);
+    setCloneError(null);
+    try {
+      const { session: cloned } = await window.baton.call('session.clone', {
+        sessionId: session.id,
+      });
+      onCloned(cloned);
+      onClose();
+    } catch (err) {
+      setCloneError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setCloning(false);
+    }
+  }
 
   return (
     <div
@@ -66,7 +104,26 @@ export function SessionInfoDialog({ session, onClose }: Props): JSX.Element | nu
           />
         </div>
 
+        {cloneError ? (
+          <div className="dialog-error" role="alert">{cloneError}</div>
+        ) : null}
+
         <div className="dialog-actions">
+          {cloneSupported ? (
+            <button
+              type="button"
+              className="btn"
+              onClick={handleClone}
+              disabled={!canClone || cloning}
+              title={
+                canClone
+                  ? 'Copy this session\'s transcript under a new id and resume it as a new session'
+                  : 'Clone needs the agent session id, which is captured after the first prompt'
+              }
+            >
+              {cloning ? 'Cloning…' : 'Clone'}
+            </button>
+          ) : null}
           <button type="button" className="btn primary" onClick={onClose}>
             Close
           </button>
