@@ -34,6 +34,7 @@ import type {
   AgentHandle,
   AgentSpawnOpts,
 } from './agentBackend.js';
+import type { PermissionMode } from '../../shared/ipc.js';
 import { getHookServer } from './hookServer.js';
 import { trustDirectoryForCodex } from './codexTrust.js';
 
@@ -44,9 +45,11 @@ export interface CodexSpawnOpts extends AgentSpawnOpts {
   /** When set, spawn with `codex resume <id>` to reload a prior
    *  conversation. */
   resumeAgentSessionId?: string;
-  /** When true, pass `--dangerously-bypass-approvals-and-sandbox`
-   *  (Codex's YOLO equivalent). */
-  skipPermissions?: boolean;
+  /** Tool-permission posture. Codex has no intermediate modes, so only
+   *  'bypassPermissions' is actionable here — it maps to
+   *  `--dangerously-bypass-approvals-and-sandbox`. Every other value
+   *  (including 'default') leaves Codex in its prompt-each-tool mode. */
+  permissionMode?: PermissionMode;
 }
 
 const HOOK_EVENTS = [
@@ -125,7 +128,7 @@ export class CodexBackend implements AgentBackend {
     // We wrote the profile ourselves — skip Codex's hook-trust prompt
     // so the agent doesn't block on first-run confirmation.
     args.push('--dangerously-bypass-hook-trust');
-    if (opts.skipPermissions) {
+    if (opts.permissionMode === 'bypassPermissions') {
       args.push('--dangerously-bypass-approvals-and-sandbox');
     }
     // `--cd` is equivalent to pty.spawn's cwd, but Codex respects this
