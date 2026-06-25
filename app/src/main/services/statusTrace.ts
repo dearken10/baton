@@ -27,9 +27,9 @@
  * disk never blocks a status transition.
  */
 
-import { app } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { batonHome } from '../paths.js';
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
@@ -40,7 +40,7 @@ function init(): void {
   if (initialized) return;
   initialized = true;
   try {
-    const dir = path.join(app.getPath('home'), '.baton', 'logs');
+    const dir = path.join(batonHome(), 'logs');
     fs.mkdirSync(dir, { recursive: true });
     logPath = path.join(dir, 'status-trace.log');
   } catch {

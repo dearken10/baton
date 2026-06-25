@@ -1097,6 +1097,18 @@ hook server sweeps `hooks-<pid>.sock` files whose owner pid is gone
 (`process.kill(pid, 0)` → `ESRCH`) but never touches a live peer's
 socket.
 
+**Multiple instances (`BATON_HOME`).** The per-PID hook socket lets two
+instances coexist, but they still share one `~/.baton/baton.db` (and
+scrollback, logs, ssh control sockets, plus Electron's own `userData`
+profile). Setting the `BATON_HOME` env var relocates the entire baton
+data tree — db, scrollback, logs, hook socket/forwarder, ssh sockets —
+and, in `main/index.ts`, repoints Electron's `userData` to
+`$BATON_HOME/electron` so Chromium's `SingletonLock` and caches don't
+collide either. Unset, it defaults to `~/.baton`. All call sites resolve
+the base dir through `batonHome()` in `app/src/main/paths.ts`; nothing
+re-derives `<home>/.baton` independently. Launch a fully independent
+instance with e.g. `BATON_HOME=~/.baton-work <run baton>`.
+
 **Diagnostics: status trace log.** Every state-machine transition,
 hook receipt, summary call, IPC emit, and idle sweep is appended
 to `~/.baton/logs/status-trace.log` as a single grep-friendly line
