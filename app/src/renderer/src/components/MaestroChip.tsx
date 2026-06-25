@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ResponseOf } from '@shared/ipc.js';
 import { useMaestroUI } from './maestroUI.js';
+import { useAppStore, selectRunningAgentCount } from '../store.js';
 
 type State = ResponseOf<'maestro.getState'>;
 
@@ -21,6 +22,7 @@ export function MaestroChip(): JSX.Element | null {
   const toggleFullScreen = useMaestroUI((s) => s.toggleFullScreen);
   const fullScreen = useMaestroUI((s) => s.fullScreen);
   const lastActivityAt = useMaestroUI((s) => s.lastActivityAt);
+  const runningAgents = useAppStore(selectRunningAgentCount);
   // Re-render every 10 s so the title's idle-time hint stays accurate
   // without polling main more often than necessary.
   const [, setTick] = useState(0);
@@ -57,7 +59,7 @@ export function MaestroChip(): JSX.Element | null {
         aria-pressed={fullScreen}
         title={fullScreen
           ? 'Maestro is in full-screen — click to return to workspace'
-          : chipTitle(state, lastActivityAt)}
+          : chipTitle(state, lastActivityAt, runningAgents)}
       >
         <span className="maestro-glyph" aria-hidden>🎼</span>
         <span className="maestro-label">{badge}</span>
@@ -82,7 +84,7 @@ function chipBadge(s: State): string {
   return `${acts}/${s.tickCount}`;
 }
 
-function chipTitle(s: State, lastActivityMs: number): string {
+function chipTitle(s: State, lastActivityMs: number, runningAgents: number): string {
   if (s.paused) return 'Maestro — paused (click for full-screen)';
   if (!s.paused && !s.daemonRunning && s.tickCount > 0) {
     return "Maestro — active but daemon isn't running (click for full-screen to Restart)";
@@ -90,14 +92,19 @@ function chipTitle(s: State, lastActivityMs: number): string {
   if (!s.daemonRunning && s.tickCount === 0) {
     return 'Maestro — off (click for full-screen to activate)';
   }
-  const idle = fmtIdle(s, lastActivityMs);
+  const idle = fmtIdle(s, lastActivityMs, runningAgents);
   if (!s.daemonRunning) {
     return `Maestro — daemon off · tick ${s.tickCount} · ${idle} (click for full-screen)`;
   }
   return `Maestro — tick ${s.tickCount} · ${idle} (click for full-screen)`;
 }
 
-function fmtIdle(s: State, lastActivityMs: number): string {
+function fmtIdle(s: State, lastActivityMs: number, runningAgents: number): string {
+  // Countdown is parked while any agent is mid-response — daemon's
+  // idle gate also skips, so the local UI just mirrors that.
+  if (runningAgents > 0) {
+    return `gated · ${runningAgents} agent${runningAgents === 1 ? '' : 's'} running`;
+  }
   const thresholdSec = s.idleThresholdMin * 60;
   const sinceSec = Math.max(0, Math.floor((Date.now() - lastActivityMs) / 1000));
   const remaining = thresholdSec - sinceSec;

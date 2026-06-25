@@ -473,6 +473,25 @@ useAppStore.subscribe((s) => {
 export const selectSessionCount = (s: AppState): number =>
   Object.keys(s.sessions).length;
 
+/** Count of agent sessions currently mid-response. The Maestro
+ *  countdown short-circuits to "paused" when this is non-zero: ticks
+ *  would either collide with the live agent or get gated anyway by
+ *  the planner's F15.1 rules, so spending the tick budget is waste.
+ *
+ *  - Shells excluded: a login shell or dev-server pty stays `running`
+ *    for its lifetime; that's NOT evidence the user is engaged.
+ *  - Snoozed excluded: same logic as the planner's gate. */
+export const selectRunningAgentCount = (s: AppState): number => {
+  let n = 0;
+  for (const sess of Object.values(s.sessions)) {
+    if (sess.status !== 'running') continue;
+    if (sess.backendId !== 'claude-code' && sess.backendId !== 'codex') continue;
+    if (sess.snoozedAt != null) continue;
+    n++;
+  }
+  return n;
+};
+
 export const selectProjectCount = (s: AppState): number =>
   Object.keys(s.projects).length;
 

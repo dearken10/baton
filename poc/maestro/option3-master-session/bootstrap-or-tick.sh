@@ -185,6 +185,30 @@ if [[ -e "$PAUSED_FLAG" ]]; then
   exit 0
 fi
 
+# Active-agent gate: skip the tick when any agent session (claude-code
+# or codex; shells don't count — those are dev servers / login shells
+# that stay "running" for their lifetime) is currently mid-response.
+# Two reasons:
+#   1. The user is engaged with that session; Maestro acting in
+#      parallel chews into the same plan budget and risks colliding
+#      with whatever the user is doing.
+#   2. Tick output (a multi-second `claude` call) is wasted work if
+#      we'd just defer everything once the planner sees the active
+#      session in the F15.1 gate anyway.
+# --force still bypasses (the "Run now" button is explicit user intent).
+if (( FORCE == 0 )) && [[ -f "$BATON_DB" ]]; then
+  running_agents="$(sqlite3 "$BATON_DB" \
+    "SELECT COUNT(*) FROM sessions
+       WHERE status = 'running'
+         AND backend_id IN ('claude-code', 'codex')
+         AND ended_at IS NULL
+         AND snoozed_at IS NULL;" 2>/dev/null || echo 0)"
+  if [[ "$running_agents" =~ ^[0-9]+$ ]] && (( running_agents > 0 )); then
+    echo "$(date -Iseconds) skip: $running_agents agent session(s) running; tick gated"
+    exit 0
+  fi
+fi
+
 # Idle gate: only tick when the user has been idle (no mousemove,
 # click, or keypress in baton) for at least MAESTRO_IDLE_MIN_MIN
 # minutes. The renderer writes a heartbeat to LAST_ACTIVITY_FILE on

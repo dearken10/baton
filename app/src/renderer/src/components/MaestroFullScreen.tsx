@@ -18,6 +18,7 @@ import type { ResponseOf } from '@shared/ipc.js';
 import { useMaestroUI } from './maestroUI.js';
 import { MaestroSessionView } from './MaestroSessionView.js';
 import { MaestroSessionTerminal } from './MaestroSessionTerminal.js';
+import { useAppStore, selectRunningAgentCount } from '../store.js';
 
 type State = ResponseOf<'maestro.getState'>;
 type Session = ResponseOf<'maestro.getSession'>;
@@ -41,6 +42,7 @@ export function MaestroFullScreen(): JSX.Element {
   const [userPickedTick, setUserPickedTick] = useState(false);
 
   const lastActivityAt = useMaestroUI((s) => s.lastActivityAt);
+  const runningAgents = useAppStore(selectRunningAgentCount);
   // 1-Hz heartbeat so the banner countdown re-renders every second
   // without polling main. The countdown is a pure function of clocks +
   // state.
@@ -148,7 +150,7 @@ export function MaestroFullScreen(): JSX.Element {
     return <div className="maestro-full"><div className="maestro-full-empty">Loading Maestro state…</div></div>;
   }
 
-  const idle = computeIdle(state, lastActivityAt);
+  const idle = computeIdle(state, lastActivityAt, runningAgents);
   const runNowDisabled = state.paused || runNowPending;
 
   return (
@@ -271,6 +273,10 @@ interface IdleSummary {
 /** Compute what to show in the banner countdown.
  *
  *  - paused: explicit; no countdown.
+ *  - any agent running: countdown frozen (matches the daemon's active-
+ *    agent gate in bootstrap-or-tick.sh — ticks wouldn't fire while
+ *    another agent is mid-response, so the UI shouldn't pretend to
+ *    count down toward something).
  *  - active (idle for less than ~5 s): "active · waiting for Nm of idle".
  *  - counting down: "Nm Ss until ready".
  *  - ready: "ready — next poll fires it" (the daemon polls on a short
@@ -282,8 +288,15 @@ interface IdleSummary {
 function computeIdle(
   state: NonNullable<ResponseOf<'maestro.getState'>>,
   rendererLastActivityMs: number,
+  runningAgents: number,
 ): IdleSummary {
   if (state.paused) return { label: 'paused', tone: 'paused' };
+  if (runningAgents > 0) {
+    return {
+      label: `gated · ${runningAgents} agent${runningAgents === 1 ? '' : 's'} running`,
+      tone: 'paused',
+    };
+  }
   const thresholdSec = state.idleThresholdMin * 60;
   const sinceActSec = Math.max(0, Math.floor((Date.now() - rendererLastActivityMs) / 1000));
   const remainingSec = thresholdSec - sinceActSec;
