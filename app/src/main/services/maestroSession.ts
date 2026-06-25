@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { app } from 'electron';
 
 import type { ResponseOf } from '../../shared/ipc.js';
+import { batonHome } from '../paths.js';
 
 type SessionResponse = ResponseOf<'maestro.getSession'>;
 type Tick = SessionResponse['ticks'][number];
@@ -29,14 +30,23 @@ const TOOL_RESULT_PREVIEW_BYTES = 1_024;
 const TOOL_INPUT_PREVIEW_CHARS = 200;
 const DEFAULT_TICK_LIMIT = 50;
 
+/** Per-instance tick state — session-id pointer + plans/ archive.
+ *  Routed through batonHome() so two baton instances see independent
+ *  tick history. Must match bootstrap-or-tick.sh's STATE_DIR and
+ *  maestroState.ts:maestroStateDir(). */
 function maestroStateDir(): string {
-  const appPath = app.getAppPath();
-  const repoRoot = join(appPath, '..');
-  return join(repoRoot, 'poc', 'maestro', 'option3-master-session', 'state');
+  return join(batonHome(), 'maestro', 'state');
 }
 
+/** Repo root where the master-mind session was bootstrapped. The
+ *  Claude Code CLI sanitizes this path into the JSONL directory name
+ *  (~/.claude/projects/<sanitized-cwd>/), so we need the exact same
+ *  cwd that bootstrap-or-tick.sh used when it spawned `claude`. Both
+ *  scripts invoke claude with cwd=$REPO_ROOT, which we resolve via the
+ *  Electron app path. */
 function masterRepoRoot(): string {
-  return join(maestroStateDir(), '..', '..', '..', '..');
+  const appPath = app.getAppPath();
+  return join(appPath, '..');
 }
 
 /** Sanitize a cwd to the directory name Claude Code uses under
