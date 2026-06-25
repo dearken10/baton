@@ -7,8 +7,10 @@
  * unattended, even with the mode toggle set to "run". This closes
  * that loop:
  *
- *   1. Watch `poc/maestro/option2-claude-skill/last-plan.json` for
- *      mtime changes.
+ *   1. Watch `<batonHome()>/maestro/state/last-plan.json` for mtime
+ *      changes — bootstrap-or-tick.sh exports MAESTRO_PLAN_PATH
+ *      pointing at the same file, so the skill, the executor, and
+ *      the renderer all agree on the per-instance plan location.
  *   2. On change, if `mode == act-first` AND not paused, iterate the
  *      plan's actions in confidence-descending order.
  *   3. For each, run a defense-in-depth safety bar (the planner is
@@ -40,7 +42,6 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, appendFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { app } from 'electron';
 
 import type { ResponseOf } from '../../shared/ipc.js';
 import { getDatabase } from '../database/index.js';
@@ -71,10 +72,9 @@ interface PlanFromDisk {
 const POLL_INTERVAL_MS = 5_000;
 
 function planFilePath(): string {
-  // Mirrors maestroState.ts: walk one level up from app/ to the repo
-  // root, then into the option-2 PoC dir where the skill writes.
-  const repoRoot = join(app.getAppPath(), '..');
-  return join(repoRoot, 'poc', 'maestro', 'option2-claude-skill', 'last-plan.json');
+  // Per-instance — matches MAESTRO_PLAN_PATH from bootstrap-or-tick.sh
+  // (which always sets it to <BATON_HOME>/maestro/state/last-plan.json).
+  return join(maestroDir(), 'state', 'last-plan.json');
 }
 
 function maestroDir(): string {

@@ -28,17 +28,21 @@ set -euo pipefail
 # ------------------------------------------------------------------
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../../.." && pwd)"
-STATE_DIR="$HERE/state"
-SESSION_ID_FILE="$STATE_DIR/session-id"
-TICK_COUNT_FILE="$STATE_DIR/tick-count"
-LAST_TICK_LOG="$STATE_DIR/last-tick.log"
-LOCK_FILE="$STATE_DIR/tick.lock"
 # BATON_HOME isolates Maestro state per baton instance (dev build vs
 # installed build, work vs personal). Inherited from maestrod.sh
 # (which itself reads the Electron parent's env) or falls back to the
 # default ~/.baton when invoked standalone.
 BATON_HOME_DIR="${BATON_HOME:-$HOME/.baton}"
 BATON_DB="$BATON_HOME_DIR/baton.db"
+# All per-tick state lives under BATON_HOME so two baton instances on
+# the same repo checkout (different BATON_HOMEs) don't share their
+# session-id, tick-count, log, or last-plan.json. The scripts stay in
+# the repo (they're code, not state).
+STATE_DIR="$BATON_HOME_DIR/maestro/state"
+SESSION_ID_FILE="$STATE_DIR/session-id"
+TICK_COUNT_FILE="$STATE_DIR/tick-count"
+LAST_TICK_LOG="$STATE_DIR/last-tick.log"
+LOCK_FILE="$STATE_DIR/tick.lock"
 # Paused flag is shared with the UI (the MaestroChip toggle writes here
 # via the maestro.setPaused IPC). File presence == paused.
 PAUSED_FLAG="$BATON_HOME_DIR/maestro/paused"
@@ -50,8 +54,14 @@ MODE_FILE="$BATON_HOME_DIR/maestro/mode"
 # user's idle time. Missing file = treat as "idle forever" (i.e. the
 # UI is not running; tick is allowed).
 LAST_ACTIVITY_FILE="$BATON_HOME_DIR/maestro/last-activity"
+# Plan-path env var read by the maestro-tick skill. The skill writes
+# its JSON to whatever this points at; the auto-executor + renderer
+# read from the same location. Putting it under STATE_DIR (not the
+# repo) is what gives instance isolation.
+PLAN_FILE="$STATE_DIR/last-plan.json"
 mkdir -p "$STATE_DIR" "$BATON_HOME_DIR/maestro"
 export BATON_HOME="$BATON_HOME_DIR"
+export MAESTRO_PLAN_PATH="$PLAN_FILE"
 
 current_mode() {
   if [[ -s "$MODE_FILE" ]]; then
@@ -306,15 +316,12 @@ if [[ ! -s "$SESSION_ID_FILE" ]]; then
   echo -n "$SID" > "$SESSION_ID_FILE"
 fi
 
-# The skill writes to option 2's path by spec. Snapshot it next to
-# option 3 so the comparison + history live here too. (Numbered by
-# tick count so the trace stays.)
-SHARED_PLAN="$REPO_ROOT/poc/maestro/option2-claude-skill/last-plan.json"
-if [[ -f "$SHARED_PLAN" ]]; then
-  cp "$SHARED_PLAN" "$HERE/last-plan.json"
+# Archive this tick's plan under STATE_DIR/plans/ for trace. The skill
+# already wrote it to $PLAN_FILE; we just snapshot a numbered copy.
+if [[ -f "$PLAN_FILE" ]]; then
   tc_next="$(($(current_tick_count) + 1))"
   mkdir -p "$STATE_DIR/plans"
-  cp "$SHARED_PLAN" "$STATE_DIR/plans/tick-$(printf '%04d' "$tc_next").json"
+  cp "$PLAN_FILE" "$STATE_DIR/plans/tick-$(printf '%04d' "$tc_next").json"
 fi
 
 # Tag the baton row so dry-run's F15.1 gate exempts it next tick.

@@ -31,10 +31,18 @@ move on. The instructions below apply identically either way.
 
 ## What you produce
 
-A single JSON file at `poc/maestro/option2-claude-skill/last-plan.json`
-with the schema below. **Nothing else.** No commits, no agent prompts
-delivered, no worktree mutations — this skill is propose-only by
-construction.
+A single JSON file at the path in the `MAESTRO_PLAN_PATH` environment
+variable (resolve with `echo "$MAESTRO_PLAN_PATH"` from Bash; for
+standalone runs without bootstrap-or-tick.sh, default to
+`${BATON_HOME:-$HOME/.baton}/maestro/state/last-plan.json` and create
+the directory first). The schema is below. **Nothing else.** No
+commits, no agent prompts delivered, no worktree mutations — this
+skill is propose-only by construction.
+
+Why the env var: baton supports multiple instances on one machine via
+`BATON_HOME`; bootstrap-or-tick.sh exports `MAESTRO_PLAN_PATH` per
+instance so two daemons running off the same repo checkout don't
+overwrite each other's plan.
 
 ## Step 1 — Collect the inventory
 
@@ -200,9 +208,15 @@ already drops those.
 
 ## Step 8 — Write `last-plan.json`
 
-Write the JSON below to `poc/maestro/option2-claude-skill/last-plan.json`
+Write the JSON below to the path in the `MAESTRO_PLAN_PATH` env var
 (create the directory if needed). Sort actions by `confidence`
 descending. Maximum 5 actions per tick.
+
+```bash
+PLAN_PATH="${MAESTRO_PLAN_PATH:-${BATON_HOME:-$HOME/.baton}/maestro/state/last-plan.json}"
+mkdir -p "$(dirname "$PLAN_PATH")"
+# then use the Write tool with "$PLAN_PATH" as the file path
+```
 
 ```jsonc
 {

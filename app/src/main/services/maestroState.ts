@@ -90,17 +90,25 @@ function readMode(): Mode {
   return DEFAULT_MODE;
 }
 
+/** Per-instance Maestro tick state — session-id, tick-count,
+ *  last-tick.log, last-tick-success, plans/, last-plan.json.
+ *
+ *  Lives under <batonHome()>/maestro/state so two baton instances on
+ *  the same repo checkout (different BATON_HOMEs) don't share their
+ *  tick count or session id. Mirrors what bootstrap-or-tick.sh sets
+ *  STATE_DIR to. */
 function maestroStateDir(): string {
-  // The PoC lives under poc/maestro/option3-master-session/state/ in
-  // the repo. When the Electron app is unpackaged in dev we can find
-  // the repo via app.getAppPath() (points to `app/`). When packaged
-  // we don't expect the PoC to be present at all — return a path that
-  // won't exist, and the rest of the function deals with it.
+  return join(maestroDir(), 'state');
+}
+
+/** Repo dir where the PoC scripts (maestrod.sh + bootstrap-or-tick.sh)
+ *  live. Separate from maestroStateDir — scripts are code (per repo
+ *  checkout), state is data (per BATON_HOME). Resolved via the
+ *  Electron app path. */
+function maestrodScriptDir(): string {
   const appPath = app.getAppPath();
-  // appPath at dev time → <repo>/app
-  // Walk one level up to find the repo root.
   const repoRoot = join(appPath, '..');
-  return join(repoRoot, 'poc', 'maestro', 'option3-master-session', 'state');
+  return join(repoRoot, 'poc', 'maestro', 'option3-master-session');
 }
 
 function readTextSafe(p: string): string | null {
@@ -154,12 +162,12 @@ function daemonLogPath(): string {
   return join(maestroDir(), 'daemon.log');
 }
 function maestrodScriptPath(): string {
-  return join(maestroStateDir(), '..', 'maestrod.sh');
+  return join(maestrodScriptDir(), 'maestrod.sh');
 }
 function repoRootForMaestrod(): string {
   // bootstrap-or-tick.sh expects to be invoked from the repo root, so
   // the daemon (which calls into it) needs that cwd too.
-  return join(maestroStateDir(), '..', '..', '..', '..');
+  return join(maestrodScriptDir(), '..', '..', '..');
 }
 
 function readDaemonPid(): number | null {
@@ -275,12 +283,13 @@ export function getMaestroState(): State {
   if (cache && now - cache.at < CACHE_TTL_MS) return cache.value;
 
   const stateDir = maestroStateDir();
-  const stateRoot = join(stateDir, '..');
 
   const sessionId = readTextSafe(join(stateDir, 'session-id'));
   const tickCountStr = readTextSafe(join(stateDir, 'tick-count'));
   const tickCount = tickCountStr ? Number.parseInt(tickCountStr, 10) : 0;
-  const installed = existsSync(stateDir) || existsSync(stateRoot);
+  // "Installed" = the PoC scripts are present in the repo. State dir
+  // may be empty on first launch under a fresh BATON_HOME.
+  const installed = existsSync(maestrodScriptPath());
   const bloatWarning = existsSync(join(stateDir, 'bloat-warning'));
 
   const lastTickAt = fileMtimeIso(join(stateDir, 'last-tick.log'));
@@ -301,7 +310,7 @@ export function getMaestroState(): State {
   } catch { /* ignore */ }
 
   const planDisk = readJsonSafe<PlanFromDisk>(
-    join(stateRoot, 'last-plan.json')
+    join(stateDir, 'last-plan.json')
   );
 
   const value: State = {
@@ -378,9 +387,9 @@ export function reconcileMaestroOnStartup(): {
   acted: 'spawned' | 'killed' | 'noop';
   reason?: string;
 } {
-  const stateDir = maestroStateDir();
-  // If the PoC isn't checked out (no state dir, no script), do nothing.
-  if (!existsSync(stateDir) && !existsSync(maestrodScriptPath())) {
+  // If the PoC scripts aren't checked out, do nothing — the state
+  // dir under BATON_HOME is created lazily by the scripts themselves.
+  if (!existsSync(maestrodScriptPath())) {
     return { acted: 'noop', reason: 'PoC not installed' };
   }
   const paused = existsSync(pausedFlagPath());
@@ -440,7 +449,7 @@ const RUN_NOW_MAX_WAIT_MS = 10 * 60_000;
  *  process-group leader; we deliberately do NOT `unref()` so the
  *  parent's event loop holds the wait until exit. */
 export function runMaestroNow(): Promise<{ ok: boolean; reason: string | null }> {
-  const script = join(maestroStateDir(), '..', 'bootstrap-or-tick.sh');
+  const script = join(maestrodScriptDir(), 'bootstrap-or-tick.sh');
   if (!existsSync(script)) {
     return Promise.resolve({ ok: false, reason: `bootstrap-or-tick.sh not found at ${script}` });
   }
