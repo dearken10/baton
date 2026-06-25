@@ -9,10 +9,10 @@
  * deadlocked main process never freezes Claude.
  */
 
-import { app } from 'electron';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
+import { batonHome } from '../paths.js';
 import { HOOK_FORWARDER_SCRIPT } from './hookForwarderSource.js';
 import { trace, shortSid } from './statusTrace.js';
 
@@ -40,12 +40,12 @@ export class HookServer {
    *  Claude sessions' hooks, leaving the earlier instance's chips
    *  permanently stuck at `running`. */
   sockPath(): string {
-    return path.join(app.getPath('home'), '.baton', `hooks-${process.pid}.sock`);
+    return path.join(batonHome(), `hooks-${process.pid}.sock`);
   }
 
   /** Path of the hook-forwarder.js script on disk. */
   forwarderPath(): string {
-    return path.join(app.getPath('home'), '.baton', 'hook-forwarder.js');
+    return path.join(batonHome(), 'hook-forwarder.js');
   }
 
   /** Best-effort: remove `hooks-*.sock` files whose owner process is
@@ -81,7 +81,7 @@ export class HookServer {
   async start(handler: HookHandler): Promise<void> {
     this.handler = handler;
 
-    const dir = path.join(app.getPath('home'), '.baton');
+    const dir = batonHome();
     fs.mkdirSync(dir, { recursive: true });
 
     // Write (or rewrite) the forwarder script and make it executable.

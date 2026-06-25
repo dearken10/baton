@@ -11,10 +11,10 @@
  * everything else lands in migration files keyed by user_version.
  */
 
-import { app } from 'electron';
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { batonHome } from '../paths.js';
 
 let db: Database.Database | null = null;
 
@@ -89,7 +89,7 @@ CREATE TABLE IF NOT EXISTS connection_profiles (
 
 export function initDatabase(): Database.Database {
   if (db) return db;
-  const dir = join(app.getPath('home'), '.baton');
+  const dir = batonHome();
   mkdirSync(dir, { recursive: true });
   db = new Database(join(dir, 'baton.db'));
   db.exec(SCHEMA);

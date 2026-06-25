@@ -28,6 +28,7 @@ import {
   type ResponseOf,
 } from '../../shared/ipc.js';
 import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed } from '../services/projectStore.js';
+import { batonHome } from '../paths.js';
 import {
   listConnections,
   createConnection,
@@ -761,7 +762,7 @@ function tryResolveWorktreePath(sessionId: string): string | null {
 /** Per-session scrollback file path. Lives under ~/.baton/scrollback/
  *  alongside the other per-project app state. */
 function scrollbackPath(sessionId: string): string {
-  return path.join(app.getPath('home'), '.baton', 'scrollback', `${sessionId}.bin`);
+  return path.join(batonHome(), 'scrollback', `${sessionId}.bin`);
 }
 
 /** Comma-separated glob list → trimmed string[] (drops empties). */

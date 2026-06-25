@@ -30,6 +30,7 @@ import {
   type SessionStatus,
 } from '../../shared/ipc.js';
 import { getDatabase } from '../database/index.js';
+import { batonHome } from '../paths.js';
 import type { AgentBackend, AgentHandle } from './agentBackend.js';
 import { ClaudeCodeBackend } from './claudeCodeBackend.js';
 import { CodexBackend } from './codexBackend.js';
@@ -1313,7 +1314,7 @@ export class SessionManager {
       getDatabase().prepare('DELETE FROM sessions WHERE id = ?').run(sessionId);
       // Best-effort: clean up the per-session scrollback file (F8.8).
       try {
-        fs.unlinkSync(path.join(os.homedir(), '.baton', 'scrollback', `${sessionId}.bin`));
+        fs.unlinkSync(path.join(batonHome(), 'scrollback', `${sessionId}.bin`));
       } catch { /* already gone */ }
       emit({ type: 'session.deleted', sessionId });
 

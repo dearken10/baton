@@ -24,6 +24,12 @@ import { getSessionManager } from './services/sessionManager.js';
 import { addProject } from './services/projectStore.js';
 import { startNotifier } from './services/notifier.js';
 import { warmAllConnections, dropAllConnections } from './services/fs/registry.js';
+import { applyBatonUserDataOverride } from './paths.js';
+
+// When BATON_HOME is set, relocate Electron's own profile dir under it
+// so a second instance doesn't collide with the default userData (its
+// Chromium SingletonLock and caches). Must run before `app` is ready.
+applyBatonUserDataOverride();
 
 /**
  * Per PRD NF6: tight CSP in production. In dev we relax it just

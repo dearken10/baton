@@ -19,7 +19,6 @@
 
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { mkdirSync, existsSync, unlinkSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import type {
@@ -28,8 +27,9 @@ import type {
 } from '../../../shared/ipc.js';
 import { emit } from '../eventBus.js';
 import { getDatabase } from '../../database/index.js';
+import { batonHome } from '../../paths.js';
 
-const SSH_DIR = join(homedir(), '.baton', 'ssh');
+const sshDir = (): string => join(batonHome(), 'ssh');
 
 const RECONNECT_INTERVALS_MS = [2_000, 4_000, 8_000, 15_000, 30_000];
 
@@ -48,7 +48,7 @@ interface RawExecResult {
 function controlPathFor(profileId: string): string {
   // 12-char prefix is enough to disambiguate; we tag with the host so
   // the user can recognise stale sockets via `ls`.
-  return join(SSH_DIR, `cm-${profileId.slice(0, 12)}.sock`);
+  return join(sshDir(), `cm-${profileId.slice(0, 12)}.sock`);
 }
 
 export class SshConnection {
@@ -76,7 +76,7 @@ export class SshConnection {
   }
 
   private async startMaster(): Promise<void> {
-    mkdirSync(SSH_DIR, { recursive: true });
+    mkdirSync(sshDir(), { recursive: true });
     // Stale socket from a previous run / crash — `ssh -M` refuses to
     // start if the path already exists, so clean it first. The peer is
     // long gone, so unlink is safe.
