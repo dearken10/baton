@@ -8,6 +8,7 @@
 //
 // Usage:
 //   node poc/maestro/option4-per-session-clone/propose-for-session.mjs <baton-session-id>
+//   node ... --prompt <path>  # use a different prompt file (default: prompts/next-action.md)
 //   node ... --keep-clone     # leave the clone JSONL on disk for inspection
 //   node ... --dry-run        # do everything except the claude call (echo the path of the clone)
 //
@@ -25,7 +26,8 @@ import { randomUUID } from 'node:crypto';
 const BATON_DIR = process.env.BATON_DIR ?? join(homedir(), '.baton');
 const DB_PATH = join(BATON_DIR, 'baton.db');
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');
-const PROMPT_PATH = join(dirname(import.meta.url.replace('file://', '')), 'prompts', 'next-action.md');
+const HERE = dirname(import.meta.url.replace('file://', ''));
+const DEFAULT_PROMPT_PATH = join(HERE, 'prompts', 'next-action.md');
 
 /** Match Claude Code's `~/.claude/projects/` naming: `/`, `.`, `_` → `-`. */
 function sanitizeCwd(cwd) {
@@ -127,12 +129,24 @@ function runClaude({ cloneUuid, worktreePath, promptText, timeoutMs = 180_000 })
 
 function main() {
   const args = process.argv.slice(2);
-  const batonId = args.find((a) => !a.startsWith('--'));
   const keepClone = args.includes('--keep-clone');
   const dryRun = args.includes('--dry-run');
+  // --prompt takes the next positional argument as its value
+  const promptIdx = args.indexOf('--prompt');
+  const promptPath = promptIdx >= 0 ? args[promptIdx + 1] : DEFAULT_PROMPT_PATH;
+  // First non-flag, non-flag-arg positional = the baton id
+  const batonId = args.find((a, i) => {
+    if (a.startsWith('--')) return false;
+    if (promptIdx >= 0 && i === promptIdx + 1) return false;
+    return true;
+  });
   if (!batonId) {
-    console.error('Usage: propose-for-session.mjs <baton-session-id> [--keep-clone] [--dry-run]');
+    console.error('Usage: propose-for-session.mjs <baton-session-id> [--prompt <path>] [--keep-clone] [--dry-run]');
     process.exit(64);
+  }
+  if (!existsSync(promptPath)) {
+    console.error(`prompt file not found: ${promptPath}`);
+    process.exit(2);
   }
 
   const session = lookupSession(batonId);
@@ -168,7 +182,7 @@ function main() {
     process.exit(0);
   }
 
-  const promptText = readFileSync(PROMPT_PATH, 'utf8');
+  const promptText = readFileSync(promptPath, 'utf8');
   let proposal;
   try {
     const raw = runClaude({
