@@ -396,6 +396,14 @@ button {
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
+.maestro-disabled-meta {
+  margin-left: 6px;
+  color: var(--maestro);
+  font-size: 10.5px;
+  font-weight: 400;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
 .orphans-badge {
   font-size: 10.5px;
   padding: 2px 7px;

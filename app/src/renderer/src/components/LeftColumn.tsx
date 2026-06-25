@@ -264,6 +264,21 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  async function toggleMaestroForProject(p: Project): Promise<void> {
+    const enabled = !p.maestroEnabled; // flipping
+    setBusy(true);
+    try {
+      await window.baton.call('project.setMaestroEnabled', {
+        projectId: p.id,
+        enabled,
+      });
+    } catch (err) {
+      alert(`${enabled ? 'Enable' : 'Disable'} Maestro failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeProjectFromList(p: Project): Promise<void> {
     const sCount = (sessionsByProject[p.id] ?? []).length;
     const ok = window.confirm(
@@ -858,6 +873,8 @@ export function LeftColumn(): JSX.Element {
               onEditLogins={() => { refreshLoginSessions(); setEditingLoginsProject(p); }}
               onRemoveProject={() => void removeProjectFromList(p)}
               onToggleSnooze={() => void toggleSnoozeProject(p)}
+              onToggleMaestro={() => void toggleMaestroForProject(p)}
+              maestroEnabled={p.maestroEnabled}
               onReorderProjects={reorderProjects}
               onReorderSessions={(fromId, beforeId) =>
                 reorderSessionsForProject(p.id, fromId, beforeId)
@@ -1103,6 +1120,8 @@ interface ProjectBlockProps {
   onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
+  onToggleMaestro: () => void;
+  maestroEnabled: boolean;
   onReorderProjects: (fromId: string, beforeId: string) => void;
   onReorderSessions: (fromId: string, beforeId: string) => void;
   busy: boolean;
@@ -1120,7 +1139,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, connection, sessions, selectedId,
     onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze,
-    onGetInfo, onNewTerminal, onRenameProject, onEditLogins, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
+    onGetInfo, onNewTerminal, onRenameProject, onEditLogins, onRemoveProject, onToggleSnooze, onToggleMaestro, maestroEnabled, onReorderProjects, onReorderSessions,
     busy, pendingSessionIds,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -1212,6 +1231,14 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
               · {sessions.length}
             </span>
           ) : null}
+          {!maestroEnabled ? (
+            <span
+              className="maestro-disabled-meta"
+              title="Maestro is disabled for this project"
+            >
+              🎼 off
+            </span>
+          ) : null}
         </span>
         {aggregateStatus ? (
           <span
@@ -1225,6 +1252,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
         ) : null}
         <SpawnMenu
           isSnoozed={isSnoozed}
+          maestroEnabled={maestroEnabled}
           onSpawnSession={onSpawnSession}
           onSpawnNewWorktree={onSpawnNewWorktree}
           onGetInfo={onGetInfo}
@@ -1233,6 +1261,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           onEditLogins={onEditLogins}
           onRemoveProject={onRemoveProject}
           onToggleSnooze={onToggleSnooze}
+          onToggleMaestro={onToggleMaestro}
           busy={busy}
         />
       </div>
@@ -1478,6 +1507,7 @@ type SpawnMenuView = 'main' | 'session' | 'worktree';
 
 function SpawnMenu(props: {
   isSnoozed: boolean;
+  maestroEnabled: boolean;
   onSpawnSession: (backend: 'claude-code' | 'codex') => void;
   onSpawnNewWorktree: (backend: 'claude-code' | 'codex') => void;
   onGetInfo: () => void;
@@ -1486,6 +1516,7 @@ function SpawnMenu(props: {
   onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
+  onToggleMaestro: () => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -1608,6 +1639,20 @@ function SpawnMenu(props: {
                   {props.isSnoozed
                     ? 'Move back to the Active list.'
                     : 'Hide from the Active list. Sessions are kept.'}
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onToggleMaestro(); }}
+              >
+                <span className="spawn-menu-title">
+                  {props.maestroEnabled ? '🎼 Disable Maestro' : '🎼 Enable Maestro'}
+                </span>
+                <span className="spawn-menu-sub">
+                  {props.maestroEnabled
+                    ? "Stop Maestro from proposing actions for this project's sessions. The project stays visible."
+                    : 'Maestro may propose actions for this project again on the next tick.'}
                 </span>
               </button>
               <button

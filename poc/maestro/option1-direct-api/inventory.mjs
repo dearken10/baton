@@ -203,7 +203,7 @@ function main() {
   }
 
   const projects = sqliteJson(
-    `SELECT id, name, path, snoozed_at FROM projects
+    `SELECT id, name, path, snoozed_at, maestro_enabled FROM projects
      WHERE connection_id = 'local'`
   );
   const projectsById = new Map(projects.map((p) => [p.id, p]));
@@ -258,6 +258,11 @@ function main() {
       minutes_since_started: Math.round((now - s.started_at) / 60000),
       last_summary: s.last_summary,
       snoozed: s.snoozed_at != null || project?.snoozed_at != null,
+      // Per-project Maestro opt-out. Defaults true (column default
+      // is 1) so projects that pre-date this column behave exactly
+      // as before. The candidate gate drops everything where this
+      // is false BEFORE the planner sees it.
+      maestro_enabled: project ? (project.maestro_enabled ?? 1) !== 0 : true,
       session_kind: s.session_kind ?? 'agent',
       last_activity_at: lastActivityAt,
       conversation

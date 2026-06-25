@@ -27,7 +27,7 @@ import {
   type RequestOf,
   type ResponseOf,
 } from '../../shared/ipc.js';
-import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed, setProjectLoginDefaults } from '../services/projectStore.js';
+import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed, setProjectLoginDefaults, setProjectMaestroEnabled } from '../services/projectStore.js';
 import { batonHome } from '../paths.js';
 import {
   listConnections,
@@ -189,6 +189,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'project.setSnoozed': (req) => {
     const project = setProjectSnoozed(req.projectId, req.snoozed);
+    return { project };
+  },
+  'project.setMaestroEnabled': (req) => {
+    const project = setProjectMaestroEnabled(req.projectId, req.enabled);
     return { project };
   },
   'session.reorder': (req) => {

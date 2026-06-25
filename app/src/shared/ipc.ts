@@ -155,6 +155,12 @@ export const Project = z.object({
   /** Default Codex login session id for sessions in this project. Null →
    *  the built-in global login. */
   codexLoginSessionId: z.string().nullable(),
+  /** Per-project Maestro opt-out. true (default) = Maestro may
+   *  propose actions for this project's sessions; false = inventory
+   *  drops the project before the planner sees it. Independent of
+   *  `snoozedAt` — you can keep a project visible in the left column
+   *  but stop Maestro from acting on it. */
+  maestroEnabled: z.boolean(),
 });
 export type Project = z.infer<typeof Project>;
 
@@ -387,6 +393,16 @@ const ProjectRenameResponse = z.object({ project: Project });
 
 /** Toggle snoozed/active for a project. Snoozed projects stay in the
  *  DB with their sessions intact — only the left-column view changes. */
+/** Per-project Maestro on/off toggle. When `enabled=false`, Maestro
+ *  inventory drops every session in this project before the planner
+ *  runs; Approve / Revert continue to work on already-recorded
+ *  actions. The renderer fires this from the project's ⋮ menu. */
+const ProjectSetMaestroEnabledRequest = z.object({
+  projectId: ProjectId,
+  enabled: z.boolean(),
+});
+const ProjectSetMaestroEnabledResponse = z.object({ project: Project });
+
 const ProjectSetSnoozedRequest = z.object({
   projectId: ProjectId,
   snoozed: z.boolean(),
@@ -455,6 +471,10 @@ const MaestroAction = z.object({
   kind:               MaestroActionKind,
   targetSessionId:    z.string().nullable(),
   targetProjectId:    z.string().nullable(),
+  /** Branch name for `initiate` actions — Maestro creates a fresh
+   *  worktree at this branch off the project root when Approve fires.
+   *  Null for `resume` / `defer`. */
+  targetBranch:       z.string().nullable().optional(),
   prompt:             z.string().nullable(),
   rationale:          z.string(),
   confidence:         z.number(),
@@ -600,6 +620,9 @@ const MaestroActionRecord = z.object({
   kind:            z.enum(['resume', 'initiate']),
   targetSessionId: z.string().nullable(),
   targetProjectId: z.string().nullable(),
+  /** Branch the `initiate` action created (when revert hasn't fired
+   *  yet). Used for the card's "spawned X" badge. */
+  targetBranch:    z.string().nullable(),
   worktreePath:    z.string(),
   preTag:          z.string().nullable(),
   stashRef:        z.string().nullable(),
@@ -1454,6 +1477,7 @@ export const ControlVerbs = {
   'project.reorder':    { request: ProjectReorderRequest, response: ProjectReorderResponse },
   'project.rename':     { request: ProjectRenameRequest, response: ProjectRenameResponse },
   'project.setSnoozed': { request: ProjectSetSnoozedRequest, response: ProjectSetSnoozedResponse },
+  'project.setMaestroEnabled': { request: ProjectSetMaestroEnabledRequest, response: ProjectSetMaestroEnabledResponse },
   'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
   'connection.list':     { request: Empty,                     response: ConnectionListResponse },
@@ -1566,6 +1590,11 @@ const ProjectReorderedEvent = EventEnvelope.extend({
 
 const ProjectRenamedEvent = EventEnvelope.extend({
   type: z.literal('project.renamed'),
+  project: Project,
+});
+
+const ProjectMaestroEnabledChangedEvent = EventEnvelope.extend({
+  type: z.literal('project.maestroEnabledChanged'),
   project: Project,
 });
 
@@ -1703,6 +1732,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ProjectReorderedEvent,
   ProjectRenamedEvent,
   ProjectSnoozeChangedEvent,
+  ProjectMaestroEnabledChangedEvent,
   SessionReorderedEvent,
   SessionSpawnedEvent,
   SessionStartingEvent,

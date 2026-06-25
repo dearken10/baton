@@ -87,6 +87,9 @@ exercise different signal-extraction (e.g., richer JSONL slicing,
   `running` shells are dev servers, not user presence).
 - Sessions where `snoozed = true` (either the session itself or its
   parent project is snoozed).
+- Sessions where `maestro_enabled = false` on the parent project
+  (the user explicitly turned Maestro off for that project — leave
+  it alone, even if it's idle and otherwise actionable).
 
 Running shells in the inventory are **NOT** evidence the user is at
 the keyboard — they're background processes.

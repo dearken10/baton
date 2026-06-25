@@ -205,6 +205,10 @@ export const useAppStore = create<AppState>()(
             s.projects[event.project.id] = event.project;
             break;
           }
+          case 'project.maestroEnabledChanged': {
+            s.projects[event.project.id] = event.project;
+            break;
+          }
           case 'session.reordered': {
             s.sessionOrder = {};
             event.orderedIds.forEach((id, i) => { s.sessionOrder[id] = i; });

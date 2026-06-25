@@ -24,6 +24,7 @@ interface ProjectRow {
   snoozed_at: number | null;
   claude_login_session_id: string | null;
   codex_login_session_id: string | null;
+  maestro_enabled: number;
 }
 
 function rowToProject(r: ProjectRow): Project {
@@ -36,6 +37,7 @@ function rowToProject(r: ProjectRow): Project {
     snoozedAt: r.snoozed_at,
     claudeLoginSessionId: r.claude_login_session_id,
     codexLoginSessionId: r.codex_login_session_id,
+    maestroEnabled: (r.maestro_enabled ?? 1) !== 0,
   };
 }
 
@@ -78,7 +80,7 @@ export function addProject(
 
   const row = getDatabase()
     .prepare(
-      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id FROM projects WHERE id = ?'
+      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id, maestro_enabled FROM projects WHERE id = ?'
     )
     .get(id) as ProjectRow;
 
@@ -90,7 +92,7 @@ export function addProject(
 export function listProjects(): Project[] {
   const rows = getDatabase()
     .prepare(
-      `SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id
+      `SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id, maestro_enabled
          FROM projects
         ORDER BY display_order ASC, added_at ASC`
     )
@@ -289,7 +291,7 @@ export function reorderProjects(orderedIds: string[]): void {
 export function getProject(id: string): Project | undefined {
   const row = getDatabase()
     .prepare(
-      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id FROM projects WHERE id = ?'
+      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id, maestro_enabled FROM projects WHERE id = ?'
     )
     .get(id) as ProjectRow | undefined;
   if (!row) return undefined;
@@ -307,5 +309,19 @@ export function setProjectSnoozed(id: string, snoozed: boolean): Project {
   const project = getProject(id);
   if (!project) throw new Error(`Project disappeared after snooze toggle: ${id}`);
   emit({ type: 'project.snoozeChanged', project });
+  return project;
+}
+
+/** Toggle the per-project Maestro on/off flag. Independent of snooze:
+ *  the user can keep a project visible in the active list while still
+ *  telling Maestro to leave it alone. */
+export function setProjectMaestroEnabled(id: string, enabled: boolean): Project {
+  const res = getDatabase()
+    .prepare('UPDATE projects SET maestro_enabled = ? WHERE id = ?')
+    .run(enabled ? 1 : 0, id);
+  if (res.changes === 0) throw new Error(`Unknown project: ${id}`);
+  const project = getProject(id);
+  if (!project) throw new Error(`Project disappeared after maestro toggle: ${id}`);
+  emit({ type: 'project.maestroEnabledChanged', project });
   return project;
 }

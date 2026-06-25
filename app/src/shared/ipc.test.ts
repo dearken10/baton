@@ -84,6 +84,7 @@ describe('control verb registry', () => {
         "project.rename",
         "project.reorder",
         "project.setLoginDefaults",
+        "project.setMaestroEnabled",
         "project.setSnoozed",
         "pty.resize",
         "pty.write",

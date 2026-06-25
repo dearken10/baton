@@ -50,6 +50,7 @@ import { promisify } from 'node:util';
 import type { ResponseOf } from '../../shared/ipc.js';
 import { getDatabase } from '../database/index.js';
 import { getSessionManager } from './sessionManager.js';
+import { getProject } from './projectStore.js';
 
 const exec = promisify(execFile);
 
@@ -163,10 +164,7 @@ export async function approveAction(opts: ApproveOpts): Promise<ApproveResult> {
     return { ok: false, actionId: a.actionId, reason: 'defer actions cannot be approved' };
   }
   if (a.kind === 'initiate') {
-    // Initiate (spawn-a-new-session) isn't wired yet. PRD F15.6 has a
-    // different checkpoint shape (worktree creation is the checkpoint;
-    // revert is `git worktree remove --force` after killing the agent).
-    return { ok: false, actionId: a.actionId, reason: 'initiate actions are not yet supported' };
+    return approveInitiate(a);
   }
   if (!a.targetSessionId) {
     return { ok: false, actionId: a.actionId, reason: 'action has no target session' };
@@ -316,17 +314,163 @@ function markFailed(actionId: string, detail: string): void {
   } catch { /* best-effort */ }
 }
 
+/** Maximum wall-clock to wait for the freshly-spawned agent's PTY to
+ *  reach an injectable status (idle / needs-input). Claude Code's
+ *  REPL boot is ~5-10 s; 30 s is generous. */
+const INITIATE_READY_TIMEOUT_MS = 30_000;
+
+/** Poll `sessions.status` until it reaches an injectable state or we
+ *  hit the timeout. Returns the final status. */
+async function waitForReady(sessionId: string): Promise<string> {
+  const deadline = Date.now() + INITIATE_READY_TIMEOUT_MS;
+  let lastStatus = '';
+  while (Date.now() < deadline) {
+    const row = lookupSession(sessionId);
+    lastStatus = row?.status ?? '';
+    if (INJECTABLE_STATUSES.has(lastStatus)) return lastStatus;
+    await delay(300);
+  }
+  return lastStatus;
+}
+
+/** Approve flow for a Phase-3 `initiate` action: spawn a fresh agent
+ *  in a new worktree off the project root, wait for the REPL to
+ *  settle, then inject the seed prompt. Records in maestro_actions
+ *  so Revert can `git worktree remove --force` it later. */
+async function approveInitiate(a: ApproveAction): Promise<ApproveResult> {
+  if (!a.targetProjectId) {
+    return { ok: false, actionId: a.actionId, reason: 'initiate action has no target project' };
+  }
+  const branch = a.targetBranch ?? null;
+  if (!branch || branch.trim().length === 0) {
+    return { ok: false, actionId: a.actionId, reason: 'initiate action has no branch name' };
+  }
+  if (!a.prompt || a.prompt.length === 0) {
+    return { ok: false, actionId: a.actionId, reason: 'initiate action has no seed prompt' };
+  }
+  if (a.prompt.length > MAX_PROMPT_BYTES) {
+    return { ok: false, actionId: a.actionId, reason: 'seed prompt exceeds 16 KB safety cap' };
+  }
+  const project = getProject(a.targetProjectId);
+  if (!project) {
+    return { ok: false, actionId: a.actionId, reason: 'target project not found' };
+  }
+
+  // Spawn — sessionManager creates the worktree + boots the agent.
+  // newWorktreeBranch is the branch the worktree gets created at;
+  // cwd is the project root (the parent repo) where `git worktree
+  // add` is invoked. If that branch already exists we fail-fast
+  // so the user picks a different name on retry.
+  const mgr = getSessionManager();
+  let session;
+  try {
+    session = await mgr.spawn({
+      projectId: project.id,
+      backendId: 'claude-code',
+      cwd: project.path,
+      newWorktreeBranch: branch,
+    });
+  } catch (e) {
+    return { ok: false, actionId: a.actionId, reason: `spawn failed: ${(e as Error).message}` };
+  }
+
+  // Wait for the REPL to be ready. The user-facing path goes:
+  //   starting → spawned → running (claude boot) → idle (at prompt)
+  // We only inject when status is in INJECTABLE_STATUSES.
+  const status = await waitForReady(session.id);
+  if (!INJECTABLE_STATUSES.has(status)) {
+    // Spawn succeeded but the REPL didn't settle in time — record
+    // what we have so Revert can clean up, but report the partial
+    // failure to the renderer.
+    try {
+      getDatabase()
+        .prepare(
+          `INSERT INTO maestro_actions
+             (action_id, kind, target_session_id, target_project_id,
+              worktree_path, pre_tag, stash_ref, prompt, rationale,
+              confidence, state, state_detail, created_at, target_branch)
+           VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, 'failed', ?, ?, ?)
+           ON CONFLICT(action_id) DO UPDATE SET
+             state = 'failed', state_detail = excluded.state_detail`
+        )
+        .run(
+          a.actionId, a.kind, session.id, a.targetProjectId,
+          session.worktreePath, a.prompt, a.rationale, a.confidence,
+          `agent not ready after ${INITIATE_READY_TIMEOUT_MS}ms (status=${status || 'unknown'})`,
+          Date.now(), branch,
+        );
+    } catch { /* best-effort */ }
+    return {
+      ok: false,
+      actionId: a.actionId,
+      reason: `worktree created but agent didn't reach a prompt within ${INITIATE_READY_TIMEOUT_MS / 1000}s — use Revert to clean up`,
+    };
+  }
+
+  // Record in the ledger BEFORE injecting — same gate logic as the
+  // resume path. If the ledger write fails we don't send the prompt.
+  try {
+    getDatabase()
+      .prepare(
+        `INSERT INTO maestro_actions
+           (action_id, kind, target_session_id, target_project_id,
+            worktree_path, pre_tag, stash_ref, prompt, rationale,
+            confidence, state, created_at, target_branch)
+         VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, 'in_flight', ?, ?)
+         ON CONFLICT(action_id) DO UPDATE SET
+           kind              = excluded.kind,
+           target_session_id = excluded.target_session_id,
+           target_project_id = excluded.target_project_id,
+           worktree_path     = excluded.worktree_path,
+           prompt            = excluded.prompt,
+           rationale         = excluded.rationale,
+           confidence        = excluded.confidence,
+           state             = 'in_flight',
+           state_detail      = NULL,
+           created_at        = excluded.created_at,
+           reverted_at       = NULL,
+           target_branch     = excluded.target_branch`
+      )
+      .run(
+        a.actionId, a.kind, session.id, a.targetProjectId,
+        session.worktreePath, a.prompt, a.rationale, a.confidence,
+        Date.now(), branch,
+      );
+  } catch (e) {
+    return { ok: false, actionId: a.actionId, reason: `ledger write failed: ${(e as Error).message}` };
+  }
+
+  // Inject: same split-write trick as the resume path.
+  try {
+    mgr.write(session.id, a.prompt);
+  } catch (e) {
+    markFailed(a.actionId, `pty write (prompt) failed: ${(e as Error).message}`);
+    return { ok: false, actionId: a.actionId, reason: (e as Error).message };
+  }
+  await delay(SUBMIT_DELAY_MS);
+  try {
+    mgr.write(session.id, '\r');
+  } catch (e) {
+    markFailed(a.actionId, `pty write (submit) failed: ${(e as Error).message}`);
+    return { ok: false, actionId: a.actionId, reason: (e as Error).message };
+  }
+
+  return { ok: true, actionId: a.actionId, reason: null };
+}
+
 export async function revertAction(actionId: string): Promise<RevertResult> {
   const row = getDatabase()
     .prepare(
-      `SELECT action_id, target_session_id, worktree_path,
-              pre_tag, stash_ref, state, jsonl_path, jsonl_offset
+      `SELECT action_id, kind, target_session_id, worktree_path,
+              pre_tag, stash_ref, state, jsonl_path, jsonl_offset,
+              target_branch
          FROM maestro_actions
         WHERE action_id = ?`
     )
     .get(actionId) as
     | {
         action_id: string;
+        kind: string;
         target_session_id: string | null;
         worktree_path: string;
         pre_tag: string | null;
@@ -334,11 +478,20 @@ export async function revertAction(actionId: string): Promise<RevertResult> {
         state: string;
         jsonl_path: string | null;
         jsonl_offset: number | null;
+        target_branch: string | null;
       }
     | undefined;
 
   if (!row) return { ok: false, reason: 'no such action in the ledger' };
   if (row.state === 'reverted') return { ok: false, reason: 'already reverted' };
+
+  // Initiate revert path: the whole worktree IS the checkpoint, so
+  // there's no git tag to reset to. Kill the agent + `git worktree
+  // remove --force` + drop the session row.
+  if (row.kind === 'initiate') {
+    return revertInitiate(row.action_id, row.target_session_id);
+  }
+
   if (!row.pre_tag) return { ok: false, reason: 'no checkpoint tag recorded' };
 
   // ── Step 1: rewind the worktree ──────────────────────────────────
@@ -419,6 +572,42 @@ export async function revertAction(actionId: string): Promise<RevertResult> {
   return { ok: true, reason: warnings || null };
 }
 
+/** Revert an initiate action: kill the spawned agent + remove its
+ *  worktree + delete the session row. The whole worktree was the
+ *  checkpoint, so we don't need git tag/stash machinery. */
+async function revertInitiate(
+  actionId: string,
+  targetSessionId: string | null,
+): Promise<RevertResult> {
+  let cleanupWarning: string | null = null;
+
+  if (targetSessionId) {
+    const mgr = getSessionManager();
+    try {
+      // delete() takes care of killing the PTY + git worktree remove
+      // --force + removing the sessions row. removeWorktree defaults
+      // to true for worktree sessions (which initiate always is).
+      await mgr.delete(targetSessionId, { removeWorktree: true });
+    } catch (e) {
+      cleanupWarning = `delete failed: ${(e as Error).message}`;
+    }
+  } else {
+    cleanupWarning = 'no target session to delete';
+  }
+
+  getDatabase()
+    .prepare(
+      `UPDATE maestro_actions
+          SET state = 'reverted',
+              state_detail = ?,
+              reverted_at = ?
+        WHERE action_id = ?`
+    )
+    .run(cleanupWarning, Date.now(), actionId);
+
+  return { ok: true, reason: cleanupWarning };
+}
+
 export function listActions(targetSessionId?: string): { actions: ActionRecord[] } {
   const rows = targetSessionId
     ? getDatabase()
@@ -437,6 +626,7 @@ export function listActions(targetSessionId?: string): { actions: ActionRecord[]
       kind:            r.kind as 'resume' | 'initiate',
       targetSessionId: (r.target_session_id as string | null) ?? null,
       targetProjectId: (r.target_project_id as string | null) ?? null,
+      targetBranch:    (r.target_branch as string | null) ?? null,
       worktreePath:    r.worktree_path as string,
       preTag:          (r.pre_tag as string | null) ?? null,
       stashRef:        (r.stash_ref as string | null) ?? null,

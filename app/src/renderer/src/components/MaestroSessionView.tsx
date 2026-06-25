@@ -243,13 +243,30 @@ function TickActions({
   const sessions = useAppStore((s) => s.sessions);
   const projects = useAppStore((s) => s.projects);
 
-  const lookup = useCallback((sid: string | null) => {
-    if (!sid) return undefined;
-    const s = sessions[sid];
-    if (!s) return undefined;
-    const p = projects[s.projectId];
-    return { projectName: p?.name, branch: s.branch };
-  }, [sessions, projects]);
+  /** Resolve project + branch for either a `resume` (session id) or an
+   *  `initiate` (project id + planned branch name). The `initiate`
+   *  path doesn't have a session row yet, so we look up by project. */
+  const lookup = useCallback(
+    (a: Action): { projectName?: string; branch?: string } | undefined => {
+      if (a.targetSessionId) {
+        const s = sessions[a.targetSessionId];
+        if (s) {
+          const p = projects[s.projectId];
+          return { projectName: p?.name, branch: s.branch };
+        }
+      }
+      if (a.targetProjectId) {
+        const p = projects[a.targetProjectId];
+        if (p) {
+          return a.targetBranch
+            ? { projectName: p.name, branch: a.targetBranch }
+            : { projectName: p.name };
+        }
+      }
+      return undefined;
+    },
+    [sessions, projects],
+  );
 
   if (!tick) {
     return (
@@ -302,12 +319,14 @@ function SessionActionCard({
   action: a, lookup, record, onRecordsChanged,
 }: {
   action: Action;
-  lookup: (sid: string | null) => { projectName?: string; branch?: string } | undefined;
+  lookup: (a: Action) => { projectName?: string; branch?: string } | undefined;
   record: ActionRecord | null;
   onRecordsChanged: () => void;
 }): JSX.Element {
-  const info = lookup(a.targetSessionId);
-  const project = info?.projectName ?? (a.targetSessionId?.slice(0, 8) ?? '—');
+  const info = lookup(a);
+  const isInitiate = a.kind === 'initiate';
+  const project = info?.projectName
+    ?? (a.targetSessionId?.slice(0, 8) ?? a.targetProjectId?.slice(0, 8) ?? '—');
   const branch = info?.branch;
   const conf = confidenceBucket(a.confidence);
 
@@ -428,7 +447,9 @@ function SessionActionCard({
               been touched. Pre-approve, the card stays clean. */}
           {record && ledgerState === 'in_flight' ? (
             <div className="mss-acard-status mss-acard-status-flight">
-              ✓ Sent to agent at {fmtClockTime(record.createdAt)}
+              {isInitiate
+                ? <>✓ Spawned worktree {record.targetBranch ? <code>{record.targetBranch}</code> : null} at {fmtClockTime(record.createdAt)}</>
+                : <>✓ Sent to agent at {fmtClockTime(record.createdAt)}</>}
             </div>
           ) : null}
           {record && ledgerState === 'reverted' ? (
@@ -461,16 +482,21 @@ function SessionActionCard({
                 type="button"
                 className="mss-acard-btn mss-acard-btn-approve"
                 onClick={() => void onApprove()}
-                disabled={pending !== null}
-                title={a.targetSessionId
-                  ? 'Checkpoint + send the prompt to the target agent'
-                  : 'No target session — nothing to approve'}
+                disabled={pending !== null
+                  || (isInitiate && (!a.targetProjectId || !a.targetBranch))}
+                title={isInitiate
+                  ? (a.targetBranch
+                      ? `Spawn a new worktree at ${a.targetBranch} and send the seed prompt`
+                      : 'Initiate action is missing a branch — nothing to approve')
+                  : (a.targetSessionId
+                      ? 'Checkpoint + send the prompt to the target agent'
+                      : 'No target session — nothing to approve')}
               >
                 {pending === 'approve'
                   ? 'Approving…'
                   : ledgerState === 'reverted' || ledgerState === 'failed'
                     ? 'Re-approve'
-                    : 'Approve'}
+                    : isInitiate ? 'Spawn worktree' : 'Approve'}
               </button>
             )}
             <button
@@ -478,7 +504,9 @@ function SessionActionCard({
               className="mss-acard-btn"
               onClick={() => void onSnooze()}
               disabled={pending !== null || !a.targetSessionId}
-              title="Snooze the target session — Maestro stops proposing for it"
+              title={a.targetSessionId
+                ? 'Snooze the target session — Maestro stops proposing for it'
+                : 'Snooze applies to existing sessions only'}
             >
               {pending === 'snooze' ? 'Snoozing…' : 'Snooze'}
             </button>

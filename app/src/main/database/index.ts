@@ -352,6 +352,23 @@ function runMigrations(d: Database.Database): void {
   try {
     d.exec('ALTER TABLE maestro_actions ADD COLUMN jsonl_offset INTEGER');
   } catch { /* already migrated */ }
+  // For `initiate` actions (PRD F15.6): the branch we created the
+  // worktree at. Revert removes the worktree via `git worktree
+  // remove --force` after killing the session, so we don't need a
+  // pre-tag for these.
+  try {
+    d.exec('ALTER TABLE maestro_actions ADD COLUMN target_branch TEXT');
+  } catch { /* already migrated */ }
+
+  // Per-project Maestro opt-out. 1 = Maestro may propose actions
+  // for this project's sessions; 0 = inventory drops them, and the
+  // gate is enforced before the planner even runs. Defaults ON so
+  // existing projects pre-feature behave exactly as before.
+  try {
+    d.exec(
+      `ALTER TABLE projects ADD COLUMN maestro_enabled INTEGER NOT NULL DEFAULT 1`
+    );
+  } catch { /* already migrated */ }
 }
 
 export function getDatabase(): Database.Database {
