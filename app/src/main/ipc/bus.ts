@@ -225,7 +225,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       ...(req.newWorktreeBranch
         ? { newWorktreeBranch: req.newWorktreeBranch }
         : {}),
-      ...(req.skipPermissions ? { skipPermissions: true } : {}),
+      ...(req.permissionMode ? { permissionMode: req.permissionMode } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
     });
     return { session };
@@ -246,8 +246,8 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const session = await getSessionManager().clone(req.sessionId);
     return { session };
   },
-  'session.toggleYolo': async (req) => {
-    const session = await getSessionManager().toggleYolo(req.sessionId);
+  'session.setPermissionMode': async (req) => {
+    const session = await getSessionManager().setPermissionMode(req.sessionId, req.mode);
     return { session };
   },
   'session.setModel': async (req) => {

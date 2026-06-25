@@ -152,6 +152,21 @@ function runMigrations(d: Database.Database): void {
     d.exec('ALTER TABLE sessions ADD COLUMN snoozed_at INTEGER');
   } catch { /* already migrated */ }
 
+  // permission_mode = the agent's tool-permission posture, passed to
+  // `claude --permission-mode <value>` at spawn. Supersedes the binary
+  // skip_permissions column: the old YOLO flag is now the most
+  // permissive value, `bypassPermissions`. Backfill preserves behaviour
+  // for any session that had skip_permissions=1. See PermissionMode in
+  // src/shared/ipc.ts. The skip_permissions column is left in place
+  // (SQLite drop-column is destructive); it's simply no longer read.
+  try {
+    d.exec(`ALTER TABLE sessions ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'default'`);
+    // Only runs on the migration that actually adds the column (the
+    // ALTER throws on already-migrated DBs and we skip the backfill),
+    // so existing 'bypassPermissions' choices aren't clobbered later.
+    d.exec(`UPDATE sessions SET permission_mode = 'bypassPermissions' WHERE skip_permissions = 1`);
+  } catch { /* already migrated */ }
+
   // Connection model. Old databases predate connection_profiles and
   // have no connection_id on their project rows; everything pre-existing
   // is a local project.

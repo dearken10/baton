@@ -23,6 +23,7 @@ import type {
   AgentHandle,
   AgentSpawnOpts,
 } from './agentBackend.js';
+import type { PermissionMode } from '../../shared/ipc.js';
 import { getHookServer } from './hookServer.js';
 import { HOOK_FORWARDER_SCRIPT } from './hookForwarderSource.js';
 import { trustDirectoryForClaude } from './claudeTrust.js';
@@ -37,9 +38,10 @@ export interface ClaudeCodeSpawnOpts extends AgentSpawnOpts {
   /** When set, spawn with `claude --resume <id>` to reload the
    *  previous conversation. */
   resumeAgentSessionId?: string;
-  /** When true, also pass `--dangerously-skip-permissions` so Claude
-   *  auto-approves every tool use (YOLO mode). */
-  skipPermissions?: boolean;
+  /** Tool-permission posture. Passed through as `--permission-mode
+   *  <value>` (the value strings match Claude's CLI exactly). Omitted
+   *  or 'default' → no flag, Claude prompts before each tool. */
+  permissionMode?: PermissionMode;
   /** Optional `--model <name>` alias (e.g. "sonnet"/"opus"/"haiku").
    *  Undefined → don't pass the flag (Claude uses its configured
    *  default). */
@@ -142,8 +144,11 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (opts.resumeAgentSessionId) {
       args.push('--resume', opts.resumeAgentSessionId);
     }
-    if (opts.skipPermissions) {
-      args.push('--dangerously-skip-permissions');
+    // 'default' = no flag (Claude's own default). Every other value maps
+    // 1:1 to a `--permission-mode` value; 'bypassPermissions' is the
+    // canonical form of the old `--dangerously-skip-permissions`.
+    if (opts.permissionMode && opts.permissionMode !== 'default') {
+      args.push('--permission-mode', opts.permissionMode);
     }
     if (opts.model) {
       args.push('--model', opts.model);
@@ -289,8 +294,8 @@ export class ClaudeCodeBackend implements AgentBackend {
     if (opts.resumeAgentSessionId) {
       claudeArgs.push('--resume', opts.resumeAgentSessionId);
     }
-    if (opts.skipPermissions) {
-      claudeArgs.push('--dangerously-skip-permissions');
+    if (opts.permissionMode && opts.permissionMode !== 'default') {
+      claudeArgs.push('--permission-mode', opts.permissionMode);
     }
     if (opts.model) {
       claudeArgs.push('--model', opts.model);

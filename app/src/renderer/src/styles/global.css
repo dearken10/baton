@@ -849,31 +849,39 @@ button {
   cursor: pointer;
 }
 .sid-row-copy:hover { color: var(--text); border-color: var(--accent); }
-.skip-perm-chip {
+/* Permission-mode selector — a native <select> styled as a pill, the
+   same shape as the model chip. Lets the user pick the agent's tool-
+   permission posture (Ask → Plan → Accept edits → Auto → Skip all for
+   Claude; Ask / Skip all for Codex). The `.danger` variant tints it red
+   when the most-permissive "Skip all" (bypassPermissions) is active. */
+.perm-chip {
   font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.04em;
-  padding: 4px 10px;
+  padding: 4px 22px 4px 10px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--bg-2);
+  border: 1px solid rgba(91, 141, 239, 0.25);
+  background: rgba(91, 141, 239, 0.08);
   color: var(--text-dim);
   cursor: pointer;
   transition: filter 0.1s;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: right 9px top 50%, right 5px top 50%;
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
 }
-.skip-perm-chip:hover:not(:disabled) { filter: brightness(1.1); }
-.skip-perm-chip:disabled { opacity: 0.5; cursor: wait; }
-.skip-perm-chip.on {
-  background: rgba(239, 84, 84, 0.12);
+.perm-chip:hover:not(:disabled) { filter: brightness(1.1); }
+.perm-chip:disabled { opacity: 0.5; cursor: wait; }
+.perm-chip.danger {
+  background-color: rgba(239, 84, 84, 0.12);
   border-color: rgba(239, 84, 84, 0.4);
   color: #ef5454;
 }
-.skip-perm-chip.off {
-  background: rgba(91, 141, 239, 0.08);
-  border-color: rgba(91, 141, 239, 0.25);
-  color: var(--text-dim);
-}
-/* Model selector — sibling of the skip-perm chip. Same pill shape,
+/* Model selector — sibling of the permission chip. Same pill shape,
    but a native <select> so the user can pick from a small list
    without an extra menu component. The default-vs-explicit state
    tints the border slightly so the chip reads as "active" when the

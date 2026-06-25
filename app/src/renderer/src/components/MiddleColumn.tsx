@@ -5,14 +5,30 @@ import { TurnsPane } from './TurnsPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
 import { EditorErrorBoundary } from './EditorErrorBoundary.js';
 import { SessionInfoDialog } from './SessionInfoDialog.js';
-import type { Session } from '@shared/ipc.js';
+import type { PermissionMode, Session } from '@shared/ipc.js';
 
 /** Newest Opus. Used as the implicit choice for any claude-code
  *  session whose persisted `model` is null (legacy rows, freshly
  *  spawned sessions before the user has clicked the chip). The "no
  *  --model passed" passthrough option has been removed from the
  *  dropdown, so the chip always reflects a concrete model id. */
-const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-7';
+const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
+
+/** Short labels for the permission-mode chip. Keys are the canonical
+ *  Claude CLI values (see PermissionMode in shared/ipc.ts). */
+const PERMISSION_LABELS: Record<PermissionMode, string> = {
+  default: 'Ask',
+  plan: 'Plan',
+  acceptEdits: 'Accept edits',
+  auto: 'Auto',
+  bypassPermissions: 'Skip all permission',
+};
+/** Claude exposes the full spectrum. Order = least → most permissive. */
+const CLAUDE_PERMISSION_MODES: PermissionMode[] = [
+  'default', 'plan', 'acceptEdits', 'auto', 'bypassPermissions',
+];
+/** Codex has no intermediate — only ask-each-tool vs full bypass. */
+const CODEX_PERMISSION_MODES: PermissionMode[] = ['default', 'bypassPermissions'];
 
 const VIEW_LS_KEY = 'baton:middle:view';
 type MiddleView = 'live' | 'turns';
@@ -184,45 +200,43 @@ export function MiddleColumn(): JSX.Element {
     }
   }
 
-  const [skipPermBusy, setSkipPermBusy] = useState(false);
+  const [permModeBusy, setPermModeBusy] = useState(false);
   // Session-info dialog is keyed on the actual session rather than a
   // boolean so the dialog disappears cleanly if the user switches to
   // another session while it's open.
   const [infoFor, setInfoFor] = useState<Session | null>(null);
-  async function toggleSkipPermissions(s: Session): Promise<void> {
-    if (skipPermBusy) return;
-    const turningOn = !s.skipPermissions;
+  async function changePermissionMode(s: Session, next: PermissionMode): Promise<void> {
+    if (permModeBusy) return;
+    if (next === s.permissionMode) return;
     const isLive = s.status !== 'done' && s.status !== 'errored';
-    const agentName = s.backendId === 'codex' ? 'Codex' : 'Claude';
-    const flagName = s.backendId === 'codex'
-      ? '--dangerously-bypass-approvals-and-sandbox'
-      : '--dangerously-skip-permissions';
-    const lines = turningOn
-      ? [
-          'Turn ON "Skip Permission" for this session?',
-          '',
-          `${agentName} will be relaunched with ${flagName},`,
-          'which auto-approves every tool call (file edits, shell commands,',
-          'package installs, …) with no prompt.',
-        ]
-      : [
-          'Turn OFF "Skip Permission" for this session?',
-          '',
-          `${agentName} will be relaunched without ${flagName}`,
-          'and will ask before each tool call again.',
-        ];
-    if (isLive) lines.push('', 'The session will restart briefly to apply the change.');
-    if (!window.confirm(lines.join('\n'))) return;
-    setSkipPermBusy(true);
+    // Only the full-bypass mode is dangerous enough to warrant a
+    // confirm — the other modes still gate (or vet) tool calls.
+    if (next === 'bypassPermissions') {
+      const agentName = s.backendId === 'codex' ? 'Codex' : 'Claude';
+      const flagName = s.backendId === 'codex'
+        ? '--dangerously-bypass-approvals-and-sandbox'
+        : '--permission-mode bypassPermissions';
+      const lines = [
+        'Switch this session to "Skip all" permissions?',
+        '',
+        `${agentName} will be relaunched with ${flagName},`,
+        'which auto-approves every tool call (file edits, shell commands,',
+        'package installs, …) with no prompt.',
+      ];
+      if (isLive) lines.push('', 'The session will restart briefly to apply the change.');
+      if (!window.confirm(lines.join('\n'))) return;
+    }
+    setPermModeBusy(true);
     try {
-      const { session } = await window.baton.call('session.toggleYolo', {
+      const { session } = await window.baton.call('session.setPermissionMode', {
         sessionId: s.id,
+        mode: next,
       });
       selectSession(session.id);
     } catch (err) {
-      alert(`Toggle failed: ${String(err)}`);
+      alert(`Permission mode change failed: ${String(err)}`);
     } finally {
-      setSkipPermBusy(false);
+      setPermModeBusy(false);
     }
   }
 
@@ -283,6 +297,7 @@ export function MiddleColumn(): JSX.Element {
                   <option value="haiku">Haiku (latest)</option>
                 </optgroup>
                 <optgroup label="Pinned version">
+                  <option value="claude-opus-4-8">Opus 4.8</option>
                   <option value="claude-opus-4-7">Opus 4.7</option>
                   <option value="claude-opus-4-6">Opus 4.6</option>
                   <option value="claude-opus-4-5">Opus 4.5</option>
@@ -293,19 +308,22 @@ export function MiddleColumn(): JSX.Element {
               </select>
             ) : null}
             {(selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
-              <button
-                type="button"
-                className={`skip-perm-chip ${selected.skipPermissions ? 'on' : 'off'}`}
-                onClick={() => void toggleSkipPermissions(selected)}
-                disabled={skipPermBusy}
-                title={
-                  selected.skipPermissions
-                    ? '"Skip Permission" ON — the agent auto-approves every tool. Click to turn off (restarts session).'
-                    : '"Skip Permission" OFF — the agent asks before each tool. Click to turn on (restarts session).'
-                }
+              <select
+                className={`perm-chip ${selected.permissionMode === 'bypassPermissions' ? 'danger' : ''}`}
+                value={selected.permissionMode}
+                disabled={permModeBusy}
+                onChange={(e) => {
+                  void changePermissionMode(selected, e.currentTarget.value as PermissionMode);
+                }}
+                title={`Permission: ${PERMISSION_LABELS[selected.permissionMode]} — passed to the agent as --permission-mode. Change restarts session.`}
               >
-                {selected.skipPermissions ? '⚠️ Skip Permission ON' : '🛡️ Skip Permission OFF'}
-              </button>
+                {(selected.backendId === 'codex' ? CODEX_PERMISSION_MODES : CLAUDE_PERMISSION_MODES)
+                  .map((m) => (
+                    <option key={m} value={m}>
+                      {PERMISSION_LABELS[m]}
+                    </option>
+                  ))}
+              </select>
             ) : null}
           </>
         ) : (

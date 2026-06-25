@@ -25,6 +25,7 @@ import * as path from 'node:path';
 import {
   Channels,
   type AgentBackendId,
+  type PermissionMode,
   type Session,
   type SessionStatus,
 } from '../../shared/ipc.js';
@@ -72,7 +73,7 @@ const RECENT_PTY_CAP = 1_000_000;
 /** Default claude --model when the caller doesn't pin one. Persisted
  *  on the row so the chip always reflects what's actually running.
  *  Keep this in sync with DEFAULT_CLAUDE_MODEL in MiddleColumn.tsx. */
-const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-7';
+const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
 
 /** Default idle threshold for auto-pause. Per-project override (F11.4)
  *  comes later; for now a single global value. Override at runtime
@@ -522,7 +523,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, ended_at, tokens_in, tokens_out, last_summary,
-                claude_session_id, skip_permissions, model, snoozed_at
+                claude_session_id, permission_mode, model, snoozed_at
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
@@ -532,7 +533,7 @@ export class SessionManager {
         started_at: number; ended_at: number | null;
         tokens_in: number; tokens_out: number; last_summary: string | null;
         claude_session_id: string | null;
-        skip_permissions: number;
+        permission_mode: string;
         model: string | null;
         snoozed_at: number | null;
       }[];
@@ -553,7 +554,7 @@ export class SessionManager {
         tokensOut: r.tokens_out,
         lastSummary: r.last_summary,
         claudeSessionId: r.claude_session_id,
-        skipPermissions: r.skip_permissions === 1,
+        permissionMode: r.permission_mode as PermissionMode,
         model: r.model,
         snoozedAt: r.snoozed_at,
       };
@@ -578,9 +579,9 @@ export class SessionManager {
      *  then spawn the agent inside it. The session's `cwd` will be
      *  the new worktree path, not the project root. */
     newWorktreeBranch?: string;
-    /** When true, launch Claude with --dangerously-skip-permissions.
-     *  Defaults to false. */
-    skipPermissions?: boolean;
+    /** Tool-permission posture passed to the agent via
+     *  `--permission-mode`. Defaults to 'default' (ask before each tool). */
+    permissionMode?: PermissionMode;
     /** Optional `--model <name>` alias (claude-code only). Null/
      *  undefined → don't pass the flag. */
     model?: string | null;
@@ -646,7 +647,7 @@ export class SessionManager {
       // the session — the hook would silently no-op.
       const branch = (await readCurrentBranch(batonFs, cwd)) ?? 'no git';
 
-      const skipPermissions = opts.skipPermissions ?? false;
+      const permissionMode = opts.permissionMode ?? 'default';
       // claude-code sessions default to the newest Opus when the caller
       // doesn't pin a model. We persist the resolved id so the chip
       // always reflects what's actually running and so a future
@@ -659,7 +660,7 @@ export class SessionManager {
         cols: number;
         rows: number;
         resumeAgentSessionId?: string;
-        skipPermissions?: boolean;
+        permissionMode?: PermissionMode;
         model?: string | null;
         fs?: typeof batonFs;
       } = {
@@ -672,7 +673,7 @@ export class SessionManager {
       if (opts.resumeAgentSessionId) {
         spawnOpts.resumeAgentSessionId = opts.resumeAgentSessionId;
       }
-      if (skipPermissions) spawnOpts.skipPermissions = true;
+      if (permissionMode !== 'default') spawnOpts.permissionMode = permissionMode;
       if (model && opts.backendId === 'claude-code') spawnOpts.model = model;
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
@@ -717,7 +718,7 @@ export class SessionManager {
         tokensOut: savedTokensOut,
         lastSummary: savedSummary,
         claudeSessionId: opts.resumeAgentSessionId ?? null,
-        skipPermissions,
+        permissionMode,
         model,
         snoozedAt: savedSnoozedAt,
       };
@@ -732,18 +733,18 @@ export class SessionManager {
       });
 
       // Insert OR revive (resume): on conflict, restore the row.
-      // We also update skip_permissions on conflict because the user
-      // may have flipped YOLO mode between runs.
+      // We also update permission_mode on conflict because the user
+      // may have changed it between runs.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, skip_permissions, model)
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, permission_mode, model)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
-             status           = excluded.status,
-             ended_at         = NULL,
-             worktree_path    = excluded.worktree_path,
-             skip_permissions = excluded.skip_permissions,
-             model            = excluded.model`
+             status          = excluded.status,
+             ended_at        = NULL,
+             worktree_path   = excluded.worktree_path,
+             permission_mode = excluded.permission_mode,
+             model           = excluded.model`
         )
         .run(
           session.id,
@@ -758,7 +759,7 @@ export class SessionManager {
           0,
           null,
           session.claudeSessionId,
-          session.skipPermissions ? 1 : 0,
+          session.permissionMode,
           session.model
         );
 
@@ -847,7 +848,7 @@ export class SessionManager {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path,
-                claude_session_id, skip_permissions, model
+                claude_session_id, permission_mode, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
@@ -858,7 +859,7 @@ export class SessionManager {
           branch: string;
           worktree_path: string;
           claude_session_id: string | null;
-          skip_permissions: number;
+          permission_mode: string;
           model: string | null;
         }
       | undefined;
@@ -898,7 +899,7 @@ export class SessionManager {
       cwd: row.worktree_path,
       reuseSessionId: row.id,
       resumeAgentSessionId: row.claude_session_id,
-      skipPermissions: row.skip_permissions === 1,
+      permissionMode: row.permission_mode as PermissionMode,
       model: row.model,
     });
   }
@@ -913,13 +914,13 @@ export class SessionManager {
   async respawn(sessionId: string): Promise<Session> {
     const row = getDatabase()
       .prepare(
-        `SELECT id, project_id, backend_id, worktree_path, skip_permissions, model
+        `SELECT id, project_id, backend_id, worktree_path, permission_mode, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
       | {
           id: string; project_id: string; backend_id: string;
-          worktree_path: string; skip_permissions: number;
+          worktree_path: string; permission_mode: string;
           model: string | null;
         }
       | undefined;
@@ -929,7 +930,7 @@ export class SessionManager {
       projectId: row.project_id,
       backendId: row.backend_id as AgentBackendId,
       cwd: row.worktree_path,
-      skipPermissions: row.skip_permissions === 1,
+      permissionMode: row.permission_mode as PermissionMode,
       model: row.model,
       reuseSessionId: row.id,
     });
@@ -948,14 +949,14 @@ export class SessionManager {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, worktree_path,
-                claude_session_id, skip_permissions, model
+                claude_session_id, permission_mode, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
       | {
           id: string; project_id: string; backend_id: string;
           worktree_path: string; claude_session_id: string | null;
-          skip_permissions: number; model: string | null;
+          permission_mode: string; model: string | null;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -1011,47 +1012,46 @@ export class SessionManager {
       backendId: row.backend_id as AgentBackendId,
       cwd: row.worktree_path,
       resumeAgentSessionId: newAgentId,
-      skipPermissions: row.skip_permissions === 1,
+      permissionMode: row.permission_mode as PermissionMode,
       model: row.model,
     });
   }
 
   /**
-   * Flip the session's skipPermissions flag and restart Claude with
-   * the new value (using `--resume` so the conversation history
-   * survives). If the session is currently live we kill it first.
+   * Set the session's permission mode and restart the agent with the
+   * new `--permission-mode` (using `--resume` so the conversation
+   * history survives). If the session is currently live we kill it
+   * first.
    *
    * Falls back gracefully if there's no captured claude_session_id —
    * just respawns without --resume (i.e. starts a fresh conversation
    * in the same worktree).
    */
-  async toggleYolo(sessionId: string): Promise<Session> {
+  async setPermissionMode(sessionId: string, mode: PermissionMode): Promise<Session> {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, worktree_path,
-                claude_session_id, skip_permissions, model
+                claude_session_id, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
       | {
           id: string; project_id: string; backend_id: string;
           worktree_path: string; claude_session_id: string | null;
-          skip_permissions: number;
           model: string | null;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
 
-    const next = row.skip_permissions === 1 ? false : true;
-    // Persist BEFORE the kill so a crash mid-toggle still leaves the
+    // Persist BEFORE the kill so a crash mid-change still leaves the
     // intended state in the DB.
     try {
       getDatabase()
-        .prepare('UPDATE sessions SET skip_permissions = ? WHERE id = ?')
-        .run(next ? 1 : 0, sessionId);
+        .prepare('UPDATE sessions SET permission_mode = ? WHERE id = ?')
+        .run(mode, sessionId);
     } catch { /* best-effort */ }
 
-    // Kill any live pty so we can re-spawn with the new flag. We mark
+    // Kill any live pty so we can re-spawn with the new mode. We mark
     // it as an intentional kill so markExited doesn't briefly emit
     // 'errored' between the kill and the new spawn — the chip stays
     // on its current status until the new pty's SessionStart hook
@@ -1070,7 +1070,7 @@ export class SessionManager {
     // Only attempt --resume if the transcript file actually exists
     // (probed on the right side — local fs for local projects, SSH
     // for remote ones). Falls back to a fresh spawn otherwise so the
-    // YOLO toggle doesn't get stuck on a stale claude_session_id.
+    // mode change doesn't get stuck on a stale claude_session_id.
     const useResume =
       !!row.claude_session_id &&
       (await transcriptExistsFor(
@@ -1082,7 +1082,7 @@ export class SessionManager {
       backendId: row.backend_id as AgentBackendId,
       cwd: row.worktree_path,
       reuseSessionId: row.id,
-      skipPermissions: next,
+      permissionMode: mode,
       model: row.model,
       ...(useResume && row.claude_session_id
         ? { resumeAgentSessionId: row.claude_session_id }
@@ -1094,7 +1094,7 @@ export class SessionManager {
    * Persist a new model choice for the session and restart it with
    * the new `--model` (using `--resume` so the conversation history
    * survives). `model: null` clears the override so Claude uses the
-   * user's configured default. Mirrors toggleYolo's kill/respawn
+   * user's configured default. Mirrors setPermissionMode's kill/respawn
    * dance — including the intentionalKills marker so the chip doesn't
    * briefly flash `errored` between the kill and the new spawn.
    */
@@ -1102,14 +1102,14 @@ export class SessionManager {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, worktree_path,
-                claude_session_id, skip_permissions, model
+                claude_session_id, permission_mode, model
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
       | {
           id: string; project_id: string; backend_id: string;
           worktree_path: string; claude_session_id: string | null;
-          skip_permissions: number;
+          permission_mode: string;
           model: string | null;
         }
       | undefined;
@@ -1150,7 +1150,7 @@ export class SessionManager {
       backendId: row.backend_id as AgentBackendId,
       cwd: row.worktree_path,
       reuseSessionId: row.id,
-      skipPermissions: row.skip_permissions === 1,
+      permissionMode: row.permission_mode as PermissionMode,
       model,
       ...(useResume && row.claude_session_id
         ? { resumeAgentSessionId: row.claude_session_id }
@@ -1185,7 +1185,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, ended_at, tokens_in, tokens_out, last_summary,
-                  claude_session_id, skip_permissions, model, snoozed_at
+                  claude_session_id, permission_mode, model, snoozed_at
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -1195,7 +1195,7 @@ export class SessionManager {
             started_at: number; ended_at: number | null;
             tokens_in: number; tokens_out: number;
             last_summary: string | null; claude_session_id: string | null;
-            skip_permissions: number;
+            permission_mode: string;
             model: string | null;
             snoozed_at: number | null;
           }
@@ -1241,7 +1241,7 @@ export class SessionManager {
         snoozedAt: row.snoozed_at,
         lastSummary: row.last_summary,
         claudeSessionId: row.claude_session_id,
-        skipPermissions: row.skip_permissions === 1,
+        permissionMode: row.permission_mode as PermissionMode,
         model: row.model,
       };
       emit({

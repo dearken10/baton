@@ -37,6 +37,28 @@ export type SessionStatus = z.infer<typeof SessionStatus>;
 export const AgentBackendId = z.enum(['claude-code', 'codex', 'mock', 'shell']);
 export type AgentBackendId = z.infer<typeof AgentBackendId>;
 
+/** Tool-permission posture for an agent session. Values are the exact
+ *  strings Claude Code's `--permission-mode` flag accepts, so the
+ *  backend mapping is a near-identity:
+ *    - default           ask before each tool (the safe baseline)
+ *    - plan              read-only; explore without editing
+ *    - acceptEdits       auto-approve file edits + safe FS commands only
+ *    - auto              auto-approve, vetted by a background classifier
+ *                        (this is what users call "automode")
+ *    - bypassPermissions full YOLO — auto-approve everything, no checks
+ *                        (alias of the old `--dangerously-skip-permissions`)
+ *  Codex has no intermediate: only `default` and `bypassPermissions`
+ *  are meaningful there (the latter → --dangerously-bypass-approvals-
+ *  and-sandbox); the renderer restricts Codex to those two. */
+export const PermissionMode = z.enum([
+  'default',
+  'plan',
+  'acceptEdits',
+  'auto',
+  'bypassPermissions',
+]);
+export type PermissionMode = z.infer<typeof PermissionMode>;
+
 export const ConnectionKind = z.enum(['local', 'ssh']);
 export type ConnectionKind = z.infer<typeof ConnectionKind>;
 
@@ -118,10 +140,10 @@ export const Session = z.object({
   lastSummary: z.string().nullable(),
   /** Claude's internal session id (captured from SessionStart hook). */
   claudeSessionId: z.string().nullable(),
-  /** True when this session was spawned with --dangerously-skip-
-   *  permissions, i.e. Claude auto-approves every tool use. Persisted
-   *  per row so toggling survives respawn/resume. */
-  skipPermissions: z.boolean(),
+  /** Tool-permission posture for this session, passed to the agent at
+   *  spawn via `--permission-mode`. Persisted per row so the choice
+   *  survives respawn/resume. See PermissionMode for the value set. */
+  permissionMode: PermissionMode,
   /** Optional Claude model alias passed via `--model <name>` (e.g.
    *  "sonnet", "opus", "haiku"). Null means "don't pass --model" —
    *  Claude picks the user's configured default. Persisted per row so
@@ -355,10 +377,9 @@ const SessionSpawnRequest = z.object({
    *  to drop a shell into an existing branch without creating a new
    *  one. Mutually exclusive with `newWorktreeBranch`. */
   existingWorktreePath: z.string().optional(),
-  /** When true, launch Claude with --dangerously-skip-permissions.
-   *  Defaults to false; the user can flip it later from the middle
-   *  column. */
-  skipPermissions: z.boolean().optional(),
+  /** Initial permission posture. Omit to start in `default` (ask before
+   *  each tool); the user can change it later from the middle column. */
+  permissionMode: PermissionMode.optional(),
   /** Optional model alias passed via `--model <name>` (Claude only for
    *  now). Omit/null to let Claude use the user's configured default. */
   model: z.string().nullable().optional(),
@@ -370,10 +391,14 @@ const SessionKillResponse = z.object({ ok: z.literal(true) });
 const SessionResumeRequest = z.object({ sessionId: SessionId });
 const SessionResumeResponse = z.object({ session: Session });
 
-/** Flip the session's skipPermissions flag and restart with the new
- *  value (using `--resume` so conversation history survives). */
-const SessionToggleYoloRequest = z.object({ sessionId: SessionId });
-const SessionToggleYoloResponse = z.object({ session: Session });
+/** Set the session's permission mode and restart the agent with the new
+ *  `--permission-mode` (using `--resume` so conversation history
+ *  survives). Replaces the old binary toggleYolo. */
+const SessionSetPermissionModeRequest = z.object({
+  sessionId: SessionId,
+  mode: PermissionMode,
+});
+const SessionSetPermissionModeResponse = z.object({ session: Session });
 
 /** Persist a new model choice for the session and restart it with
  *  `--model <name>` (using `--resume` so the conversation history
@@ -847,7 +872,7 @@ export const ControlVerbs = {
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },
   'session.respawn':    { request: SessionRespawnRequest,    response: SessionRespawnResponse },
   'session.clone':      { request: SessionCloneRequest,      response: SessionCloneResponse },
-  'session.toggleYolo': { request: SessionToggleYoloRequest, response: SessionToggleYoloResponse },
+  'session.setPermissionMode': { request: SessionSetPermissionModeRequest, response: SessionSetPermissionModeResponse },
   'session.setModel':   { request: SessionSetModelRequest,   response: SessionSetModelResponse },
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
