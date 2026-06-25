@@ -58,14 +58,35 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
 
   useEffect(() => {
     void load();
-    // The event is a content-free ping — we re-read the transcript.
+    // Re-read the transcript on any content-free ping for THIS session.
+    //   - prompt_submitted: the user's new prompt landed.
+    //   - status_changed:   the agent started/stopped working, so the
+    //     new progress and (on Stop → idle) the recap are on disk now.
+    // Without the status_changed trigger the pane only refreshed when
+    // the user sent the next prompt, so the agent's reply never showed.
     const unsub = window.baton.onEvent((event) => {
-      if (event.type !== 'session.prompt_submitted') return;
+      if (
+        event.type !== 'session.prompt_submitted' &&
+        event.type !== 'session.status_changed'
+      ) return;
       if (event.sessionId !== sessionId) return;
       void load();
     });
     return () => { unsub(); };
   }, [sessionId, load]);
+
+  // While the agent is actively working, status doesn't change between
+  // the start and end of a long turn, so the status_changed trigger
+  // alone can't surface streamed assistant text / tool calls as they
+  // arrive. Poll the transcript on a short interval so the pane updates
+  // live. Only runs while working AND while this pane is mounted (it's
+  // only mounted for the selected session in the Turns view), so the
+  // cost is bounded.
+  useEffect(() => {
+    if (!isWorking) return;
+    const id = window.setInterval(() => { void load(); }, 1500);
+    return () => window.clearInterval(id);
+  }, [isWorking, load]);
 
   // Reset stick-to-bottom when the user changes sessions — fresh
   // session, fresh assumption that we want to follow new turns.
