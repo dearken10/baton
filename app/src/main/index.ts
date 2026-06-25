@@ -20,6 +20,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 
 import { registerControlBus } from './ipc/bus.js';
 import { reconcileMaestroOnStartup } from './services/maestroState.js';
+import { startMaestroAutoExecutor } from './services/maestroAutoExecutor.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { getSessionManager } from './services/sessionManager.js';
 import { addProject } from './services/projectStore.js';
@@ -280,6 +281,16 @@ app.whenReady().then(() => {
     }
   } catch (e) {
     console.warn('[maestro] startup reconcile failed:', e);
+  }
+
+  // Auto-executor closes the loop on PRD F15.2 act-first: when the
+  // user has flipped the mode toggle to "run", new plans from the
+  // tick should fire on the user's behalf instead of sitting in the
+  // UI waiting for a click. Best-effort; never throws.
+  try {
+    startMaestroAutoExecutor();
+  } catch (e) {
+    console.warn('[maestro] auto-executor failed to start:', e);
   }
 
   createWindow();
