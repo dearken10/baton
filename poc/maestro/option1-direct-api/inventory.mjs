@@ -23,7 +23,10 @@ import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'no
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-const BATON_DIR = process.env.BATON_DIR ?? join(homedir(), '.baton');
+// BATON_HOME aligns with the Electron app + maestrod daemon's
+// instance-isolation env. BATON_DIR stays as a legacy alias for any
+// stand-alone callers that already set it.
+const BATON_DIR = process.env.BATON_HOME ?? process.env.BATON_DIR ?? join(homedir(), '.baton');
 const DB_PATH = join(BATON_DIR, 'baton.db');
 const SCROLLBACK_DIR = join(BATON_DIR, 'scrollback');
 const CLAUDE_PROJECTS_DIR = join(homedir(), '.claude', 'projects');

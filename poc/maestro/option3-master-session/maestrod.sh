@@ -32,14 +32,21 @@
 #   MAESTRO_TICK_JITTER_SEC     ± random jitter on each sleep         (10)
 #   USAGE_5H / USAGE_7D         5h/7d plan usage hints (0..1)       (.06)
 #
-# State is per-machine in ~/.baton/maestro/. The pinned session-id
-# lives in option3-master-session/state/ (next to this script).
+# State is per-instance in ${BATON_HOME:-$HOME/.baton}/maestro/. The
+# pinned session-id lives in option3-master-session/state/ (next to
+# this script). BATON_HOME is set by the Electron parent when the user
+# is running a non-default instance; honoring it here keeps each
+# instance's daemon, pid file, and logs isolated.
 
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$HOME/.baton/maestro"
+BATON_HOME_DIR="${BATON_HOME:-$HOME/.baton}"
+LOG_DIR="$BATON_HOME_DIR/maestro"
 mkdir -p "$LOG_DIR"
+# Re-export so bootstrap-or-tick.sh (and the skill running inside the
+# claude process it spawns) inherit the same instance scope.
+export BATON_HOME="$BATON_HOME_DIR"
 
 # ------------------------------------------------------------------
 # CLI parsing: only --poll is special; everything else hands off

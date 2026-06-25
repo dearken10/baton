@@ -14,12 +14,12 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, unlinkSync, openSync, closeSync, utimesSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { app } from 'electron';
 
 import type { ResponseOf } from '../../shared/ipc.js';
+import { batonHome } from '../paths.js';
 
 type State = ResponseOf<'maestro.getState'>;
 type Mode = State['mode'];
@@ -55,26 +55,33 @@ let cache: { at: number; value: State } | null = null;
 const DEFAULT_INTERVAL_MIN = 15;
 const DEFAULT_IDLE_MIN_MIN = 15;
 
-/** Maestro's per-machine state lives in ~/.baton/maestro/ alongside
- *  daemon.pid and the bloat marker. The PAUSED flag is just file
- *  presence (no content); easy to inspect with `ls` and easy for the
- *  shell tick script to honor without parsing JSON. */
+/** Maestro's per-instance state lives in <batonHome()>/maestro/
+ *  alongside daemon.pid and the bloat marker. The PAUSED flag is just
+ *  file presence (no content); easy to inspect with `ls` and easy for
+ *  the shell tick script to honor without parsing JSON.
+ *
+ *  Routed through batonHome() so BATON_HOME relocates Maestro too — a
+ *  dev build and an installed build can each run their own daemon
+ *  without colliding on these flags. */
+function maestroDir(): string {
+  return join(batonHome(), 'maestro');
+}
 function pausedFlagPath(): string {
-  return join(homedir(), '.baton', 'maestro', 'paused');
+  return join(maestroDir(), 'paused');
 }
 
 /** Mode file: contains the literal "propose-first" or "act-first".
  *  Missing or unreadable → DEFAULT_MODE. Same one-line format
  *  bootstrap-or-tick.sh's --mode flag writes. */
 function modeFilePath(): string {
-  return join(homedir(), '.baton', 'maestro', 'mode');
+  return join(maestroDir(), 'mode');
 }
 
 /** Heartbeat path the daemon stats to compute idle time. mtime is the
  *  source of truth; the file body just carries the ISO timestamp for
  *  human inspection (`ls -l` + `cat`). */
 function lastActivityPath(): string {
-  return join(homedir(), '.baton', 'maestro', 'last-activity');
+  return join(maestroDir(), 'last-activity');
 }
 
 function readMode(): Mode {
@@ -141,10 +148,10 @@ function readIdleThresholdMin(): number {
 }
 
 function daemonPidPath(): string {
-  return join(homedir(), '.baton', 'maestro', 'daemon.pid');
+  return join(maestroDir(), 'daemon.pid');
 }
 function daemonLogPath(): string {
-  return join(homedir(), '.baton', 'maestro', 'daemon.log');
+  return join(maestroDir(), 'daemon.log');
 }
 function maestrodScriptPath(): string {
   return join(maestroStateDir(), '..', 'maestrod.sh');

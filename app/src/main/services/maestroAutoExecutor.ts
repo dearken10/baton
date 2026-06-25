@@ -22,8 +22,9 @@
  *      checkpoint, ledger write, and prompt size — we don't duplicate
  *      those here.
  *   4. Call `approveAction({ action })`. Append the decision +
- *      outcome to `~/.baton/maestro/auto-exec.log` so the user can
- *      tail it.
+ *      outcome to `<batonHome()>/maestro/auto-exec.log` so the user
+ *      can tail it. (batonHome() honors BATON_HOME, so multiple
+ *      baton instances get their own log + state.)
  *
  * Lifecycle: started from main/index.ts after `reconcileMaestroOnStartup`.
  * Polls every POLL_INTERVAL_MS. There's no separate stop path —
@@ -38,12 +39,12 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync, appendFileSync } from 'node:fs';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { app } from 'electron';
 
 import type { ResponseOf } from '../../shared/ipc.js';
 import { getDatabase } from '../database/index.js';
+import { batonHome } from '../paths.js';
 import { getProject } from './projectStore.js';
 import { approveAction } from './maestroAction.js';
 
@@ -76,14 +77,17 @@ function planFilePath(): string {
   return join(repoRoot, 'poc', 'maestro', 'option2-claude-skill', 'last-plan.json');
 }
 
+function maestroDir(): string {
+  return join(batonHome(), 'maestro');
+}
 function modeFilePath(): string {
-  return join(homedir(), '.baton', 'maestro', 'mode');
+  return join(maestroDir(), 'mode');
 }
 function pausedFlagPath(): string {
-  return join(homedir(), '.baton', 'maestro', 'paused');
+  return join(maestroDir(), 'paused');
 }
 function autoExecLogPath(): string {
-  return join(homedir(), '.baton', 'maestro', 'auto-exec.log');
+  return join(maestroDir(), 'auto-exec.log');
 }
 
 function readMode(): 'propose-first' | 'act-first' {

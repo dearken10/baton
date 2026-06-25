@@ -33,19 +33,25 @@ SESSION_ID_FILE="$STATE_DIR/session-id"
 TICK_COUNT_FILE="$STATE_DIR/tick-count"
 LAST_TICK_LOG="$STATE_DIR/last-tick.log"
 LOCK_FILE="$STATE_DIR/tick.lock"
+# BATON_HOME isolates Maestro state per baton instance (dev build vs
+# installed build, work vs personal). Inherited from maestrod.sh
+# (which itself reads the Electron parent's env) or falls back to the
+# default ~/.baton when invoked standalone.
+BATON_HOME_DIR="${BATON_HOME:-$HOME/.baton}"
+BATON_DB="$BATON_HOME_DIR/baton.db"
 # Paused flag is shared with the UI (the MaestroChip toggle writes here
 # via the maestro.setPaused IPC). File presence == paused.
-PAUSED_FLAG="$HOME/.baton/maestro/paused"
+PAUSED_FLAG="$BATON_HOME_DIR/maestro/paused"
 # Mode file shared with the UI (maestro.setMode IPC). Contents are
 # the literal "propose-first" or "act-first". Absent → propose-first.
-# Cosmetic at PoC stage; execution gating is v1.x.
-MODE_FILE="$HOME/.baton/maestro/mode"
+MODE_FILE="$BATON_HOME_DIR/maestro/mode"
 # Heartbeat written by the renderer on every mousemove/click/keydown
 # (throttled). The idle gate below treats `now - mtime(...)` as the
 # user's idle time. Missing file = treat as "idle forever" (i.e. the
 # UI is not running; tick is allowed).
-LAST_ACTIVITY_FILE="$HOME/.baton/maestro/last-activity"
-mkdir -p "$STATE_DIR" "$HOME/.baton/maestro"
+LAST_ACTIVITY_FILE="$BATON_HOME_DIR/maestro/last-activity"
+mkdir -p "$STATE_DIR" "$BATON_HOME_DIR/maestro"
+export BATON_HOME="$BATON_HOME_DIR"
 
 current_mode() {
   if [[ -s "$MODE_FILE" ]]; then
@@ -94,7 +100,7 @@ if [[ "$MODE" == "reset" ]]; then
     rm -f "$SESSION_ID_FILE" "$TICK_COUNT_FILE"
     # Best-effort: untag the row in baton.db so it stops being
     # excluded from candidate sets. The session itself stays.
-    sqlite3 "$HOME/.baton/baton.db" \
+    sqlite3 "$BATON_DB" \
       "UPDATE sessions SET session_kind='agent' WHERE claude_session_id='$sid';" \
       >/dev/null 2>&1 || true
   else
@@ -121,7 +127,7 @@ if [[ "$MODE" == "status" ]]; then
     echo "last-active: (no heartbeat yet)"
   fi
   if [[ -n "$sid" ]]; then
-    row="$(sqlite3 "$HOME/.baton/baton.db" \
+    row="$(sqlite3 "$BATON_DB" \
       "SELECT id, backend_id, status, session_kind FROM sessions WHERE claude_session_id='$sid';")"
     echo "baton row  : ${row:-(not yet seen by baton — first tick still pending?)}"
   fi
@@ -312,7 +318,7 @@ if [[ -f "$SHARED_PLAN" ]]; then
 fi
 
 # Tag the baton row so dry-run's F15.1 gate exempts it next tick.
-sqlite3 "$HOME/.baton/baton.db" \
+sqlite3 "$BATON_DB" \
   "UPDATE sessions SET session_kind='maestro' WHERE claude_session_id='$SID';" \
   >/dev/null 2>&1 || true
 
