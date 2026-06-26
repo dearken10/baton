@@ -1,5 +1,6 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore, selectOpenFiles } from '../store.js';
+import { lazyWithRetry } from '../lib/lazyWithRetry.js';
 import { TerminalPane } from './TerminalPane.js';
 import { TurnsPane } from './TurnsPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
@@ -44,7 +45,11 @@ function loadView(): MiddleView {
 // The render site below already gates on `hasOpenFile`, so the chunk is
 // requested exactly once, on first open. Helper tab-id functions live in
 // ./tabIds so other components can import them without pulling Monaco.
-const EditorPane = lazy(() =>
+// lazyWithRetry (not bare lazy): a rebuild/in-place update can delete the
+// hashed chunk this running renderer points at, making the first import()
+// 404. The wrapper reloads the window once to pick up the fresh index.html
+// instead of leaving the editor permanently broken. See lazyWithRetry.ts.
+const EditorPane = lazyWithRetry(() =>
   import('./EditorPane.js').then((m) => ({ default: m.EditorPane })),
 );
 
