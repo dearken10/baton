@@ -359,6 +359,14 @@ button {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+/* Icon-only variant (Projects ☰ / Timeline ◷): drop the uppercase
+   letter treatment and give the glyphs a square, centered hit area. */
+.view-toggle-icons button {
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 8px;
+  letter-spacing: 0;
+}
 
 /* Snoozed project blocks render dimmer so they don't look identical to
    live projects. Dim via `color` rather than `opacity` — any ancestor
@@ -599,6 +607,36 @@ button {
 .col-head .add:hover { background: var(--bg-3); color: var(--text); }
 
 .sessions-list { display: flex; flex-direction: column; gap: 5px; }
+
+/* ── Timeline view ────────────────────────────────────────────
+   Flat feed of active sessions, newest first. Cards reuse the
+   `.session-row` look but surface the owning project + a relative
+   start time in place of the project-block grouping. */
+.timeline-list { display: flex; flex-direction: column; gap: 6px; }
+/* Project name is the headline on a timeline card — cards aren't
+   grouped under a project header here, so it carries the context.
+   The start-time stamp sits flush right so a long branch can't clip it. */
+.timeline-card .timeline-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.timeline-card .timeline-project {
+  flex: 1 1 auto;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-card .timeline-time {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ── Sessions ─────────────────────────────────────────────── */
 .session-row {

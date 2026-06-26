@@ -134,6 +134,12 @@ export const Session = z.object({
   worktreePath: z.string(),
   status: SessionStatus,
   startedAt: z.number(),
+  /** Wall-clock ms of the session's most recent activity — spawn/resume,
+   *  a status change to running/needs-input, or token/summary updates.
+   *  The Timeline view sorts + labels by this rather than startedAt
+   *  (which is re-stamped on every resume). Backfilled to startedAt for
+   *  rows created before the column existed. */
+  lastActiveAt: z.number(),
   endedAt: z.number().nullable(),
   tokensIn: z.number(),
   tokensOut: z.number(),

@@ -150,6 +150,7 @@ describe('session.list', () => {
           snoozedAt: null,
           status: 'running',
           startedAt: Date.now(),
+          lastActiveAt: Date.now(),
           endedAt: null,
           tokensIn: 0,
           tokensOut: 0,

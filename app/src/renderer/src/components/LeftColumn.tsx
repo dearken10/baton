@@ -6,7 +6,7 @@ import { NewTerminalDialog, type NewTerminalChoice } from './NewTerminalDialog.j
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
-import { formatTokens } from '../lib/format.js';
+import { formatTokens, formatRelativeTime } from '../lib/format.js';
 
 function randomHex(n: number): string {
   const arr = new Uint8Array(Math.ceil(n / 2));
@@ -39,6 +39,20 @@ function saveProjectCollapsed(id: string, collapsed: boolean): void {
   } catch { /* localStorage quota / disabled — best-effort */ }
 }
 
+/** Sidebar layout: the classic project-grouped list, or a flat
+ *  timeline of active sessions newest-first. Persisted so the choice
+ *  survives reloads — mirrors MiddleColumn's Live/Turns toggle. */
+const SIDEBAR_VIEW_LS_KEY = 'baton:sidebar:view';
+type SidebarView = 'project' | 'timeline';
+function loadSidebarView(): SidebarView {
+  try {
+    return localStorage.getItem(SIDEBAR_VIEW_LS_KEY) === 'timeline' ? 'timeline' : 'project';
+  } catch { return 'project'; }
+}
+function saveSidebarView(v: SidebarView): void {
+  try { localStorage.setItem(SIDEBAR_VIEW_LS_KEY, v); } catch { /* best-effort */ }
+}
+
 export function LeftColumn(): JSX.Element {
   const projectsRecord = useAppStore((s) => s.projects);
   const sessionsRecord = useAppStore((s) => s.sessions);
@@ -47,6 +61,13 @@ export function LeftColumn(): JSX.Element {
   const connections = useAppStore((s) => s.connections);
   const selectedId = useAppStore((s) => s.selectedSessionId);
   const selectSession = useAppStore((s) => s.selectSession);
+
+  // Top-level sidebar layout: project-grouped list vs. flat timeline.
+  const [viewMode, setViewMode] = useState<SidebarView>(() => loadSidebarView());
+  const switchViewMode = useCallback((next: SidebarView): void => {
+    setViewMode(next);
+    saveSidebarView(next);
+  }, []);
 
   // Active vs. snoozed view. Snoozed projects are kept out of the
   // main list so the user can focus; counts on the toggle make sure
@@ -96,6 +117,20 @@ export function LeftColumn(): JSX.Element {
     }
     return map;
   }, [sessions]);
+
+  // Timeline view: every non-snoozed session whose project is also
+  // active, most-recently-active first. We sort by lastActiveAt (not
+  // startedAt) — startedAt is re-stamped to "now" on every resume, so
+  // sorting by it collapses all resumed sessions onto the launch time.
+  const timelineSessions = useMemo(() => {
+    return Object.values(sessionsRecord)
+      .filter((s) => {
+        if (s.snoozedAt != null) return false;
+        const proj = projectsRecord[s.projectId];
+        return proj != null && proj.snoozedAt == null;
+      })
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  }, [sessionsRecord, projectsRecord]);
 
   /** Generic insert-before reorder. Computes the new full ordering
    *  from `items` (current display order) by moving `fromId` to sit
@@ -498,8 +533,27 @@ export function LeftColumn(): JSX.Element {
     <aside className="col col-left">
       <div className="col-head">
         <span className="col-head-title">
-          <span>Projects</span>
-          {snoozedCount > 0 || view === 'snoozed' ? (
+          <span className="view-toggle view-toggle-icons" role="tablist" aria-label="Sidebar view">
+            <button
+              role="tab"
+              aria-selected={viewMode === 'project'}
+              onClick={() => switchViewMode('project')}
+              aria-label="Projects view"
+              title="Group sessions by project"
+            >
+              ☰
+            </button>
+            <button
+              role="tab"
+              aria-selected={viewMode === 'timeline'}
+              onClick={() => switchViewMode('timeline')}
+              aria-label="Timeline view"
+              title="Active sessions, newest first"
+            >
+              ◷
+            </button>
+          </span>
+          {viewMode === 'project' && (snoozedCount > 0 || view === 'snoozed') ? (
             <span className="view-toggle" role="tablist" aria-label="Project view">
               <button
                 role="tab"
@@ -519,7 +573,7 @@ export function LeftColumn(): JSX.Element {
           ) : null}
         </span>
         <div className="col-head-actions">
-          {view === 'active' ? (
+          {viewMode === 'project' && view === 'active' ? (
             <>
               <OrphansBadge />
               <button
@@ -536,7 +590,21 @@ export function LeftColumn(): JSX.Element {
         </div>
       </div>
       <div className="col-body">
-        {projects.length === 0 ? (
+        {viewMode === 'timeline' ? (
+          <TimelineView
+            sessions={timelineSessions}
+            projects={projectsRecord}
+            selectedId={selectedId}
+            pendingSessionIds={pendingSessionIds}
+            onSelect={selectSession}
+            onResume={resumeSession}
+            onRename={renameSession}
+            onDelete={deleteSession}
+            onClone={cloneSession}
+            onToggleSessionSnooze={toggleSnoozeSession}
+            busy={busy}
+          />
+        ) : projects.length === 0 ? (
           view === 'active' ? (
             <div className="empty">
               <p>No projects yet.</p>
@@ -630,6 +698,140 @@ export function LeftColumn(): JSX.Element {
         />
       ) : null}
     </aside>
+  );
+}
+
+interface TimelineViewProps {
+  sessions: Session[];
+  projects: Record<string, Project>;
+  selectedId: string | null;
+  pendingSessionIds: Set<string>;
+  onSelect: (id: string) => void;
+  onResume: (id: string) => void;
+  onRename: (s: Session) => void;
+  onDelete: (s: Session) => void;
+  onClone: (s: Session) => void;
+  onToggleSessionSnooze: (s: Session) => void;
+  busy: boolean;
+}
+
+/** Flat, project-agnostic feed of the active sessions, newest-started
+ *  at the top. Reuses the `.session-row` card vocabulary from the
+ *  project list but adds the owning project's name + a relative
+ *  "started …" stamp, since cards are no longer grouped under a header. */
+function TimelineView(props: TimelineViewProps): JSX.Element {
+  const {
+    sessions, projects, selectedId, pendingSessionIds,
+    onSelect, onResume, onRename, onDelete, onClone, onToggleSessionSnooze, busy,
+  } = props;
+
+  // Re-render once a minute so the "started Nm ago" stamps stay honest
+  // without a per-card timer. A single shared tick is plenty.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (sessions.length === 0) {
+    return (
+      <div className="empty">
+        <p>No active sessions.</p>
+        <p className="dim">
+          Spawn a session from a project's <strong>⋮</strong> menu and it
+          will show up here, newest first.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="timeline-list">
+      {sessions.map((s) => {
+        const project = projects[s.projectId];
+        const isEnded = s.status === 'done' || s.status === 'errored';
+        const isPending = pendingSessionIds.has(s.id);
+        const onClick = isPending || !isEnded
+          ? () => onSelect(s.id)
+          : () => onResume(s.id);
+        const isWorktreeSession =
+          !!project &&
+          s.worktreePath !== project.path &&
+          s.worktreePath.startsWith(project.path);
+        const badge =
+          s.backendId === 'shell' ? { glyph: '❯',  cls: 'badge-shell' }
+          : isWorktreeSession    ? { glyph: '🌿', cls: 'badge-worktree' }
+          :                        { glyph: '💬', cls: 'badge-session' };
+        const isShell = s.backendId === 'shell';
+        const isSnoozed = s.snoozedAt != null;
+        const showStatusChip =
+          !isShell && !isSnoozed &&
+          (s.status === 'running' || s.status === 'needs-input');
+        const canRename = isWorktreeSession;
+        const canClone =
+          (s.backendId === 'claude-code' || s.backendId === 'codex') &&
+          !!s.claudeSessionId;
+        return (
+          <div
+            key={s.id}
+            className={`session-row timeline-card ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}${isPending ? ' pending' : ''}`}
+            onClick={onClick}
+            title={
+              isPending
+                ? 'Starting…'
+                : isEnded
+                  ? 'Click to start this session'
+                  : `session ${s.id}`
+            }
+            aria-busy={isPending || undefined}
+          >
+            <div className="session-row-main">
+              <span className="timeline-head">
+                <span className="timeline-project" title={project?.path}>
+                  {project?.name ?? 'Unknown project'}
+                </span>
+                <span className="timeline-time">{formatRelativeTime(s.lastActiveAt, now)}</span>
+              </span>
+              <span className="branch">
+                <span className={`session-badge ${badge.cls}`} aria-hidden>{badge.glyph}</span>
+                {s.branch}
+              </span>
+              {s.lastSummary ? (
+                <span className="session-intent" title={s.lastSummary}>
+                  {s.lastSummary}
+                </span>
+              ) : null}
+            </div>
+            {s.tokensIn + s.tokensOut > 0 ? (
+              <span
+                className="tokens"
+                title={`${s.tokensIn.toLocaleString()} in · ${s.tokensOut.toLocaleString()} out`}
+              >
+                {formatTokens(s.tokensIn + s.tokensOut)}
+              </span>
+            ) : null}
+            {isPending ? (
+              <span className="status status-starting" aria-live="polite">
+                <span className="status-spinner" aria-hidden />
+                starting
+              </span>
+            ) : showStatusChip ? (
+              <span className={`status status-${s.status}`}>{s.status}</span>
+            ) : null}
+            <SessionRowMenu
+              canRename={canRename}
+              canClone={canClone}
+              isSnoozed={isSnoozed}
+              onRename={() => onRename(s)}
+              onDelete={() => onDelete(s)}
+              onClone={() => onClone(s)}
+              onToggleSnooze={() => onToggleSessionSnooze(s)}
+              busy={busy}
+            />
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
