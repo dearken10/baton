@@ -627,6 +627,15 @@ button {
    non-menu children keeps the visual fade without the stacking trap. */
 .session-row.ended > :not(.row-menu) { opacity: 0.7; }
 .session-row.ended .branch { color: var(--text-dim); }
+/* Snoozed sessions on the active tab sink to the bottom and render
+   heavily dimmed so they recede behind live ones. Fade the non-menu
+   children with `opacity` (scoped exactly like `.ended` above so the
+   row-menu popup keeps its stacking context) and push the text toward
+   the background colour on top of that. */
+.session-row.snoozed > :not(.row-menu) { opacity: 0.5; }
+.session-row.snoozed .branch,
+.session-row.snoozed .session-intent,
+.session-row.snoozed .tokens { color: var(--text-faint); }
 .session-row:disabled { cursor: progress; }
 /* Row-actions menu — hidden until the row is hovered, or while the
    menu itself is open. Zero width when collapsed so the row layout

@@ -85,6 +85,15 @@ export function LeftColumn(): JSX.Element {
     for (const s of sessions) {
       (map[s.projectId] ??= []).push(s);
     }
+    // Sink snoozed sessions to the bottom of each project, preserving the
+    // relative order within the active and snoozed groups (stable
+    // partition) so a snoozed row doesn't sit between two live ones.
+    for (const id of Object.keys(map)) {
+      const list = map[id];
+      const active = list.filter((s) => s.snoozedAt == null);
+      const snoozed = list.filter((s) => s.snoozedAt != null);
+      if (snoozed.length) map[id] = [...active, ...snoozed];
+    }
     return map;
   }, [sessions]);
 
@@ -832,7 +841,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
             return (
               <div
                 key={s.id}
-                className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}${isPending ? ' pending' : ''}`}
+                className={`session-row ${selectedId === s.id ? 'selected' : ''} ${isEnded ? 'ended' : ''}${isPending ? ' pending' : ''}${isSnoozed ? ' snoozed' : ''}`}
                 onClick={onClick}
                 title={
                   isPending
