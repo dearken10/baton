@@ -27,8 +27,9 @@ interface SessionTurn {
  * Re-fetches on `session.prompt_submitted`. Data comes from
  * `session.turns`, which parses the agent's JSONL on disk.
  *
- * Input: the bottom composer forwards plain text + `\r` to `pty.write`
- * (same path xterm uses for keystrokes). That covers the 80% case
+ * Input: the bottom composer forwards the prompt text and a separate
+ * Enter keystroke to `pty.write` (same path xterm uses for
+ * keystrokes — see Composer for why they're split). That covers the 80% case
  * (send a prompt, type a slash command in full). Interactive bits the
  * TUI renders — permission prompts, slash-command picker, @-mentions —
  * still need the Live view.
@@ -228,14 +229,42 @@ function ProgressRow({ item }: { item: ProgressItem }): JSX.Element {
   );
 }
 
-/** Bottom-of-pane prompt composer. Sends plain text + `\r` to the pty
- *  via the same `pty.write` IPC xterm uses, so the TUI receives it
- *  exactly as if the user had typed in the live terminal. Enter sends,
- *  Shift+Enter inserts a newline (standard chat UX). */
+/** Gap between writing the prompt text and writing the submitting
+ *  Enter. Long enough that the agent's TUI doesn't fold the \r into the
+ *  preceding paste burst (which would insert a newline instead of
+ *  submitting), short enough to feel instant. */
+const ENTER_SUBMIT_DELAY_MS = 80;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => { window.setTimeout(resolve, ms); });
+}
+
+/** base64-of-UTF-8 encode `s` and write it to the session's pty —
+ *  mirrors TerminalPane's keystroke encoder so the TUI receives it
+ *  exactly as if typed in the live terminal. */
+function writeToPty(sessionId: string, s: string): Promise<unknown> {
+  const encoded = btoa(unescape(encodeURIComponent(s)));
+  return window.baton.call('pty.write', { sessionId, data: encoded });
+}
+
+/** Bottom-of-pane prompt composer. Sends the prompt text, then a
+ *  separate Enter keystroke, to the pty via the same `pty.write` IPC
+ *  xterm uses, so the TUI receives it as if typed in the live terminal.
+ *  Enter sends, Shift+Enter inserts a newline (standard chat UX). */
 function Composer({ sessionId }: { sessionId: string }): JSX.Element {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Focus the composer when the Turns view opens (and when the
+  // selected session changes while it's open). This overlay sits on
+  // top of the still-mounted live xterm, whose hidden helper textarea
+  // is directly underneath us. Without grabbing focus here, keyboard
+  // focus stays on that terminal, so Enter lands in the TUI as a
+  // newline instead of submitting the prompt.
+  useEffect(() => {
+    taRef.current?.focus();
+  }, [sessionId]);
 
   // Auto-grow up to ~6 rows, then scroll. Cheap measurement: reset to
   // 'auto' so scrollHeight reflects the natural content height.
@@ -251,14 +280,31 @@ function Composer({ sessionId }: { sessionId: string }): JSX.Element {
     if (!value.trim() || busy) return;
     setBusy(true);
     try {
-      // Mirror TerminalPane's encoder — base64 of UTF-8 bytes. Append \r
-      // to commit the prompt in the agent's TUI (Enter keystroke).
-      const payload = value + '\r';
-      const encoded = btoa(unescape(encodeURIComponent(payload)));
-      await window.baton.call('pty.write', { sessionId, data: encoded });
+      // Send the prompt text and the submitting Enter as TWO separate
+      // pty writes with a gap between them — do NOT append \r to the
+      // text in a single write.
+      //
+      // The agent's TUI (Claude Code / Codex) runs a paste-detection
+      // heuristic: when a burst of bytes arrives together it's treated
+      // as pasted content, and a \r riding along at the end of that
+      // burst is inserted as a literal newline in the input box instead
+      // of submitting. That's the "Enter just makes a newline in the
+      // terminal" bug. In the Live terminal each keystroke arrives on
+      // its own (human typing), so Enter there always submits.
+      //
+      // Writing the text first, letting it settle, then writing \r on
+      // its own makes the TUI read the \r as a real Enter keypress.
+      await writeToPty(sessionId, value);
+      await delay(ENTER_SUBMIT_DELAY_MS);
+      await writeToPty(sessionId, '\r');
       setText('');
     } finally {
       setBusy(false);
+      // Keep focus on the composer after a send. The Send-button click
+      // moves focus to the button, and any blur drops keystrokes into
+      // the xterm sitting underneath this overlay — so the next Enter
+      // would leak to the terminal instead of submitting here.
+      taRef.current?.focus();
     }
   }
 
@@ -283,7 +329,6 @@ function Composer({ sessionId }: { sessionId: string }): JSX.Element {
         rows={1}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
-        disabled={busy}
       />
       <button
         type="submit"
