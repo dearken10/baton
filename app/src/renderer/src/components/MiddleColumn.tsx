@@ -119,7 +119,6 @@ export function MiddleColumn(): JSX.Element {
   );
   const selected = selectedId ? sessionsRecord[selectedId] ?? null : null;
   const selectedProject = selected ? projectsRecord[selected.projectId] ?? null : null;
-  const selectedIsLive = !!selected && isLive(selected);
 
   // Per-session pending lock shared with the LeftColumn via the store
   // — the sidebar row needs to flip to "Starting…" the same instant
@@ -153,6 +152,92 @@ export function MiddleColumn(): JSX.Element {
       alert(`Resume failed: ${String(err)}`);
     } finally {
       markRespawnPending(sessionId, false);
+    }
+  }
+
+  // ── Companion shell terminals (tabs inside an agent session) ──────
+  // Claude Code / Codex sessions can host extra plain-shell terminals
+  // that run in the agent's exact worktree. They're real `shell` sessions
+  // tagged with parentSessionId; here they surface as tabs and are hidden
+  // from the sidebar (see LeftColumn). Standalone shell sessions don't get
+  // the tab strip — only the two agent backends do.
+  const isAgentSession = !!selected
+    && (selected.backendId === 'claude-code' || selected.backendId === 'codex');
+  const agentChildren = useMemo(
+    () => (selected ? sessions.filter((s) => s.parentSessionId === selected.id) : []),
+    [sessions, selected],
+  );
+  const [activeChildBySession, setActiveChildBySession] =
+    useState<Record<string, string | null>>({});
+  const activeChildId = selected ? activeChildBySession[selected.id] ?? null : null;
+  // Re-derive from the live list so a deleted/exited child can't leave the
+  // bottom pane pointing at a tab that no longer exists.
+  const activeChild = agentChildren.find((c) => c.id === activeChildId) ?? null;
+  // The session whose terminal (or ended-placeholder) fills the bottom
+  // pane: the active companion tab if one is picked, else the selected
+  // session itself.
+  const activeSession = activeChild ?? selected;
+  const activeTerminalId = activeSession?.id ?? null;
+  const activeSessionIsLive = !!activeSession && isLive(activeSession);
+  const setActiveTab = useCallback(
+    (agentId: string, childId: string | null): void => {
+      setActiveChildBySession((prev) => ({ ...prev, [agentId]: childId }));
+    },
+    [],
+  );
+
+  // Switching the active tab changes which (possibly previously hidden)
+  // xterm becomes visible — nudge it to re-fit, same as the selectedId /
+  // split-ratio effect above.
+  useEffect(() => {
+    const id = window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [activeTerminalId]);
+
+  const [addingTerminal, setAddingTerminal] = useState(false);
+  async function addTerminal(agent: Session): Promise<void> {
+    if (addingTerminal) return;
+    setAddingTerminal(true);
+    try {
+      const { session } = await window.baton.call('session.spawn', {
+        projectId: agent.projectId,
+        // Forced to a shell by the main-process handler when
+        // parentSessionId is set; passed here only to satisfy the type.
+        backendId: 'shell',
+        parentSessionId: agent.id,
+      });
+      setActiveTab(agent.id, session.id);
+    } catch (err) {
+      alert(`Add terminal failed: ${String(err)}`);
+    } finally {
+      setAddingTerminal(false);
+    }
+  }
+  async function closeTerminal(agentId: string, child: Session): Promise<void> {
+    setActiveTab(agentId, null);
+    try {
+      // removeWorktree:false — companion terminals share the agent's
+      // worktree; closing a tab must never delete that shared tree.
+      await window.baton.call('session.delete', {
+        sessionId: child.id,
+        removeWorktree: false,
+      });
+    } catch (err) {
+      alert(`Close terminal failed: ${String(err)}`);
+    }
+  }
+  async function reopenTerminal(child: Session): Promise<void> {
+    if (isRespawnPending(child.id)) return;
+    markRespawnPending(child.id, true);
+    try {
+      await window.baton.call('session.respawn', { sessionId: child.id });
+      if (child.parentSessionId) setActiveTab(child.parentSessionId, child.id);
+    } catch (err) {
+      alert(`Reopen terminal failed: ${String(err)}`);
+    } finally {
+      markRespawnPending(child.id, false);
     }
   }
 
@@ -264,7 +349,7 @@ export function MiddleColumn(): JSX.Element {
                   role="tab"
                   aria-selected={view === 'live'}
                   className={view === 'live' ? 'on' : ''}
-                  onClick={() => switchView('live')}
+                  onClick={() => { switchView('live'); setActiveTab(selected.id, null); }}
                   title="Live xterm — interactive view of the agent's TUI"
                 >
                   Live
@@ -274,7 +359,7 @@ export function MiddleColumn(): JSX.Element {
                   role="tab"
                   aria-selected={view === 'turns'}
                   className={view === 'turns' ? 'on' : ''}
-                  onClick={() => switchView('turns')}
+                  onClick={() => { switchView('turns'); setActiveTab(selected.id, null); }}
                   title="Turns — every prompt broken into user input, progress, recap"
                 >
                   Turns
@@ -346,91 +431,175 @@ export function MiddleColumn(): JSX.Element {
         ) : null}
         {hasOpenFile ? <HSplitHandle key="handle" onResize={onSplitResize} /> : null}
         <div className="middle-bottom" key="bottom">
-          {/* All live terminals stay mounted — we just hide the
-              ones that aren't selected. Each keeps its own scrollback.
-              The Turns pane overlays the active terminal-slot via
-              position:absolute rather than toggling display on it,
-              so the xterm host below keeps its size and identity. */}
-          {liveSessions.map((s) => (
-            <div
-              key={s.id}
-              className="terminal-slot"
-              style={{ display: s.id === selectedId ? 'flex' : 'none' }}
-            >
-              <TerminalPane sessionId={s.id} />
-            </div>
-          ))}
-          {selected && view === 'turns'
-            && (selected.backendId === 'claude-code' || selected.backendId === 'codex') ? (
-            <div className="turns-slot turns-slot-overlay">
-              <TurnsPane sessionId={selected.id} />
+          {/* Terminal tab strip — only for agent sessions. The first tab
+              is the agent's own terminal; the rest are companion shells
+              the user added with ＋, each closeable with ×. */}
+          {isAgentSession && selected ? (
+            <div className="terminal-tabs" role="tablist" aria-label="Session terminals">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={!activeChild}
+                className={`terminal-tab${!activeChild ? ' on' : ''}`}
+                onClick={() => setActiveTab(selected.id, null)}
+                title="The agent's own terminal"
+              >
+                {selected.backendId === 'codex' ? 'Codex' : 'Claude'}
+              </button>
+              {agentChildren.map((c, i) => {
+                const on = activeChild?.id === c.id;
+                return (
+                  <span key={c.id} className={`terminal-tab${on ? ' on' : ''}`}>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={on}
+                      className="terminal-tab-label"
+                      onClick={() => setActiveTab(selected.id, c.id)}
+                      title={`Shell terminal · ${c.worktreePath}`}
+                    >
+                      {`Terminal ${i + 1}`}
+                    </button>
+                    <button
+                      type="button"
+                      className="terminal-tab-close"
+                      onClick={() => closeTerminal(selected.id, c)}
+                      title="Close this terminal"
+                      aria-label={`Close terminal ${i + 1}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                );
+              })}
+              <button
+                type="button"
+                className="terminal-tab-add"
+                onClick={() => addTerminal(selected)}
+                disabled={addingTerminal}
+                title="Add a shell terminal in this session's working directory"
+                aria-label="Add terminal"
+              >
+                ＋
+              </button>
             </div>
           ) : null}
-
-          {/* Selected an ended session OR nothing? show a placeholder
-              (one of these, mutually exclusive with the live slots). */}
-          {selected && !selectedIsLive ? (
-            <div className="empty session-ended">
-              <h3>{selected.backendId === 'shell' ? 'Terminal ended' : 'Session ended'}</h3>
-              {selected.backendId === 'shell' ? (
-                <p className="dim">
-                  The shell exited. Open a fresh terminal in the same
-                  folder — your scrollback is gone but the working
-                  directory is unchanged.
-                </p>
-              ) : selected.claudeSessionId ? (
-                <p className="dim">
-                  The prior conversation is still on disk. Resume picks
-                  it up where it left off; Start fresh keeps the worktree
-                  and branch but begins a new chat.
-                </p>
-              ) : (
-                <p className="dim">
-                  No conversation history was saved for this session.
-                  You can still start a new agent here — the worktree
-                  and branch are untouched.
-                </p>
-              )}
-              <div className="session-ended-actions">
-                {selected.backendId !== 'shell' && selected.claudeSessionId ? (
-                  <button
-                    type="button"
-                    className="btn primary"
-                    onClick={() => resumeHere(selected.id)}
-                    disabled={isRespawnPending(selected.id)}
-                    aria-busy={isRespawnPending(selected.id) || undefined}
-                  >
-                    {isRespawnPending(selected.id) ? 'Starting…' : 'Resume conversation'}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className={`btn${selected.backendId === 'shell' ? ' primary' : ''}`}
-                  onClick={() => respawnHere(selected.id)}
-                  disabled={isRespawnPending(selected.id)}
-                  aria-busy={isRespawnPending(selected.id) || undefined}
-                >
-                  {isRespawnPending(selected.id)
-                    ? 'Starting…'
-                    : selected.backendId === 'shell'
-                      ? 'Open fresh terminal'
-                      : 'Start fresh session here'}
-                </button>
+          <div className="terminal-area">
+            {/* All live terminals stay mounted — we just hide the ones
+                that aren't active. Each keeps its own scrollback. The
+                Turns pane overlays the active terminal-slot via
+                position:absolute rather than toggling display on it, so
+                the xterm host below keeps its size and identity. */}
+            {liveSessions.map((s) => (
+              <div
+                key={s.id}
+                className="terminal-slot"
+                style={{ display: s.id === activeTerminalId ? 'flex' : 'none' }}
+              >
+                <TerminalPane sessionId={s.id} />
               </div>
-              <p className="dim mono">
-                status: {selected.status} · ended{' '}
-                {selected.endedAt
-                  ? new Date(selected.endedAt).toLocaleString()
-                  : 'unknown'}
-              </p>
-            </div>
-          ) : null}
+            ))}
+            {selected && view === 'turns' && !activeChild && isAgentSession ? (
+              <div className="turns-slot turns-slot-overlay">
+                <TurnsPane sessionId={selected.id} />
+              </div>
+            ) : null}
 
-          {!selected ? (
-            <div className="empty">
-              <p>Add a project, then spawn an agent in it from the left column.</p>
-            </div>
-          ) : null}
+            {/* The active tab points at an ended session? show a
+                placeholder. The companion-shell case gets its own
+                reopen/close affordance; agent + standalone shells reuse
+                the resume / start-fresh flow. */}
+            {activeSession && !activeSessionIsLive ? (
+              activeChild ? (
+                <div className="empty session-ended">
+                  <h3>Terminal ended</h3>
+                  <p className="dim">
+                    This shell exited. Reopen a fresh shell in the same
+                    directory, or close the tab.
+                  </p>
+                  <div className="session-ended-actions">
+                    <button
+                      type="button"
+                      className="btn primary"
+                      onClick={() => reopenTerminal(activeChild)}
+                      disabled={isRespawnPending(activeChild.id)}
+                      aria-busy={isRespawnPending(activeChild.id) || undefined}
+                    >
+                      {isRespawnPending(activeChild.id) ? 'Starting…' : 'Reopen terminal'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => selected && closeTerminal(selected.id, activeChild)}
+                    >
+                      Close tab
+                    </button>
+                  </div>
+                </div>
+              ) : selected ? (
+                <div className="empty session-ended">
+                  <h3>{selected.backendId === 'shell' ? 'Terminal ended' : 'Session ended'}</h3>
+                  {selected.backendId === 'shell' ? (
+                    <p className="dim">
+                      The shell exited. Open a fresh terminal in the same
+                      folder — your scrollback is gone but the working
+                      directory is unchanged.
+                    </p>
+                  ) : selected.claudeSessionId ? (
+                    <p className="dim">
+                      The prior conversation is still on disk. Resume picks
+                      it up where it left off; Start fresh keeps the worktree
+                      and branch but begins a new chat.
+                    </p>
+                  ) : (
+                    <p className="dim">
+                      No conversation history was saved for this session.
+                      You can still start a new agent here — the worktree
+                      and branch are untouched.
+                    </p>
+                  )}
+                  <div className="session-ended-actions">
+                    {selected.backendId !== 'shell' && selected.claudeSessionId ? (
+                      <button
+                        type="button"
+                        className="btn primary"
+                        onClick={() => resumeHere(selected.id)}
+                        disabled={isRespawnPending(selected.id)}
+                        aria-busy={isRespawnPending(selected.id) || undefined}
+                      >
+                        {isRespawnPending(selected.id) ? 'Starting…' : 'Resume conversation'}
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={`btn${selected.backendId === 'shell' ? ' primary' : ''}`}
+                      onClick={() => respawnHere(selected.id)}
+                      disabled={isRespawnPending(selected.id)}
+                      aria-busy={isRespawnPending(selected.id) || undefined}
+                    >
+                      {isRespawnPending(selected.id)
+                        ? 'Starting…'
+                        : selected.backendId === 'shell'
+                          ? 'Open fresh terminal'
+                          : 'Start fresh session here'}
+                    </button>
+                  </div>
+                  <p className="dim mono">
+                    status: {selected.status} · ended{' '}
+                    {selected.endedAt
+                      ? new Date(selected.endedAt).toLocaleString()
+                      : 'unknown'}
+                  </p>
+                </div>
+              ) : null
+            ) : null}
+
+            {!selected ? (
+              <div className="empty">
+                <p>Add a project, then spawn an agent in it from the left column.</p>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
       <SessionInfoDialog

@@ -94,7 +94,9 @@ export function LeftColumn(): JSX.Element {
   );
   const projects = view === 'active' ? activeProjects : snoozedProjects;
   const sessions = useMemo(() => {
-    const all = Object.values(sessionsRecord);
+    // Companion terminals (parentSessionId set) live as tabs inside their
+    // agent session in the middle column, not as standalone sidebar rows.
+    const all = Object.values(sessionsRecord).filter((s) => s.parentSessionId == null);
     return all.slice().sort((a, b) => {
       const oa = sessionOrder[a.id] ?? Number.MAX_SAFE_INTEGER;
       const ob = sessionOrder[b.id] ?? Number.MAX_SAFE_INTEGER;
@@ -125,6 +127,7 @@ export function LeftColumn(): JSX.Element {
   const timelineSessions = useMemo(() => {
     return Object.values(sessionsRecord)
       .filter((s) => {
+        if (s.parentSessionId != null) return false;
         if (s.snoozedAt != null) return false;
         const proj = projectsRecord[s.projectId];
         return proj != null && proj.snoozedAt == null;

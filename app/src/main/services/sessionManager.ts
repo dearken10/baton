@@ -524,7 +524,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary,
-                claude_session_id, permission_mode, model, snoozed_at
+                claude_session_id, permission_mode, model, snoozed_at, parent_session_id
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
@@ -537,6 +537,7 @@ export class SessionManager {
         permission_mode: string;
         model: string | null;
         snoozed_at: number | null;
+        parent_session_id: string | null;
       }[];
 
     return rows.map((r) => {
@@ -559,6 +560,7 @@ export class SessionManager {
         permissionMode: r.permission_mode as PermissionMode,
         model: r.model,
         snoozedAt: r.snoozed_at,
+        parentSessionId: r.parent_session_id,
       };
     });
   }
@@ -587,6 +589,10 @@ export class SessionManager {
     /** Optional `--model <name>` alias (claude-code only). Null/
      *  undefined → don't pass the flag. */
     model?: string | null;
+    /** When set, this is a companion shell terminal attached to the agent
+     *  session with this id. Persisted so it survives restarts and stays
+     *  grouped under the agent in the middle column. */
+    parentSessionId?: string | null;
   }): Promise<Session> {
     await this.startHookServer();
 
@@ -732,6 +738,7 @@ export class SessionManager {
         permissionMode,
         model,
         snoozedAt: savedSnoozedAt,
+        parentSessionId: opts.parentSessionId ?? null,
       };
 
       // Make the session visible to the hook handler IMMEDIATELY,
@@ -748,8 +755,8 @@ export class SessionManager {
       // may have changed it between runs.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, permission_mode, model)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, permission_mode, model, parent_session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              status          = excluded.status,
              ended_at        = NULL,
@@ -772,7 +779,8 @@ export class SessionManager {
           null,
           session.claudeSessionId,
           session.permissionMode,
-          session.model
+          session.model,
+          session.parentSessionId
         );
 
       // Wire pty → renderer via the dedicated pty.data channel.
@@ -926,7 +934,7 @@ export class SessionManager {
   async respawn(sessionId: string): Promise<Session> {
     const row = getDatabase()
       .prepare(
-        `SELECT id, project_id, backend_id, worktree_path, permission_mode, model
+        `SELECT id, project_id, backend_id, worktree_path, permission_mode, model, parent_session_id
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
@@ -934,6 +942,7 @@ export class SessionManager {
           id: string; project_id: string; backend_id: string;
           worktree_path: string; permission_mode: string;
           model: string | null;
+          parent_session_id: string | null;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -945,6 +954,10 @@ export class SessionManager {
       permissionMode: row.permission_mode as PermissionMode,
       model: row.model,
       reuseSessionId: row.id,
+      // Keep companion terminals attached to their agent across respawn —
+      // otherwise the live meta loses parentSessionId and the row would
+      // re-surface as a standalone sidebar session until the next restart.
+      parentSessionId: row.parent_session_id,
     });
   }
 
@@ -1197,7 +1210,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary,
-                  claude_session_id, permission_mode, model, snoozed_at
+                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -1210,6 +1223,7 @@ export class SessionManager {
             permission_mode: string;
             model: string | null;
             snoozed_at: number | null;
+            parent_session_id: string | null;
           }
         | undefined;
       if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -1256,6 +1270,7 @@ export class SessionManager {
         claudeSessionId: row.claude_session_id,
         permissionMode: row.permission_mode as PermissionMode,
         model: row.model,
+        parentSessionId: row.parent_session_id,
       };
       emit({
         type: 'session.renamed',
