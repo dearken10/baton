@@ -8,6 +8,13 @@ interface Props {
   onCancel: () => void;
   onCreate: (branch: string) => void;
   busy: boolean;
+  /** Optional copy overrides so the same dialog can front other
+   *  worktree-creating flows (e.g. "Clone to worktree"). */
+  title?: string;
+  subtitle?: string;
+  /** Action label; defaults to "Create worktree" / "Creating…". */
+  submitLabel?: string;
+  busyLabel?: string;
 }
 
 /**
@@ -21,6 +28,10 @@ export function NewWorktreeDialog({
   onCancel,
   onCreate,
   busy,
+  title,
+  subtitle,
+  submitLabel,
+  busyLabel,
 }: Props): JSX.Element | null {
   const [branch, setBranch] = useState(defaultBranch);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -82,10 +93,10 @@ export function NewWorktreeDialog({
         }}
       >
         <div className="dialog-head">
-          <h3 id="nwd-title">New worktree in {project.name}</h3>
+          <h3 id="nwd-title">{title ?? `New worktree in ${project.name}`}</h3>
           <p className="dim">
-            Creates an isolated git worktree on a new branch and spawns a Claude
-            Code session inside it.
+            {subtitle ??
+              'Creates an isolated git worktree on a new branch and spawns a Claude Code session inside it.'}
           </p>
         </div>
 
@@ -120,7 +131,9 @@ export function NewWorktreeDialog({
             Cancel
           </button>
           <button type="submit" className="btn primary" disabled={!canCreate}>
-            {busy ? 'Creating…' : 'Create worktree'}
+            {busy
+              ? (busyLabel ?? 'Creating…')
+              : (submitLabel ?? 'Create worktree')}
           </button>
         </div>
       </form>

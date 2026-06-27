@@ -263,7 +263,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return { session };
   },
   'session.clone': async (req) => {
-    const session = await getSessionManager().clone(req.sessionId);
+    const session = await getSessionManager().clone(
+      req.sessionId,
+      req.newWorktreeBranch ? { newWorktreeBranch: req.newWorktreeBranch } : {}
+    );
     return { session };
   },
   'session.setPermissionMode': async (req) => {

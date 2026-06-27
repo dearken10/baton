@@ -438,7 +438,13 @@ const SessionRespawnResponse = z.object({ session: Session });
  *  under a fresh agent session id, then spawn a new baton session that
  *  resumes from the copy. The original is untouched, so the user can
  *  explore an alternate path without losing the trunk. */
-const SessionCloneRequest = z.object({ sessionId: SessionId });
+const SessionCloneRequest = z.object({
+  sessionId: SessionId,
+  /** When set, carve out a fresh git worktree on this branch (off the
+   *  source session's current commit) and run the clone there instead
+   *  of sharing the source session's working tree. */
+  newWorktreeBranch: z.string().optional(),
+});
 const SessionCloneResponse = z.object({ session: Session });
 
 const SessionDeleteRequest = z.object({

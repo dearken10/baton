@@ -969,8 +969,18 @@ export class SessionManager {
    * without giving up the trunk. Local-fs projects only — remote
    * clone would need an SSH copy of the agent's transcript dir, which
    * we haven't built yet.
+   *
+   * When `opts.newWorktreeBranch` is set ("Clone to worktree"), we
+   * carve out a fresh git worktree on that branch — branched off the
+   * source session's current commit — and run the clone there. The
+   * transcript copy then lands under the *new* worktree's path so
+   * Claude (which derives its transcript dir from the cwd) can resume
+   * it. Without the option, the clone shares the source's working tree.
    */
-  async clone(sessionId: string): Promise<Session> {
+  async clone(
+    sessionId: string,
+    opts?: { newWorktreeBranch?: string }
+  ): Promise<Session> {
     const row = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, worktree_path,
@@ -1002,6 +1012,38 @@ export class SessionManager {
       );
     }
 
+    // Where the clone will live. Default: the source's own working
+    // tree. With "Clone to worktree", a fresh worktree off the source's
+    // current commit.
+    let targetCwd = row.worktree_path;
+    const branch = opts?.newWorktreeBranch?.trim();
+    if (branch) {
+      const project = getProject(row.project_id);
+      if (!project) throw new Error(`Unknown project: ${row.project_id}`);
+      const projectFs = getFsForProject(row.project_id);
+      // Branch off the source worktree's HEAD so the clone sees the same
+      // committed code it was working against (uncommitted changes don't
+      // carry over — git worktree add only takes committed state).
+      let base: string | undefined;
+      try {
+        const head = await projectFs.exec('git', ['rev-parse', 'HEAD'], {
+          cwd: row.worktree_path,
+          timeoutMs: 8000,
+        });
+        if (head.code === 0) base = head.stdout.trim() || undefined;
+      } catch {
+        // Fall back to the project root's HEAD (createWorktree default).
+      }
+      const wt = await createWorktree({
+        projectId: row.project_id,
+        projectRoot: project.path,
+        branchName: branch,
+        ...(base ? { base } : {}),
+        fs: projectFs,
+      });
+      targetCwd = wt.path;
+    }
+
     const newAgentId = randomUUID();
     if (row.backend_id === 'claude-code') {
       const src = claudeTranscriptPath(row.worktree_path, row.claude_session_id);
@@ -1011,7 +1053,9 @@ export class SessionManager {
           '(it likely ended before any user message was sent).'
         );
       }
-      const dst = claudeTranscriptPath(row.worktree_path, newAgentId);
+      // Claude keys its transcript dir off the cwd, so the copy has to
+      // land under `targetCwd` (the new worktree when cloning there).
+      const dst = claudeTranscriptPath(targetCwd, newAgentId);
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.copyFileSync(src, dst);
     } else {
@@ -1035,7 +1079,7 @@ export class SessionManager {
     return this.spawn({
       projectId: row.project_id,
       backendId: row.backend_id as AgentBackendId,
-      cwd: row.worktree_path,
+      cwd: targetCwd,
       resumeAgentSessionId: newAgentId,
       permissionMode: row.permission_mode as PermissionMode,
       model: row.model,
