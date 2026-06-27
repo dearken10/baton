@@ -148,6 +148,7 @@ describe('session.list', () => {
           permissionMode: 'default',
           model: null,
           snoozedAt: null,
+          parentSessionId: null,
           status: 'running',
           startedAt: Date.now(),
           lastActiveAt: Date.now(),

@@ -160,6 +160,12 @@ export const Session = z.object({
    *  the default `idle` treatment) so false-positive needs-input
    *  flags don't keep nagging. */
   snoozedAt: z.number().nullable(),
+  /** When set, this is a companion shell terminal attached to the agent
+   *  session with this id (a claude-code/codex row). Companion terminals
+   *  spawn in the agent's exact worktree and surface as extra tabs in the
+   *  middle column rather than as standalone rows in the sidebar. Null for
+   *  ordinary top-level sessions. */
+  parentSessionId: SessionId.nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -389,6 +395,11 @@ const SessionSpawnRequest = z.object({
   /** Optional model alias passed via `--model <name>` (Claude only for
    *  now). Omit/null to let Claude use the user's configured default. */
   model: z.string().nullable().optional(),
+  /** When set, spawn a companion shell terminal attached to this agent
+   *  session. The cwd is taken from the parent's worktree (no worktree
+   *  lookup), `backendId` is forced to 'shell', and the new row is hidden
+   *  from the sidebar — it shows as an extra tab in the middle column. */
+  parentSessionId: SessionId.optional(),
 });
 const SessionSpawnResponse = z.object({ session: Session });
 const SessionKillRequest = z.object({ sessionId: SessionId });
