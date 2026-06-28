@@ -282,6 +282,55 @@ if ! mkdir "$LOCK_FILE" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK_FILE" 2>/dev/null || true' EXIT
 
+# Plan-usage hints from env. Both backends read them.
+export USAGE_5H="${USAGE_5H:-0.06}"
+export USAGE_7D="${USAGE_7D:-0.06}"
+
+# Tick backend switch:
+#   option4 (default) — per-session-clone orchestrator. Reads candidate
+#                       sessions from baton.db, clones each one's JSONL,
+#                       prompts each clone for its own next move,
+#                       falls back through phase 1/2/3. No master-mind
+#                       session to maintain; cheaper to reason about
+#                       per tick + no inventory truncation. Writes plan
+#                       directly to $PLAN_FILE.
+#   option3           — the original master-mind session model. Resumes
+#                       one continuous claude session each tick and fires
+#                       the /maestro-tick slash command. Carries memory
+#                       across ticks (calibration accumulates) but is
+#                       limited by inventory truncation.
+MAESTRO_BACKEND="${MAESTRO_BACKEND:-option4}"
+
+if [[ "$MAESTRO_BACKEND" == "option4" ]]; then
+  # ── Option 4 — per-session-clone ────────────────────────────────────
+  OPT4_SCRIPT="$HERE/../option4-per-session-clone/per-session-tick.mjs"
+  if [[ ! -f "$OPT4_SCRIPT" ]]; then
+    echo "$(date -Iseconds) tick FAILED: option4 script missing at $OPT4_SCRIPT" >&2
+    exit 1
+  fi
+  echo "$(date -Iseconds) tick backend=option4 (per-session-clone)"
+  set +e
+  node "$OPT4_SCRIPT" \
+    </dev/null \
+    > "$LAST_TICK_LOG" 2>&1
+  EXIT=$?
+  set -e
+  if (( EXIT != 0 )); then
+    echo "$(date -Iseconds) tick FAILED exit=$EXIT" >&2
+    cat "$LAST_TICK_LOG" >&2
+    exit "$EXIT"
+  fi
+  # per-session-tick.mjs itself writes $PLAN_FILE, archives a numbered
+  # snapshot under $STATE_DIR/plans/, and bumps $STATE_DIR/tick-count.
+  # We only need to touch the success marker for the rate-limit gate.
+  : > "$STATE_DIR/last-tick-success"
+  echo "$(date -Iseconds) tick ok  backend=option4  count=$(current_tick_count)"
+  echo "--- plan summary ---"
+  tail -20 "$LAST_TICK_LOG"
+  exit 0
+fi
+
+# ── Option 3 — master-mind session ────────────────────────────────────
 # Decide bootstrap vs resume
 SID="$(current_session_id)"
 RESUME_FAILED=0
@@ -293,10 +342,6 @@ else
   echo "$(date -Iseconds) resume: session-id=$SID  tick=$(($(current_tick_count) + 1))"
   CLAUDE_ARGS=(--resume "$SID")
 fi
-
-# Plan-usage hints from env. The skill will use these directly.
-export USAGE_5H="${USAGE_5H:-0.06}"
-export USAGE_7D="${USAGE_7D:-0.06}"
 
 # Stale bloat marker cleanup. Earlier iterations of this script wrote
 # a marker file at every Nth tick (MAESTRO_COMPACT_EVERY) and the chip

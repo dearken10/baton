@@ -42,12 +42,19 @@ import { randomUUID } from 'node:crypto';
 const execFileAsync = promisify(execFile);
 
 const HERE = dirname(import.meta.url.replace('file://', ''));
-const BATON_DIR = process.env.BATON_DIR ?? join(homedir(), '.baton');
+// BATON_HOME isolates each baton instance (dev build vs installed,
+// work vs personal). BATON_DIR stays as a legacy alias for any
+// stand-alone callers; falls back to ~/.baton when neither is set.
+const BATON_DIR = process.env.BATON_HOME ?? process.env.BATON_DIR ?? join(homedir(), '.baton');
 const DB_PATH = join(BATON_DIR, 'baton.db');
-const STATE_DIR = join(HERE, 'state');
+// State + plan output live in <BATON_HOME>/maestro/state/ so the chip,
+// the auto-executor, and option3's tick reader all read from the same
+// per-instance location. Used to be in-repo at $HERE/state — that
+// shared across instances, which broke instance isolation.
+const STATE_DIR = join(BATON_DIR, 'maestro', 'state');
 const PLANS_DIR = join(STATE_DIR, 'plans');
 const TICK_COUNT_FILE = join(STATE_DIR, 'tick-count');
-const LAST_PLAN_PATH = join(HERE, 'last-plan.json');
+const LAST_PLAN_PATH = join(STATE_DIR, 'last-plan.json');
 const PROPOSE_SCRIPT = join(HERE, 'propose-for-session.mjs');
 const PHASE1_PROMPT = join(HERE, 'prompts', 'next-action.md');
 const PHASE2_PROMPT = join(HERE, 'prompts', 'outstanding-tasks.md');
