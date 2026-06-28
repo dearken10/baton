@@ -85,6 +85,18 @@ function sqliteJson(sql) {
   return out ? JSON.parse(out) : [];
 }
 
+/** Probe `sessions` for an optional column. `session_kind` only exists
+ *  in instances where option3's manual migration ran — fresh BATON_HOME
+ *  databases (option4-only setups) don't have it, and the per-tick
+ *  SELECT used to crash with `no such column: session_kind`. Cheap one-
+ *  shot probe; ignore parse failures and assume absent. */
+function sessionsHasColumn(name) {
+  try {
+    const cols = sqliteJson('PRAGMA table_info(sessions)');
+    return cols.some((c) => c.name === name);
+  } catch { return false; }
+}
+
 function readUsage() {
   const fiveH = Number.parseFloat(process.env.USAGE_5H ?? 'NaN');
   const sevenD = Number.parseFloat(process.env.USAGE_7D ?? 'NaN');
@@ -342,10 +354,14 @@ async function main() {
   );
   const projectsById = new Map(projects.map((p) => [p.id, p]));
 
+  // session_kind is option3's master-mind marker. Optional — fresh
+  // BATON_HOME databases (option4-only) don't have the column, and the
+  // SELECT would crash otherwise.
+  const kindCol = sessionsHasColumn('session_kind') ? ', session_kind' : '';
   const sessions = sqliteJson(
     `SELECT id, project_id, backend_id, branch, worktree_path, status,
             tokens_in, tokens_out, last_summary, started_at, snoozed_at,
-            claude_session_id, session_kind
+            claude_session_id${kindCol}
        FROM sessions WHERE ended_at IS NULL`
   );
   const candidates = filterCandidates(sessions, projectsById);
