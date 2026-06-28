@@ -2667,6 +2667,29 @@ button.terminal-tab,
   white-space: nowrap;
 }
 
+/* Info banner — surfaced by NewWorktreeDialog when the typed branch
+ * matches an existing worktree, swapping create for open-existing. */
+.dialog-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.dialog-banner code {
+  font-size: 12px;
+  color: var(--text);
+  background: transparent;
+  word-break: break-all;
+}
+.dialog-banner strong { color: var(--text); }
+.dialog-banner-info {
+  background: rgba(91, 141, 239, 0.10);
+  border: 1px solid rgba(91, 141, 239, 0.45);
+}
+
 /* ── NewTerminalDialog ──────────────────────────────────────────── */
 .ntd-select {
   background: var(--bg-2);

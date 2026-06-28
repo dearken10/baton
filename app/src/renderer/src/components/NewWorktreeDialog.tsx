@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { WorktreeEntry } from '@shared/ipc.js';
 import { extractJiraKey } from '@shared/jira.js';
 
 interface Props {
@@ -6,8 +7,21 @@ interface Props {
   project: { id: string; name: string } | null;
   /** Suggested branch name; pre-fills the input. */
   defaultBranch: string;
+  /** Existing worktrees in this project (from `worktree.list`). Used to
+   *  detect when the user is typing a branch that already has a
+   *  worktree — in that case we offer to open it instead of failing the
+   *  `git worktree add`. Pass `null` while still loading. Omit entirely
+   *  (paired with omitting `onOpenExisting`) to skip the open-existing
+   *  detection — used by the "Clone to worktree" flow, where the target
+   *  is always a fresh branch. */
+  worktrees?: WorktreeEntry[] | null;
   onCancel: () => void;
   onCreate: (branch: string, jiraTaskId: string) => void;
+  /** Called when the user accepts "open existing" — receives the
+   *  absolute path of the matched worktree. The parent spawns a session
+   *  at that path via `session.spawn`'s `existingWorktreePath`. Omit
+   *  to disable the affordance. */
+  onOpenExisting?: (path: string) => void;
   busy: boolean;
   /** Show the optional "Jira ticket" field. Enabled by the caller when
    *  OTEL telemetry is on, so the session's effort is attributed to a
@@ -31,8 +45,10 @@ interface Props {
 export function NewWorktreeDialog({
   project,
   defaultBranch,
+  worktrees,
   onCancel,
   onCreate,
+  onOpenExisting,
   busy,
   title,
   subtitle,
@@ -83,10 +99,21 @@ export function NewWorktreeDialog({
     return () => document.removeEventListener('keydown', onKey);
   }, [project, onCancel]);
 
+  // Detect an existing worktree on the same branch. Match by branch
+  // name (the canonical key from `git worktree list`) — folder/slug
+  // collisions without a branch match are rare and the underlying
+  // `git worktree add` would surface the path conflict on its own.
+  const existing = useMemo<WorktreeEntry | null>(() => {
+    if (!worktrees || !onOpenExisting) return null;
+    const t = branch.trim();
+    if (t.length === 0) return null;
+    return worktrees.find((w) => w.branch === t) ?? null;
+  }, [worktrees, onOpenExisting, branch]);
+
   if (!project) return null;
 
   const trimmed = branch.trim();
-  const canCreate = trimmed.length > 0 && !busy;
+  const canSubmit = trimmed.length > 0 && !busy;
 
   // Same slug rule the main process uses for the worktree dir name.
   const slug = trimmed
@@ -110,7 +137,9 @@ export function NewWorktreeDialog({
         aria-labelledby="nwd-title"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canCreate) onCreate(trimmed, jira.trim());
+          if (!canSubmit) return;
+          if (existing && onOpenExisting) onOpenExisting(existing.path);
+          else onCreate(trimmed, jira.trim());
         }}
       >
         <div className="dialog-head">
@@ -139,12 +168,23 @@ export function NewWorktreeDialog({
             </span>
           </label>
 
-          <div className="dialog-preview">
-            <span className="dialog-preview-label">worktree at</span>
-            <code className="mono">
-              {`<project>/.baton/worktrees/`}{slug || '<branch-name>'}/
-            </code>
-          </div>
+          {existing ? (
+            <div className="dialog-banner dialog-banner-info" role="status">
+              <strong>This branch already has a worktree.</strong>
+              <code className="mono">{existing.path}</code>
+              <span className="dim">
+                Submitting will spawn a session in the existing worktree instead
+                of creating a new one.
+              </span>
+            </div>
+          ) : (
+            <div className="dialog-preview">
+              <span className="dialog-preview-label">worktree at</span>
+              <code className="mono">
+                {`<project>/.baton/worktrees/`}{slug || '<branch-name>'}/
+              </code>
+            </div>
+          )}
 
           {showJira && (
             <label className="dialog-field">
@@ -173,10 +213,10 @@ export function NewWorktreeDialog({
           <button type="button" className="btn ghost" onClick={onCancel} disabled={busy}>
             Cancel
           </button>
-          <button type="submit" className="btn primary" disabled={!canCreate}>
-            {busy
-              ? (busyLabel ?? 'Creating…')
-              : (submitLabel ?? 'Create worktree')}
+          <button type="submit" className="btn primary" disabled={!canSubmit}>
+            {existing
+              ? (busy ? 'Opening…' : 'Open existing worktree')
+              : (busy ? (busyLabel ?? 'Creating…') : (submitLabel ?? 'Create worktree'))}
           </button>
         </div>
       </form>

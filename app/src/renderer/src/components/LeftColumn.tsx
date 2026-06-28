@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
-import type { ConnectionProfile, LoginSession, Project, Session } from '@shared/ipc.js';
+import type { ConnectionProfile, LoginSession, Project, Session, WorktreeEntry } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
 import { NewSessionDialog, type NewSessionTarget } from './NewSessionDialog.js';
 import { NewTerminalDialog, type NewTerminalChoice } from './NewTerminalDialog.js';
@@ -351,6 +351,10 @@ export function LeftColumn(): JSX.Element {
   const [cloneWorktreeSession, setCloneWorktreeSession] =
     useState<Session | null>(null);
   const [cloneWorktreeDefault, setCloneWorktreeDefault] = useState('');
+  /** Existing worktrees for the project the dialog is open for. `null`
+   *  while the fetch is in flight; the dialog only shows the "open
+   *  existing" affordance once this has resolved. */
+  const [worktreeDialogList, setWorktreeDialogList] = useState<WorktreeEntry[] | null>(null);
   const [showAddProjectDialog, setShowAddProjectDialog] = useState(false);
 
   // Spawn-in-flight markers live in the store (see store.ts) so the
@@ -521,7 +525,16 @@ export function LeftColumn(): JSX.Element {
       .call('settings.getOtel', {})
       .then((r) => setOtelEnabled(r.otel.enabled))
       .catch(() => { /* leave prior value */ });
+    setWorktreeDialogList(null);
     setWorktreeDialogProject({ id: project.id, name: project.name, backendId });
+    // Fetch the existing worktree list so the dialog can detect when
+    // the user's branch name matches a worktree that already exists.
+    // Best-effort: if this fails the dialog falls back to the original
+    // create-only behavior and `git worktree add` surfaces any collision.
+    void window.baton
+      .call('worktree.list', { projectId: project.id })
+      .then((res) => setWorktreeDialogList(res.worktrees))
+      .catch(() => setWorktreeDialogList([]));
   }
 
   async function createWorktreeFromDialog(branch: string, jira: string): Promise<void> {
@@ -539,6 +552,25 @@ export function LeftColumn(): JSX.Element {
       setWorktreeDialogProject(null);
     } catch (err) {
       alert(`Worktree spawn failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openExistingWorktreeFromDialog(path: string): Promise<void> {
+    const target = worktreeDialogProject;
+    if (!target) return;
+    setBusy(true);
+    try {
+      const { session } = await window.baton.call('session.spawn', {
+        projectId: target.id,
+        backendId: target.backendId,
+        existingWorktreePath: path,
+      });
+      selectSession(session.id);
+      setWorktreeDialogProject(null);
+    } catch (err) {
+      alert(`Spawn in existing worktree failed: ${String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -903,8 +935,10 @@ export function LeftColumn(): JSX.Element {
       <NewWorktreeDialog
         project={worktreeDialogProject}
         defaultBranch={worktreeDefault}
+        worktrees={worktreeDialogList}
         onCancel={() => setWorktreeDialogProject(null)}
         onCreate={(branch, jira) => void createWorktreeFromDialog(branch, jira)}
+        onOpenExisting={(path) => void openExistingWorktreeFromDialog(path)}
         busy={busy}
         showJira={otelEnabled}
       />
