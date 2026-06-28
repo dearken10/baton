@@ -397,10 +397,14 @@ function segmentTranscript(raw: string): Tick[] {
  *
  *  Both lists are pre-sorted (JSONL is chronological by construction;
  *  we sort plans here), so the walk is linear. */
-function correlatePlans(ticks: Tick[], plans: Map<number, Plan>): void {
-  const sortedPlans = [...plans.values()].sort(
-    (a, b) => Date.parse(a.tickAt) - Date.parse(b.tickAt)
+function correlatePlans(ticks: Tick[], plans: Map<number, Plan>): Set<number> {
+  // Sort plan entries by tickAt while remembering each entry's tick
+  // number so the caller can tell which plans were absorbed by a
+  // JSONL tick vs left over for plan-only rendering.
+  const sortedPlans = [...plans.entries()].sort(
+    (a, b) => Date.parse(a[1].tickAt) - Date.parse(b[1].tickAt)
   );
+  const consumed = new Set<number>();
   let pi = 0;
   for (let i = 0; i < ticks.length; i++) {
     const t = ticks[i]!;
@@ -412,16 +416,18 @@ function correlatePlans(ticks: Tick[], plans: Map<number, Plan>): void {
     // shouldn't happen on a clean transcript, but guards against state
     // dir holding stale plans from a prior session-id.
     while (pi < sortedPlans.length
-           && Date.parse(sortedPlans[pi]!.tickAt) < startMs) {
+           && Date.parse(sortedPlans[pi]![1].tickAt) < startMs) {
       pi += 1;
     }
     if (pi >= sortedPlans.length) break;
-    const planMs = Date.parse(sortedPlans[pi]!.tickAt);
+    const planMs = Date.parse(sortedPlans[pi]![1].tickAt);
     if (planMs >= startMs && planMs < nextStartMs) {
-      t.plan = sortedPlans[pi]!;
+      t.plan = sortedPlans[pi]![1];
+      consumed.add(sortedPlans[pi]![0]);
       pi += 1;
     }
   }
+  return consumed;
 }
 
 /** Classify each tick after correlation: presence of a matching plan
@@ -497,8 +503,33 @@ export function getMaestroSession(tickLimit?: number): SessionResponse {
 
   const allTicks = segmentTranscript(raw);
   const plans = loadPlans();
-  correlatePlans(allTicks, plans);
+  const consumed = correlatePlans(allTicks, plans);
   for (const t of allTicks) classifyTick(t);
+
+  // Surface plan-only ticks for plans the JSONL didn't account for —
+  // this is how option4 (per-session-clone) shows up here, since it
+  // doesn't run /maestro-tick against a continuous Claude session and
+  // therefore writes no JSONL boundaries. Each option4 tick has a
+  // numbered plan-NNNN.json under state/plans/ but no turns; we
+  // synthesize a tick stub so the SessionView's left column keeps
+  // updating after a backend switch instead of going dead at the
+  // moment of the cutover.
+  for (const [tickNum, plan] of plans) {
+    if (consumed.has(tickNum)) continue;
+    allTicks.push({
+      index:        tickNum,
+      startedAt:    plan.tickAt,
+      endedAt:      plan.tickAt,
+      status:       'success',
+      statusDetail: null,
+      turnCount:    0,
+      turns:        [],
+      plan,
+    });
+  }
+  // Merge sort: plan-only ticks may interleave with JSONL ticks (e.g.
+  // user toggled MAESTRO_BACKEND back and forth).
+  allTicks.sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt));
 
   const totalTicks = allTicks.length;
   const limit = tickLimit ?? DEFAULT_TICK_LIMIT;
