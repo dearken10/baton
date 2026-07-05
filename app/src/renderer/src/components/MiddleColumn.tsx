@@ -384,11 +384,13 @@ export function MiddleColumn(): JSX.Element {
               >
                 <option value="default">Auto (recommended)</option>
                 <optgroup label="Latest in tier">
+                  <option value="fable">Fable (latest)</option>
                   <option value="sonnet">Sonnet (latest)</option>
                   <option value="opus">Opus (latest)</option>
                   <option value="haiku">Haiku (latest)</option>
                 </optgroup>
                 <optgroup label="Pinned version">
+                  <option value="claude-fable-5">Fable 5</option>
                   <option value="claude-opus-4-8">Opus 4.8</option>
                   <option value="claude-opus-4-7">Opus 4.7</option>
                   <option value="claude-opus-4-6">Opus 4.6</option>
