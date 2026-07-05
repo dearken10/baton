@@ -204,6 +204,25 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
         'Cannot set both newWorktreeBranch and existingWorktreePath.'
       );
     }
+    // A companion terminal attaches to an existing agent session: it
+    // always runs a plain shell in the parent's exact worktree, so we
+    // take the cwd straight from the parent row (no worktree lookup) and
+    // force the shell backend regardless of what the renderer asked for.
+    if (req.parentSessionId) {
+      const parent = getSessionManager()
+        .listAll()
+        .find((s) => s.id === req.parentSessionId);
+      if (!parent) {
+        throw new Error(`Unknown parent session: ${req.parentSessionId}`);
+      }
+      const session = await getSessionManager().spawn({
+        projectId: parent.projectId,
+        backendId: 'shell',
+        cwd: parent.worktreePath,
+        parentSessionId: parent.id,
+      });
+      return { session };
+    }
     // Default cwd is the project root; an existing worktree path
     // overrides it (must belong to this project's worktree list — we
     // verify against listWorktrees so the renderer can't sneak in an

@@ -167,6 +167,40 @@ function runMigrations(d: Database.Database): void {
     d.exec(`UPDATE sessions SET permission_mode = 'bypassPermissions' WHERE skip_permissions = 1`);
   } catch { /* already migrated */ }
 
+  // last_active_at = wall-clock ms of the session's most recent activity:
+  // spawn/resume, a status change to running/needs-input, or token/summary
+  // updates. The Timeline view (LeftColumn.tsx) sorts + labels by this so
+  // the genuinely-most-recently-active session sits on top. started_at is
+  // unfit for that — it's re-stamped to "now" on every resume, so resumed
+  // sessions all collapse onto the app's launch time. Backfill to
+  // started_at so pre-existing rows have a sensible initial value.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN last_active_at INTEGER');
+    d.exec('UPDATE sessions SET last_active_at = started_at WHERE last_active_at IS NULL');
+  } catch { /* already migrated */ }
+
+  // One-time repair for DBs that ran the first cut of last_active_at,
+  // which re-stamped the column to Date.now() on every resume. Since the
+  // app auto-resumes all sessions at launch, that collapsed every row's
+  // "active" time onto the boot instant — the Timeline showed identical
+  // times. started_at is never re-stamped in the DB (the upsert leaves it
+  // alone), so it's the true creation time; reset last_active_at to it as
+  // a sane, varied baseline that genuine activity then bumps forward.
+  // Guarded by a marker column so the reset runs exactly once.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN last_active_repaired INTEGER NOT NULL DEFAULT 0');
+    d.exec('UPDATE sessions SET last_active_at = started_at');
+  } catch { /* already repaired */ }
+
+  // parent_session_id = when set, this row is a companion shell terminal
+  // attached to the agent session with this id. Companion terminals run in
+  // the agent's worktree and surface as extra tabs in the middle column;
+  // they're filtered out of the sidebar session list. NULL for ordinary
+  // top-level sessions. See parentSessionId in src/shared/ipc.ts.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN parent_session_id TEXT');
+  } catch { /* already migrated */ }
+
   // Connection model. Old databases predate connection_profiles and
   // have no connection_id on their project rows; everything pre-existing
   // is a local project.

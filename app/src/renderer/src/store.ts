@@ -234,7 +234,15 @@ export const useAppStore = create<AppState>()(
               `from=${event.from} to=${event.to} seq=${event.seq} ` +
               `ageMs=${Date.now() - event.ts} applied=${sess ? 'yes' : 'no-such-session'}`
             );
-            if (sess) sess.status = event.to as SessionStatus;
+            if (sess) {
+              sess.status = event.to as SessionStatus;
+              // Mirror the main-process activity stamp (bumpActivity) so
+              // the Timeline view reorders live without a round-trip. Only
+              // "working" / "wants input" count as activity — match main.
+              if (event.to === 'running' || event.to === 'needs-input') {
+                sess.lastActiveAt = event.ts;
+              }
+            }
             break;
           }
           case 'session.summarized': {
@@ -245,7 +253,10 @@ export const useAppStore = create<AppState>()(
               `summary="${event.summary.slice(0, 40)}" seq=${event.seq} ` +
               `ageMs=${Date.now() - event.ts} applied=${sess ? 'yes' : 'no-such-session'}`
             );
-            if (sess) sess.lastSummary = event.summary;
+            if (sess) {
+              sess.lastSummary = event.summary;
+              sess.lastActiveAt = event.ts;
+            }
             break;
           }
           case 'session.exited': {
@@ -274,7 +285,18 @@ export const useAppStore = create<AppState>()(
             if (sess) {
               sess.tokensIn = event.tokensIn;
               sess.tokensOut = event.tokensOut;
+              sess.lastActiveAt = event.ts;
             }
+            break;
+          }
+          case 'session.prompt_submitted': {
+            // Submitting a prompt is activity even if the session was
+            // already 'running' (no status_changed fires then). Mirror
+            // the main-side bump so the Timeline reorders this session to
+            // the top live. (TurnsPane handles this event separately for
+            // its own re-fetch — both subscribers see it.)
+            const sess = s.sessions[event.sessionId];
+            if (sess) sess.lastActiveAt = event.ts;
             break;
           }
           case 'session.refreshed': {

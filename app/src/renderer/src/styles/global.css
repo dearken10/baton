@@ -359,6 +359,14 @@ button {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
 }
+/* Icon-only variant (Projects ☰ / Timeline ◷): drop the uppercase
+   letter treatment and give the glyphs a square, centered hit area. */
+.view-toggle-icons button {
+  font-size: 13px;
+  line-height: 1;
+  padding: 3px 8px;
+  letter-spacing: 0;
+}
 
 /* Snoozed project blocks render dimmer so they don't look identical to
    live projects. Dim via `color` rather than `opacity` — any ancestor
@@ -600,6 +608,36 @@ button {
 
 .sessions-list { display: flex; flex-direction: column; gap: 5px; }
 
+/* ── Timeline view ────────────────────────────────────────────
+   Flat feed of active sessions, newest first. Cards reuse the
+   `.session-row` look but surface the owning project + a relative
+   start time in place of the project-block grouping. */
+.timeline-list { display: flex; flex-direction: column; gap: 6px; }
+/* Project name is the headline on a timeline card — cards aren't
+   grouped under a project header here, so it carries the context.
+   The start-time stamp sits flush right so a long branch can't clip it. */
+.timeline-card .timeline-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.timeline-card .timeline-project {
+  flex: 1 1 auto;
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.timeline-card .timeline-time {
+  flex: 0 0 auto;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* ── Sessions ─────────────────────────────────────────────── */
 .session-row {
   padding: 9px 10px;
@@ -627,6 +665,15 @@ button {
    non-menu children keeps the visual fade without the stacking trap. */
 .session-row.ended > :not(.row-menu) { opacity: 0.7; }
 .session-row.ended .branch { color: var(--text-dim); }
+/* Snoozed sessions on the active tab sink to the bottom and render
+   heavily dimmed so they recede behind live ones. Fade the non-menu
+   children with `opacity` (scoped exactly like `.ended` above so the
+   row-menu popup keeps its stacking context) and push the text toward
+   the background colour on top of that. */
+.session-row.snoozed > :not(.row-menu) { opacity: 0.5; }
+.session-row.snoozed .branch,
+.session-row.snoozed .session-intent,
+.session-row.snoozed .tokens { color: var(--text-faint); }
 .session-row:disabled { cursor: progress; }
 /* Row-actions menu — hidden until the row is hovered, or while the
    menu itself is open. Zero width when collapsed so the row layout
@@ -956,7 +1003,78 @@ button {
   border-top-color: var(--accent);
   background: rgba(91, 141, 239, 0.18);
 }
+/* The terminal region below the (optional) tab strip. It's the
+   positioned ancestor for the Turns overlay, so the overlay covers the
+   terminals but NOT the tabs above it. */
+.terminal-area {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
 .terminal-slot { flex: 1; min-height: 0; flex-direction: column; }
+
+/* ── Companion terminal tab strip (agent sessions) ────────── */
+.terminal-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 4px 8px 0;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+/* Agent tab is a bare <button>; companion tabs are a <span> wrapping a
+   label button + a close button. Both share the tab chrome. */
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  white-space: nowrap;
+}
+.terminal-tab.on { background: var(--bg-3); color: var(--text); }
+button.terminal-tab,
+.terminal-tab-label {
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.terminal-tab-close {
+  padding: 6px 8px 6px 2px;
+  background: transparent;
+  border: 0;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.terminal-tab-close:hover { color: var(--text); }
+.terminal-tab-add {
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 6px 6px 0 0;
+}
+.terminal-tab-add:hover { color: var(--text); background: var(--bg-3); }
+.terminal-tab-add:disabled { opacity: 0.5; cursor: default; }
+
 /* Overlays the live terminal — keeps xterm's WebGL canvas alive
    underneath instead of toggling display:none on it (which can lose
    the context permanently once the per-page WebGL context budget is

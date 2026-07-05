@@ -73,8 +73,10 @@ const RECENT_PTY_CAP = 1_000_000;
 
 /** Default claude --model when the caller doesn't pin one. Persisted
  *  on the row so the chip always reflects what's actually running.
+ *  'default' is Claude's "Auto" recommended model (adaptive Opus→Sonnet);
+ *  the CLI rejects the literal 'auto', so the alias is 'default'.
  *  Keep this in sync with DEFAULT_CLAUDE_MODEL in MiddleColumn.tsx. */
-const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
+const DEFAULT_CLAUDE_MODEL = 'default';
 
 /** Default idle threshold for auto-pause. Per-project override (F11.4)
  *  comes later; for now a single global value. Override at runtime
@@ -523,20 +525,21 @@ export class SessionManager {
     const rows = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
-                started_at, ended_at, tokens_in, tokens_out, last_summary,
-                claude_session_id, permission_mode, model, snoozed_at
+                started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary,
+                claude_session_id, permission_mode, model, snoozed_at, parent_session_id
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
       .all() as {
         id: string; project_id: string; backend_id: string;
         branch: string; worktree_path: string; status: string;
-        started_at: number; ended_at: number | null;
+        started_at: number; last_active_at: number | null; ended_at: number | null;
         tokens_in: number; tokens_out: number; last_summary: string | null;
         claude_session_id: string | null;
         permission_mode: string;
         model: string | null;
         snoozed_at: number | null;
+        parent_session_id: string | null;
       }[];
 
     return rows.map((r) => {
@@ -550,6 +553,7 @@ export class SessionManager {
         worktreePath: r.worktree_path,
         status: r.status as Session['status'],
         startedAt: r.started_at,
+        lastActiveAt: r.last_active_at ?? r.started_at,
         endedAt: r.ended_at,
         tokensIn: r.tokens_in,
         tokensOut: r.tokens_out,
@@ -558,6 +562,7 @@ export class SessionManager {
         permissionMode: r.permission_mode as PermissionMode,
         model: r.model,
         snoozedAt: r.snoozed_at,
+        parentSessionId: r.parent_session_id,
       };
     });
   }
@@ -586,6 +591,10 @@ export class SessionManager {
     /** Optional `--model <name>` alias (claude-code only). Null/
      *  undefined → don't pass the flag. */
     model?: string | null;
+    /** When set, this is a companion shell terminal attached to the agent
+     *  session with this id. Persisted so it survives restarts and stays
+     *  grouped under the agent in the middle column. */
+    parentSessionId?: string | null;
   }): Promise<Session> {
     await this.startHookServer();
 
@@ -690,18 +699,26 @@ export class SessionManager {
       let savedTokensIn = 0;
       let savedTokensOut = 0;
       let savedSnoozedAt: number | null = null;
+      // Preserve the prior last-activity time across resume/respawn.
+      // Reconnecting a session on app launch is NOT user/agent activity
+      // — if we re-stamped it to now (like startedAt does), the boot-time
+      // auto-resume loop would collapse every session's "active" time
+      // onto the same instant. Genuine activity (status→running, tokens,
+      // summaries) bumps it forward from here. Null → fresh spawn → now.
+      let savedLastActiveAt: number | null = null;
       if (opts.reuseSessionId) {
         try {
           const prev = getDatabase()
-            .prepare('SELECT last_summary, tokens_in, tokens_out, snoozed_at FROM sessions WHERE id = ?')
+            .prepare('SELECT last_summary, tokens_in, tokens_out, snoozed_at, last_active_at FROM sessions WHERE id = ?')
             .get(opts.reuseSessionId) as
-            | { last_summary: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null }
+            | { last_summary: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null; last_active_at: number | null }
             | undefined;
           if (prev) {
             savedSummary = prev.last_summary;
             savedTokensIn = prev.tokens_in ?? 0;
             savedTokensOut = prev.tokens_out ?? 0;
             savedSnoozedAt = prev.snoozed_at;
+            savedLastActiveAt = prev.last_active_at;
           }
         } catch { /* best-effort */ }
       }
@@ -714,6 +731,7 @@ export class SessionManager {
         worktreePath: cwd,
         status: 'running',
         startedAt: Date.now(),
+        lastActiveAt: savedLastActiveAt ?? Date.now(),
         endedAt: null,
         tokensIn: savedTokensIn,
         tokensOut: savedTokensOut,
@@ -722,6 +740,7 @@ export class SessionManager {
         permissionMode,
         model,
         snoozedAt: savedSnoozedAt,
+        parentSessionId: opts.parentSessionId ?? null,
       };
 
       // Make the session visible to the hook handler IMMEDIATELY,
@@ -738,8 +757,8 @@ export class SessionManager {
       // may have changed it between runs.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, permission_mode, model)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, permission_mode, model, parent_session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              status          = excluded.status,
              ended_at        = NULL,
@@ -755,13 +774,15 @@ export class SessionManager {
           session.worktreePath,
           session.status,
           session.startedAt,
+          session.lastActiveAt,
           null,
           0,
           0,
           null,
           session.claudeSessionId,
           session.permissionMode,
-          session.model
+          session.model,
+          session.parentSessionId
         );
 
       // Wire pty → renderer via the dedicated pty.data channel.
@@ -915,7 +936,7 @@ export class SessionManager {
   async respawn(sessionId: string): Promise<Session> {
     const row = getDatabase()
       .prepare(
-        `SELECT id, project_id, backend_id, worktree_path, permission_mode, model
+        `SELECT id, project_id, backend_id, worktree_path, permission_mode, model, parent_session_id
            FROM sessions WHERE id = ?`
       )
       .get(sessionId) as
@@ -923,6 +944,7 @@ export class SessionManager {
           id: string; project_id: string; backend_id: string;
           worktree_path: string; permission_mode: string;
           model: string | null;
+          parent_session_id: string | null;
         }
       | undefined;
     if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -934,6 +956,10 @@ export class SessionManager {
       permissionMode: row.permission_mode as PermissionMode,
       model: row.model,
       reuseSessionId: row.id,
+      // Keep companion terminals attached to their agent across respawn —
+      // otherwise the live meta loses parentSessionId and the row would
+      // re-surface as a standalone sidebar session until the next restart.
+      parentSessionId: row.parent_session_id,
     });
   }
 
@@ -1185,20 +1211,21 @@ export class SessionManager {
       const row = getDatabase()
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
-                  started_at, ended_at, tokens_in, tokens_out, last_summary,
-                  claude_session_id, permission_mode, model, snoozed_at
+                  started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary,
+                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
         | {
             id: string; project_id: string; backend_id: string;
             branch: string; worktree_path: string; status: string;
-            started_at: number; ended_at: number | null;
+            started_at: number; last_active_at: number | null; ended_at: number | null;
             tokens_in: number; tokens_out: number;
             last_summary: string | null; claude_session_id: string | null;
             permission_mode: string;
             model: string | null;
             snoozed_at: number | null;
+            parent_session_id: string | null;
           }
         | undefined;
       if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -1236,6 +1263,7 @@ export class SessionManager {
         worktreePath: updated.path,
         status: row.status as Session['status'],
         startedAt: row.started_at,
+        lastActiveAt: row.last_active_at ?? row.started_at,
         endedAt: row.ended_at,
         tokensIn: row.tokens_in,
         tokensOut: row.tokens_out,
@@ -1244,6 +1272,7 @@ export class SessionManager {
         claudeSessionId: row.claude_session_id,
         permissionMode: row.permission_mode as PermissionMode,
         model: row.model,
+        parentSessionId: row.parent_session_id,
       };
       emit({
         type: 'session.renamed',
@@ -1413,6 +1442,8 @@ export class SessionManager {
         .run(tokensIn, tokensOut, sessionId);
     } catch { /* best-effort */ }
     if (live) live.meta = { ...live.meta, tokensIn, tokensOut };
+    // Fresh token usage means the agent just did work — count it as activity.
+    this.bumpActivity(sessionId);
     emit({
       type: 'session.tokens_updated',
       sessionId,
@@ -1448,6 +1479,9 @@ export class SessionManager {
         .run(summary, sessionId);
     } catch { /* best-effort */ }
     live.meta = { ...live.meta, lastSummary: summary };
+    // A refreshed terminal summary is the main activity signal for shell
+    // sessions (no tokens, status pinned to 'running') — keep them ranked.
+    this.bumpActivity(sessionId);
     emit({ type: 'session.summarized', sessionId, summary });
   }
 
@@ -1527,6 +1561,7 @@ export class SessionManager {
       });
     }
     if (live) live.meta = { ...live.meta, lastSummary: summary };
+    this.bumpActivity(sessionId);
     const t0 = this.promptSubmittedAt.get(sessionId);
     trace('SUMM_EMIT', {
       sid: shortSid(sessionId),
@@ -1547,6 +1582,21 @@ export class SessionManager {
     } catch {
       // best-effort
     }
+  }
+
+  /** Stamp a session's most-recent-activity time, in memory + DB. Drives
+   *  the Timeline view's ordering and "active N ago" label. Best-effort:
+   *  never throws into the caller's path. The matching renderer-side
+   *  bump rides on the event each caller already emits (every event
+   *  carries `ts`), so the UI updates without a dedicated message. */
+  private bumpActivity(sessionId: string, ts: number = Date.now()): void {
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, lastActiveAt: ts };
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET last_active_at = ? WHERE id = ?')
+        .run(ts, sessionId);
+    } catch { /* best-effort */ }
   }
 
   /** Apply a status transition, persist, and emit if it changed.
@@ -1577,6 +1627,13 @@ export class SessionManager {
     // that briefly went idle and then started working again gets a
     // fresh clock.
     live.lastIdleAt = next === 'idle' ? Date.now() : null;
+    // Becoming 'running' (agent working) or 'needs-input' (wants the
+    // user) is real activity — stamp it so the Timeline view floats this
+    // session up. Other transitions (idle/paused/done) are quiescence,
+    // not activity, so they leave the clock alone.
+    if (next === 'running' || next === 'needs-input') {
+      this.bumpActivity(sessionId);
+    }
     try {
       getDatabase()
         .prepare('UPDATE sessions SET status = ? WHERE id = ?')
@@ -1726,6 +1783,13 @@ export class SessionManager {
           // when this fires. The transcript file is the source of truth,
           // so the event carries no payload — just a "refresh now" ping.
           emit({ type: 'session.prompt_submitted', sessionId: event.sessionId });
+          // A submitted prompt is unambiguous activity. Bump here rather
+          // than relying on the setStatus('running') below — if the
+          // session was ALREADY running (e.g. a long turn, or a row stuck
+          // running since boot), that call no-ops and emits nothing, so
+          // the Timeline would never reorder. The renderer mirrors this
+          // off the prompt_submitted event it just received.
+          this.bumpActivity(event.sessionId, t0);
           // Talking to a session implicitly un-snoozes it: the user is
           // clearly engaged with this work again, so the chip should
           // become visible. No-op if not snoozed.
