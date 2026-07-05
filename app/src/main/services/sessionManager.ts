@@ -73,8 +73,10 @@ const RECENT_PTY_CAP = 1_000_000;
 
 /** Default claude --model when the caller doesn't pin one. Persisted
  *  on the row so the chip always reflects what's actually running.
+ *  'default' is Claude's "Auto" recommended model (adaptive Opus→Sonnet);
+ *  the CLI rejects the literal 'auto', so the alias is 'default'.
  *  Keep this in sync with DEFAULT_CLAUDE_MODEL in MiddleColumn.tsx. */
-const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
+const DEFAULT_CLAUDE_MODEL = 'default';
 
 /** Default idle threshold for auto-pause. Per-project override (F11.4)
  *  comes later; for now a single global value. Override at runtime
