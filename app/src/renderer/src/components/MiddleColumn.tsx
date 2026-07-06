@@ -8,8 +8,8 @@ import { EditorErrorBoundary } from './EditorErrorBoundary.js';
 import { SessionInfoDialog } from './SessionInfoDialog.js';
 import type { PermissionMode, Session } from '@shared/ipc.js';
 
-/** Claude's "Auto" recommended model (adaptive Opus→Sonnet), passed as
- *  `--model default` (the CLI rejects the literal 'auto'). Used as the
+/** Claude's "Default (recommended)" model (adaptive Opus→Sonnet), passed
+ *  as `--model default` (the CLI rejects the literal 'auto'). Used as the
  *  implicit choice for any claude-code session whose persisted `model`
  *  is null (legacy rows, freshly spawned sessions before the user has
  *  clicked the chip). The chip always reflects a concrete model id.
@@ -382,7 +382,7 @@ export function MiddleColumn(): JSX.Element {
                 }}
                 title={`Model: ${selected.model ?? DEFAULT_CLAUDE_MODEL} — passed to claude as --model. Change restarts session.`}
               >
-                <option value="default">Auto (recommended)</option>
+                <option value="default">Default (recommended)</option>
                 <optgroup label="Latest in tier">
                   <option value="fable">Fable (latest)</option>
                   <option value="sonnet">Sonnet (latest)</option>
