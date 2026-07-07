@@ -35,6 +35,7 @@ import type { AgentBackend, AgentHandle } from './agentBackend.js';
 import { ClaudeCodeBackend } from './claudeCodeBackend.js';
 import { CodexBackend } from './codexBackend.js';
 import { ShellBackend } from './shellBackend.js';
+import { MockAgentBackend } from './mockAgentBackend.js';
 import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
@@ -54,6 +55,14 @@ import {
   codexTranscriptExists,
   findCodexTranscript,
 } from './codexTranscriptReader.js';
+import {
+  readSessionTurns,
+  truncateClaudeTranscriptBeforeTurn,
+} from './sessionTurns.js';
+import {
+  captureWorktreeSnapshot,
+  restoreWorktreeToCommit,
+} from './worktreeSnapshot.js';
 
 interface LiveSession {
   meta: Session;
@@ -233,6 +242,7 @@ export class SessionManager {
       'claude-code': new ClaudeCodeBackend(),
       'codex':       new CodexBackend(),
       'shell':       new ShellBackend(),
+      'mock':        new MockAgentBackend(),
     } as unknown as Record<AgentBackendId, AgentBackend>;
   }
 
@@ -1087,6 +1097,175 @@ export class SessionManager {
   }
 
   /**
+   * Snapshot the worktree's current working-tree state into a dangling
+   * git commit, parked under refs/baton/snap/<sessionId>/* so it can't be
+   * garbage-collected, and record it against the turn that's starting.
+   * Fires from the UserPromptSubmit hook — before the turn's tools touch
+   * any files — so the snapshot is the pre-turn state revertToTurn rolls
+   * back to.
+   *
+   * The capture uses a throwaway GIT_INDEX_FILE, so the worktree's real
+   * index is never touched. Best-effort throughout: any failure just
+   * means this turn has no code snapshot and revert falls back to a
+   * conversation-only rewind.
+   */
+  private async captureTurnSnapshot(sessionId: string): Promise<void> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT project_id, backend_id, worktree_path
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | { project_id: string; backend_id: string; worktree_path: string }
+      | undefined;
+    if (!row) return;
+    // Snapshots ride the claude-code hooks and need a local worktree.
+    if (row.backend_id !== 'claude-code') return;
+    if (!isLocalSessionProject(row.project_id)) return;
+
+    const batonFs = getFsForProject(row.project_id);
+    const commitSha = await captureWorktreeSnapshot(batonFs, row.worktree_path);
+    // null ⇒ snapshot failed; this turn just has no code snapshot and
+    // revert falls back to a conversation-only rewind.
+    if (!commitSha) return;
+
+    const capturedAt = Date.now();
+    try {
+      getDatabase()
+        .prepare(
+          `INSERT INTO turn_snapshots (session_id, turn_ts, commit_sha, captured_at)
+           VALUES (?, NULL, ?, ?)`
+        )
+        .run(sessionId, commitSha, capturedAt);
+    } catch { return; }
+
+    // The prompt's transcript line lands a beat after the hook fires;
+    // read it back shortly to bind this snapshot to the turn's exact ts
+    // — the key revertToTurn looks it up by.
+    setTimeout(() => {
+      try {
+        const session = this.listAll().find((s) => s.id === sessionId);
+        if (!session) return;
+        const turns = readSessionTurns(session);
+        const newest = turns[turns.length - 1];
+        if (!newest) return;
+        getDatabase()
+          .prepare(
+            `UPDATE turn_snapshots SET turn_ts = ?
+               WHERE session_id = ? AND commit_sha = ? AND turn_ts IS NULL`
+          )
+          .run(newest.ts, sessionId, commitSha);
+      } catch { /* best-effort */ }
+    }, 700);
+  }
+
+  /**
+   * Revert a session to just BEFORE `turnId`: drop that turn and
+   * everything after it from the transcript, restore the worktree to the
+   * code snapshot captured before that turn (when one exists), then
+   * respawn the agent so it resumes on the rewound history. Destructive
+   * and in-place — there is no undo.
+   */
+  async revertToTurn(
+    sessionId: string,
+    turnId: string,
+    turnTs: number,
+  ): Promise<{ session: Session; codeReverted: boolean }> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, worktree_path,
+                claude_session_id, permission_mode, model
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string; project_id: string; backend_id: string;
+          worktree_path: string; claude_session_id: string | null;
+          permission_mode: string; model: string | null;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+    if (row.backend_id !== 'claude-code') {
+      throw new Error('Revert is only supported for Claude Code sessions.');
+    }
+    if (!isLocalSessionProject(row.project_id)) {
+      throw new Error('Revert is only supported for local sessions.');
+    }
+    if (!row.claude_session_id) {
+      throw new Error('Cannot revert — no agent session id captured yet.');
+    }
+
+    // 1. Kill any live pty so we can respawn on the rewound transcript.
+    //    Mark it intentional so the chip doesn't flash 'errored' in the
+    //    gap (same dance as setPermissionMode/setModel).
+    if (this.live.has(sessionId)) {
+      this.intentionalKills.add(sessionId);
+      try { this.live.get(sessionId)?.handle.kill('SIGTERM'); }
+      catch { /* already gone */ }
+      await new Promise<void>((resolve) => setTimeout(resolve, 600));
+      this.live.delete(sessionId);
+    }
+
+    // 2. Truncate the transcript to before the target turn.
+    const transcriptPath = claudeTranscriptPath(
+      row.worktree_path, row.claude_session_id,
+    );
+    const { found, isEmptyAfter } = truncateClaudeTranscriptBeforeTurn(
+      transcriptPath, turnId,
+    );
+    if (!found) {
+      throw new Error(
+        'Cannot revert — that turn was not found in the transcript.'
+      );
+    }
+
+    // 3. Restore the worktree to the pre-turn snapshot, if we have one.
+    let codeReverted = false;
+    const snap = getDatabase()
+      .prepare(
+        `SELECT commit_sha FROM turn_snapshots
+           WHERE session_id = ? AND turn_ts = ?
+           ORDER BY captured_at DESC LIMIT 1`
+      )
+      .get(sessionId, turnTs) as { commit_sha: string } | undefined;
+    if (snap) {
+      codeReverted = await restoreWorktreeToCommit(
+        getFsForProject(row.project_id), row.worktree_path, snap.commit_sha,
+      );
+    }
+
+    // 4. Forget snapshots for the turns we just dropped — that timeline
+    //    no longer exists. (The target's own snapshot included; a fresh
+    //    one is captured if the user re-runs the turn.)
+    try {
+      getDatabase()
+        .prepare(
+          `DELETE FROM turn_snapshots
+             WHERE session_id = ? AND turn_ts IS NOT NULL AND turn_ts >= ?`
+        )
+        .run(sessionId, turnTs);
+    } catch { /* best-effort */ }
+
+    // 5. Respawn. --resume the rewound transcript unless we cut it down
+    //    to nothing (reverting the very first turn) — then start fresh.
+    const session = await this.spawn({
+      projectId: row.project_id,
+      backendId: 'claude-code',
+      cwd: row.worktree_path,
+      reuseSessionId: row.id,
+      permissionMode: row.permission_mode as PermissionMode,
+      model: row.model,
+      ...(isEmptyAfter
+        ? {}
+        : { resumeAgentSessionId: row.claude_session_id }),
+    });
+
+    // 6. Nudge TurnsPane to re-read the now-shorter transcript.
+    emit({ type: 'session.prompt_submitted', sessionId });
+    return { session, codeReverted };
+  }
+
+  /**
    * Set the session's permission mode and restart the agent with the
    * new `--permission-mode` (using `--resume` so the conversation
    * history survives). If the session is currently live we kill it
@@ -1821,6 +2000,12 @@ export class SessionManager {
           const t0 = Date.now();
           this.promptSubmittedAt.set(event.sessionId, t0);
           trace('USER_PROMPT', { sid: shortSid(event.sessionId), t0 });
+          // Snapshot the worktree's pre-turn file state NOW, before any
+          // of this turn's tools run, so "revert to this turn" can put
+          // the code back. Fire-and-forget: the agent spends seconds
+          // thinking before its first edit, so the snapshot lands first;
+          // a failure just means this turn has no code snapshot.
+          void this.captureTurnSnapshot(event.sessionId);
           // Renderer-facing nudge: TurnsPane re-fetches session.turns
           // when this fires. The transcript file is the source of truth,
           // so the event carries no payload — just a "refresh now" ping.

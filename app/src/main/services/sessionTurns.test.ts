@@ -10,7 +10,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readClaudeTurns, readCodexTurns } from './sessionTurns.js';
+import {
+  readClaudeTurns,
+  readCodexTurns,
+  truncateClaudeTranscriptBeforeTurn,
+} from './sessionTurns.js';
 
 const tmpfiles: string[] = [];
 function writeFixture(lines: object[]): string {
@@ -175,6 +179,88 @@ describe('readClaudeTurns', () => {
     const turns = readClaudeTurns(file);
     expect(turns).toHaveLength(2);
     expect(turns[0]?.id).not.toBe(turns[1]?.id);
+  });
+});
+
+describe('truncateClaudeTranscriptBeforeTurn', () => {
+  // A 3-turn transcript with tool calls interleaved, mirroring a real
+  // session. Returns the file path plus the parsed turns so tests can
+  // grab stable ids the way the renderer does.
+  function threeTurnFixture(): { file: string; ids: string[] } {
+    const file = writeFixture([
+      { type: 'user', timestamp: '2026-06-16T00:00:00Z', message: { role: 'user', content: 'first prompt' } },
+      {
+        type: 'assistant', timestamp: '2026-06-16T00:00:01Z',
+        message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: { command: 'ls' } }] },
+      },
+      {
+        type: 'user', timestamp: '2026-06-16T00:00:02Z',
+        message: { role: 'user', content: [{ type: 'tool_result', content: 'ok', is_error: false }] },
+      },
+      {
+        type: 'assistant', timestamp: '2026-06-16T00:00:03Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'reply one' }] },
+      },
+      { type: 'user', timestamp: '2026-06-16T00:00:04Z', message: { role: 'user', content: 'second prompt' } },
+      {
+        type: 'assistant', timestamp: '2026-06-16T00:00:05Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'reply two' }] },
+      },
+      { type: 'user', timestamp: '2026-06-16T00:00:06Z', message: { role: 'user', content: 'third prompt' } },
+      {
+        type: 'assistant', timestamp: '2026-06-16T00:00:07Z',
+        message: { role: 'assistant', content: [{ type: 'text', text: 'reply three' }] },
+      },
+    ]);
+    return { file, ids: readClaudeTurns(file).map((t) => t.id) };
+  }
+
+  it('drops the target turn and everything after it, keeping earlier turns intact', () => {
+    const { file, ids } = threeTurnFixture();
+    // Revert to before turn #2 (0-based index 1).
+    const res = truncateClaudeTranscriptBeforeTurn(file, ids[1]!);
+    expect(res).toEqual({ found: true, isEmptyAfter: false });
+
+    const remaining = readClaudeTurns(file);
+    expect(remaining.map((t) => t.userInput)).toEqual(['first prompt']);
+    // The surviving turn keeps its full progress + recap — we only cut
+    // at the *next* turn's user line, never inside the kept turn.
+    expect(remaining[0]?.recap).toBe('reply one');
+    expect(remaining[0]?.progress).toEqual([
+      { kind: 'tool_use', name: 'Bash', inputPreview: '{"command":"ls"}' },
+      { kind: 'tool_result', ok: true, preview: 'ok' },
+      { kind: 'assistant', text: 'reply one' },
+    ]);
+  });
+
+  it('empties the file when reverting the very first turn', () => {
+    const { file, ids } = threeTurnFixture();
+    const res = truncateClaudeTranscriptBeforeTurn(file, ids[0]!);
+    expect(res).toEqual({ found: true, isEmptyAfter: true });
+    expect(readClaudeTurns(file)).toEqual([]);
+    expect(fs.readFileSync(file, 'utf-8')).toBe('');
+  });
+
+  it('keeps the last turn when reverting it (drops only that turn)', () => {
+    const { file, ids } = threeTurnFixture();
+    const res = truncateClaudeTranscriptBeforeTurn(file, ids[2]!);
+    expect(res).toEqual({ found: true, isEmptyAfter: false });
+    expect(readClaudeTurns(file).map((t) => t.userInput)).toEqual([
+      'first prompt', 'second prompt',
+    ]);
+  });
+
+  it('leaves the file untouched and reports not-found for an unknown id', () => {
+    const { file } = threeTurnFixture();
+    const before = fs.readFileSync(file, 'utf-8');
+    const res = truncateClaudeTranscriptBeforeTurn(file, 'nope-12345');
+    expect(res).toEqual({ found: false, isEmptyAfter: false });
+    expect(fs.readFileSync(file, 'utf-8')).toBe(before);
+  });
+
+  it('returns not-found for a missing file', () => {
+    expect(truncateClaudeTranscriptBeforeTurn('/no/such/file.jsonl', 'x'))
+      .toEqual({ found: false, isEmptyAfter: false });
   });
 });
 

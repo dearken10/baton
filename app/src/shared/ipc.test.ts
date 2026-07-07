@@ -75,6 +75,7 @@ describe('control verb registry', () => {
         "session.reorder",
         "session.respawn",
         "session.resume",
+        "session.revertToTurn",
         "session.setModel",
         "session.setPermissionMode",
         "session.setSnoozed",

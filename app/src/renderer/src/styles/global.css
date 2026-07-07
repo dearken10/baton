@@ -1155,12 +1155,64 @@ button.terminal-tab,
   background: var(--bg-3);
   border-bottom: 1px solid var(--border);
 }
+/* Top row of a turn card's user block: timestamp on the left, the
+   revert control on the right. */
+.turn-user-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
 .turn-ts {
   display: inline-block;
   font-size: 10.5px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
-  margin-bottom: 4px;
+}
+/* Revert control. Stays quiet (dim, borderless) until hovered so it
+   doesn't compete with the prompt text; the confirm step turns loud. */
+.turn-revert {
+  flex: 0 0 auto;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.turn-revert:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-2);
+  background: var(--bg-1);
+}
+.turn-revert:disabled { opacity: 0.6; cursor: default; }
+.turn-revert-confirm {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.turn-revert-label {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+.turn-revert-yes {
+  color: #fff;
+  background: var(--danger, #c4453f);
+  border-color: var(--danger, #c4453f);
+}
+.turn-revert-yes:hover:not(:disabled) {
+  color: #fff;
+  background: var(--danger, #c4453f);
+  filter: brightness(1.08);
+}
+.turn-revert-no:hover:not(:disabled) { color: var(--text); }
+.turn-revert-err {
+  color: var(--danger, #c4453f);
+  border-color: var(--danger, #c4453f);
 }
 .turn-input {
   margin: 0;

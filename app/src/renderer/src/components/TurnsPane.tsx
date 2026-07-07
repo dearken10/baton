@@ -122,7 +122,7 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
   return (
     <div className="turns-pane">
       <div className="turns-scroll" ref={scrollRef} onScroll={onScroll}>
-        <TurnsBody turns={turns} error={error} isWorking={isWorking} />
+        <TurnsBody turns={turns} error={error} isWorking={isWorking} sessionId={sessionId} />
       </div>
       <Composer sessionId={sessionId} />
     </div>
@@ -130,8 +130,8 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
 }
 
 function TurnsBody({
-  turns, error, isWorking,
-}: { turns: SessionTurn[] | null; error: string | null; isWorking: boolean }): JSX.Element {
+  turns, error, isWorking, sessionId,
+}: { turns: SessionTurn[] | null; error: string | null; isWorking: boolean; sessionId: string }): JSX.Element {
   if (error) return <div className="empty"><p className="dim">{error}</p></div>;
   if (turns === null) return <div className="empty"><p className="dim">Loading turns…</p></div>;
   if (turns.length === 0) {
@@ -150,7 +150,7 @@ function TurnsBody({
   // in right above the composer.
   return (
     <div className="turns-list">
-      {turns.map((t) => <TurnCard key={t.id} turn={t} />)}
+      {turns.map((t) => <TurnCard key={t.id} turn={t} sessionId={sessionId} />)}
       {isWorking ? <WorkingIndicator /> : null}
     </div>
   );
@@ -167,7 +167,7 @@ function WorkingIndicator(): JSX.Element {
   );
 }
 
-function TurnCard({ turn }: { turn: SessionTurn }): JSX.Element {
+function TurnCard({ turn, sessionId }: { turn: SessionTurn; sessionId: string }): JSX.Element {
   // Progress collapsed by default — the whole point of this view is to
   // skim the user prompt + recap and only dig into progress when the
   // recap is missing or confusing.
@@ -176,7 +176,10 @@ function TurnCard({ turn }: { turn: SessionTurn }): JSX.Element {
   return (
     <article className="turn-card">
       <header className="turn-user">
-        <span className="turn-ts">{ts}</span>
+        <div className="turn-user-top">
+          <span className="turn-ts">{ts}</span>
+          <RevertControl sessionId={sessionId} turn={turn} />
+        </div>
         <pre className="turn-input">{turn.userInput}</pre>
       </header>
 
@@ -201,6 +204,86 @@ function TurnCard({ turn }: { turn: SessionTurn }): JSX.Element {
           : <p className="dim turn-recap-pending">…running</p>}
       </div>
     </article>
+  );
+}
+
+/** Per-turn "revert to here" control. Reverting drops this turn and
+ *  every turn after it from the conversation AND rolls the worktree's
+ *  files back to the snapshot taken before this turn ran. It's
+ *  destructive and irreversible, so the button expands into an explicit
+ *  Confirm / Cancel pair before doing anything. On success the backend
+ *  emits `session.prompt_submitted`, which makes TurnsPane re-read the
+ *  (now shorter) transcript — so this card simply disappears. */
+function RevertControl({ sessionId, turn }: { sessionId: string; turn: SessionTurn }): JSX.Element {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function doRevert(): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await window.baton.call('session.revertToTurn', {
+        sessionId,
+        turnId: turn.id,
+        turnTs: turn.ts,
+      });
+      // Success path: the prompt_submitted event reloads the list and
+      // this card unmounts, so there's nothing more to do here.
+    } catch (err) {
+      setError(String(err));
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+
+  if (error) {
+    return (
+      <button
+        type="button"
+        className="turn-revert turn-revert-err"
+        title={error}
+        onClick={() => setError(null)}
+      >
+        Revert failed ⟲
+      </button>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        className="turn-revert"
+        title="Drop this turn and everything after it, and roll the files back to before it ran"
+        onClick={() => setConfirming(true)}
+      >
+        Revert
+      </button>
+    );
+  }
+
+  return (
+    <span className="turn-revert-confirm">
+      <span className="turn-revert-label">Revert &amp; discard later turns?</span>
+      <button
+        type="button"
+        className="turn-revert turn-revert-yes"
+        disabled={busy}
+        onClick={() => void doRevert()}
+      >
+        {busy ? '…' : 'Confirm'}
+      </button>
+      <button
+        type="button"
+        className="turn-revert turn-revert-no"
+        disabled={busy}
+        onClick={() => setConfirming(false)}
+      >
+        Cancel
+      </button>
+    </span>
   );
 }
 

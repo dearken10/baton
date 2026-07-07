@@ -269,6 +269,13 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     );
     return { session };
   },
+  'session.revertToTurn': async (req) => {
+    return await getSessionManager().revertToTurn(
+      req.sessionId,
+      req.turnId,
+      req.turnTs
+    );
+  },
   'session.setPermissionMode': async (req) => {
     const session = await getSessionManager().setPermissionMode(req.sessionId, req.mode);
     return { session };
