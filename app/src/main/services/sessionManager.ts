@@ -82,8 +82,10 @@ const RECENT_PTY_CAP = 1_000_000;
 
 /** Default claude --model when the caller doesn't pin one. Persisted
  *  on the row so the chip always reflects what's actually running.
+ *  'default' is Claude's "Default (recommended)" model (adaptive
+ *  Opus→Sonnet); the CLI rejects the literal 'auto', so the alias is 'default'.
  *  Keep this in sync with DEFAULT_CLAUDE_MODEL in MiddleColumn.tsx. */
-const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
+const DEFAULT_CLAUDE_MODEL = 'default';
 
 /** Default idle threshold for auto-pause. Per-project override (F11.4)
  *  comes later; for now a single global value. Override at runtime
@@ -665,9 +667,13 @@ export class SessionManager {
       // the session — the hook would silently no-op.
       const branch = (await readCurrentBranch(batonFs, cwd)) ?? 'no git';
 
-      const permissionMode = opts.permissionMode ?? 'default';
-      // claude-code sessions default to the newest Opus when the caller
-      // doesn't pin a model. We persist the resolved id so the chip
+      // claude-code sessions start in 'auto' permission mode (the vetted
+      // auto-approve "automode") when the caller doesn't pick one; Codex
+      // has no such intermediate, so it keeps the safe 'default' (Ask).
+      const permissionMode = opts.permissionMode
+        ?? (opts.backendId === 'claude-code' ? 'auto' : 'default');
+      // claude-code sessions default to the Auto recommended model when the
+      // caller doesn't pin a model. We persist the resolved id so the chip
       // always reflects what's actually running and so a future
       // "default" change doesn't silently swap models under live sessions.
       const model = opts.model
