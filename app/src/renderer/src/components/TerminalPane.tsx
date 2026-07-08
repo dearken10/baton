@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebglAddon } from '@xterm/addon-webgl';
 import { SerializeAddon } from '@xterm/addon-serialize';
 import { WebLinksAddon } from '@xterm/addon-web-links';
+import { SearchAddon, type ISearchOptions } from '@xterm/addon-search';
 import '@xterm/xterm/css/xterm.css';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { useAppStore } from '../store.js';
@@ -35,6 +36,19 @@ function xtermThemeFor(t: Theme): {
 /** How often to snapshot the visible terminal to disk. */
 const SCROLLBACK_SAVE_MS = 10_000;
 
+/** Highlight colours for search matches. The inactive matches use a
+ *  translucent blue; the currently-focused match uses a solid amber so
+ *  it stands out as you step through results. Overview-ruler entries
+ *  paint tick marks on the scrollbar so off-screen matches are visible. */
+const SEARCH_DECORATIONS: NonNullable<ISearchOptions['decorations']> = {
+  matchBackground: '#3a6fd8',
+  matchBorder: '#5b8def',
+  matchOverviewRuler: '#5b8def',
+  activeMatchBackground: '#f5a623',
+  activeMatchBorder: '#f5a623',
+  activeMatchColorOverviewRuler: '#f5a623',
+};
+
 interface Props {
   sessionId: string;
 }
@@ -53,12 +67,82 @@ interface Props {
 export function TerminalPane({ sessionId }: Props): JSX.Element {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
+  const searchRef = useRef<SearchAddon | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const openFile = useAppStore((s) => s.openFile);
   // Keep the latest openFile in a ref so the WebLinksAddon click
   // handler (bound once at mount) always calls the current store action
   // without re-creating the addon on every render.
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
+
+  // ── Search overlay state ──────────────────────────────────
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [caseSensitive, setCaseSensitive] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [useRegex, setUseRegex] = useState(false);
+  // { current, total } for the match counter. total === -1 means the
+  // search addon capped decoration counting (too many matches).
+  const [results, setResults] = useState<{ current: number; total: number } | null>(null);
+
+  const searchOptions = useCallback(
+    (extra?: Partial<ISearchOptions>): ISearchOptions => ({
+      regex: useRegex,
+      caseSensitive,
+      wholeWord,
+      decorations: SEARCH_DECORATIONS,
+      ...extra,
+    }),
+    [useRegex, caseSensitive, wholeWord],
+  );
+
+  const findNext = useCallback(
+    (term: string, extra?: Partial<ISearchOptions>): void => {
+      const addon = searchRef.current;
+      if (!addon) return;
+      if (!term) { addon.clearDecorations(); setResults(null); return; }
+      addon.findNext(term, searchOptions(extra));
+    },
+    [searchOptions],
+  );
+
+  const findPrevious = useCallback(
+    (term: string): void => {
+      const addon = searchRef.current;
+      if (!addon || !term) return;
+      addon.findPrevious(term, searchOptions());
+    },
+    [searchOptions],
+  );
+
+  const openSearch = useCallback((): void => {
+    setSearchOpen(true);
+    // Defer focus to after the overlay renders; select any prior query
+    // so the user can immediately overtype it.
+    requestAnimationFrame(() => {
+      const input = searchInputRef.current;
+      if (input) { input.focus(); input.select(); }
+    });
+  }, []);
+  // Bound once inside the mount effect's key handler; keep it fresh.
+  const openSearchRef = useRef(openSearch);
+  openSearchRef.current = openSearch;
+
+  const closeSearch = useCallback((): void => {
+    setSearchOpen(false);
+    setResults(null);
+    try { searchRef.current?.clearDecorations(); } catch { /* addon may be gone */ }
+    // Return focus to the terminal so typing resumes going to the pty.
+    try { termRef.current?.focus(); } catch { /* term may be tearing down */ }
+  }, []);
+
+  // Re-run the search when the query or the match options change while
+  // the overlay is open, keeping the highlight/counter in sync.
+  useEffect(() => {
+    if (!searchOpen) return;
+    findNext(query, { incremental: true });
+  }, [searchOpen, query, caseSensitive, wholeWord, useRegex, findNext]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -132,6 +216,34 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       },
     );
     term.loadAddon(webLinks);
+
+    // Find-in-terminal. The overlay UI (rendered below) drives this
+    // addon via `searchRef`; `onDidChangeResults` feeds the match
+    // counter back into React state.
+    const search = new SearchAddon();
+    term.loadAddon(search);
+    searchRef.current = search;
+    const searchResultsSub = search.onDidChangeResults(({ resultIndex, resultCount }) => {
+      // resultIndex is 0-based (-1 when nothing is focused yet); present
+      // it 1-based to the user. resultCount === -1 means "too many to
+      // count" — we surface that as a distinct state below.
+      setResults({ current: resultIndex + 1, total: resultCount });
+    });
+
+    // Intercept Cmd/Ctrl+F before xterm forwards it to the pty so it
+    // opens our search overlay instead of typing a control char.
+    term.attachCustomKeyEventHandler((e) => {
+      if (
+        e.type === 'keydown' &&
+        (e.metaKey || e.ctrlKey) &&
+        !e.altKey &&
+        (e.key === 'f' || e.key === 'F')
+      ) {
+        openSearchRef.current();
+        return false;
+      }
+      return true;
+    });
 
     term.open(host);
     // `fit.fit()` recomputes the row count from the host's current
@@ -258,9 +370,11 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       offData();
       dataSub.dispose();
       resizeSub.dispose();
+      searchResultsSub.dispose();
       try { webLinks.dispose(); } catch { /* ignore */ }
       term.dispose();
       termRef.current = null;
+      searchRef.current = null;
       void webglOk; // silence the lint; useful for future telemetry
     };
   }, [sessionId]);
@@ -305,13 +419,91 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     void window.baton.call('pty.write', { sessionId, data: encoded });
   }
 
+  const matchLabel = (): string => {
+    if (!query) return '';
+    if (!results || results.total === 0) return 'No results';
+    if (results.total === -1) return 'Many matches';
+    return `${results.current}/${results.total}`;
+  };
+  const noMatches = Boolean(query) && (!results || results.total === 0);
+
   return (
-    <div
-      className="terminal-host"
-      ref={hostRef}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-    />
+    <div className="terminal-pane">
+      {searchOpen ? (
+        <div className="terminal-search" role="search">
+          <input
+            ref={searchInputRef}
+            className={`terminal-search-input${noMatches ? ' is-empty' : ''}`}
+            type="text"
+            placeholder="Find"
+            value={query}
+            spellCheck={false}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { e.preventDefault(); closeSearch(); }
+              else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (e.shiftKey) findPrevious(query);
+                else findNext(query);
+              } else if ((e.metaKey || e.ctrlKey) && (e.key === 'f' || e.key === 'F')) {
+                // Cmd+F while the box is already open: re-select so the
+                // user can overtype, instead of inserting a find char.
+                e.preventDefault();
+                e.currentTarget.select();
+              }
+            }}
+          />
+          <span className="terminal-search-count">{matchLabel()}</span>
+          <button
+            type="button"
+            className={`terminal-search-opt${caseSensitive ? ' is-on' : ''}`}
+            title="Match case"
+            aria-pressed={caseSensitive}
+            onClick={() => setCaseSensitive((v) => !v)}
+          >Aa</button>
+          <button
+            type="button"
+            className={`terminal-search-opt${wholeWord ? ' is-on' : ''}`}
+            title="Whole word"
+            aria-pressed={wholeWord}
+            onClick={() => setWholeWord((v) => !v)}
+          >W</button>
+          <button
+            type="button"
+            className={`terminal-search-opt${useRegex ? ' is-on' : ''}`}
+            title="Use regular expression"
+            aria-pressed={useRegex}
+            onClick={() => setUseRegex((v) => !v)}
+          >.*</button>
+          <button
+            type="button"
+            className="terminal-search-btn"
+            title="Previous match (Shift+Enter)"
+            disabled={!query}
+            onClick={() => findPrevious(query)}
+          >↑</button>
+          <button
+            type="button"
+            className="terminal-search-btn"
+            title="Next match (Enter)"
+            disabled={!query}
+            onClick={() => findNext(query)}
+          >↓</button>
+          <button
+            type="button"
+            className="terminal-search-btn"
+            title="Close (Esc)"
+            onClick={closeSearch}
+          >✕</button>
+        </div>
+      ) : null}
+      <div
+        className="terminal-host"
+        ref={hostRef}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
+      />
+    </div>
   );
 }
 

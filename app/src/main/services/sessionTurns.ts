@@ -210,6 +210,55 @@ export function readClaudeTurns(transcriptPath: string): SessionTurn[] {
   return capRecent(turns);
 }
 
+/**
+ * Truncate a Claude transcript so it ends just BEFORE the turn whose id
+ * is `targetTurnId` — i.e. drop that turn's user prompt and everything
+ * after it. Mirrors readClaudeTurns' "is this a real user prompt" test
+ * so the turn boundary it cuts at matches the ids the renderer rendered.
+ *
+ * Destructive and in-place (no backup). Returns:
+ *  - found:       did we locate the target turn's user line?
+ *  - isEmptyAfter: is the file empty after the cut (target was turn #1)?
+ *                  Callers use this to decide spawn-fresh vs --resume.
+ */
+export function truncateClaudeTranscriptBeforeTurn(
+  transcriptPath: string,
+  targetTurnId: string,
+): { found: boolean; isEmptyAfter: boolean } {
+  let raw: string;
+  try { raw = fs.readFileSync(transcriptPath, 'utf-8'); }
+  catch { return { found: false, isEmptyAfter: false }; }
+
+  const lines = raw.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line) continue;
+    let obj: ClaudeLine;
+    try { obj = JSON.parse(line) as ClaudeLine; } catch { continue; }
+    if (obj.type !== 'user' || obj.message?.role !== 'user') continue;
+
+    const content = obj.message?.content;
+    // tool_result lines ride on a `user` envelope but aren't turn starts.
+    if (Array.isArray(content) && content.length > 0 &&
+        (content[0] as { type?: string }).type === 'tool_result') continue;
+
+    const text = unwrapSlashCommand(claudeTextContent(content)).trim();
+    if (!text) continue;
+    if (isClaudeFraming(text)) continue;
+
+    const id = turnId(isoToMs(obj.timestamp), text);
+    if (id !== targetTurnId) continue;
+
+    // Keep every line strictly before this one. Each transcript line is
+    // a JSON object followed by '\n', so re-join with a trailing newline
+    // to preserve that shape (empty file when the target is turn #1).
+    const kept = i === 0 ? '' : lines.slice(0, i).join('\n') + '\n';
+    fs.writeFileSync(transcriptPath, kept);
+    return { found: true, isEmptyAfter: kept.length === 0 };
+  }
+  return { found: false, isEmptyAfter: false };
+}
+
 interface CodexLine {
   type?: string;
   timestamp?: string;

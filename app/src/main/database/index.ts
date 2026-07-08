@@ -210,6 +210,24 @@ function runMigrations(d: Database.Database): void {
     );
   } catch { /* already migrated */ }
 
+  // Per-turn code snapshots for "revert to this turn". On every
+  // UserPromptSubmit we stash the worktree's pre-turn state into a
+  // dangling git commit (parked under refs/baton/snap/*) and record it
+  // here keyed by the turn's wall-clock ts. Revert restores the worktree
+  // to that commit. turn_ts is filled in a beat after capture (once the
+  // prompt line lands in the transcript), so it's nullable at insert.
+  try {
+    d.exec(`CREATE TABLE IF NOT EXISTS turn_snapshots (
+      session_id   TEXT NOT NULL,
+      turn_ts      INTEGER,
+      commit_sha   TEXT NOT NULL,
+      captured_at  INTEGER NOT NULL
+    )`);
+    d.exec(
+      'CREATE INDEX IF NOT EXISTS turn_snapshots_session_idx ON turn_snapshots(session_id)'
+    );
+  } catch { /* already migrated */ }
+
   // Seed the built-in 'local' row. ON CONFLICT keeps it idempotent
   // across relaunches; we don't overwrite a renamed local row (the user
   // can't actually rename it in the UI, but be defensive).

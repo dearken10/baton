@@ -438,8 +438,35 @@ const SessionRespawnResponse = z.object({ session: Session });
  *  under a fresh agent session id, then spawn a new baton session that
  *  resumes from the copy. The original is untouched, so the user can
  *  explore an alternate path without losing the trunk. */
-const SessionCloneRequest = z.object({ sessionId: SessionId });
+const SessionCloneRequest = z.object({
+  sessionId: SessionId,
+  /** When set, carve out a fresh git worktree on this branch (off the
+   *  source session's current commit) and run the clone there instead
+   *  of sharing the source session's working tree. */
+  newWorktreeBranch: z.string().optional(),
+});
 const SessionCloneResponse = z.object({ session: Session });
+
+/** Revert a claude-code session to just before `turnId`: drop that turn
+ *  and everything after it from the transcript, restore the worktree to
+ *  the code snapshot captured before that turn (when one exists), and
+ *  respawn the agent on the rewound history. Destructive + in-place. */
+const SessionRevertToTurnRequest = z.object({
+  sessionId: SessionId,
+  /** Stable turn id (matches SessionTurn.id) of the turn to drop. */
+  turnId: z.string().min(1),
+  /** That turn's wall-clock ts — the key its code snapshot is stored
+   *  under. Sent alongside the id so the backend doesn't have to re-derive
+   *  it from the (about-to-be-truncated) transcript. */
+  turnTs: z.number(),
+});
+const SessionRevertToTurnResponse = z.object({
+  session: Session,
+  /** True when a git snapshot for this turn existed and the worktree was
+   *  restored to it; false = conversation was truncated but files were
+   *  left untouched (no snapshot — e.g. a turn from before this feature). */
+  codeReverted: z.boolean(),
+});
 
 const SessionDeleteRequest = z.object({
   sessionId: SessionId,
@@ -889,6 +916,7 @@ export const ControlVerbs = {
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },
   'session.respawn':    { request: SessionRespawnRequest,    response: SessionRespawnResponse },
   'session.clone':      { request: SessionCloneRequest,      response: SessionCloneResponse },
+  'session.revertToTurn': { request: SessionRevertToTurnRequest, response: SessionRevertToTurnResponse },
   'session.setPermissionMode': { request: SessionSetPermissionModeRequest, response: SessionSetPermissionModeResponse },
   'session.setModel':   { request: SessionSetModelRequest,   response: SessionSetModelResponse },
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },

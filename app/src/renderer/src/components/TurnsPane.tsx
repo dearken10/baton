@@ -27,8 +27,9 @@ interface SessionTurn {
  * Re-fetches on `session.prompt_submitted`. Data comes from
  * `session.turns`, which parses the agent's JSONL on disk.
  *
- * Input: the bottom composer forwards plain text + `\r` to `pty.write`
- * (same path xterm uses for keystrokes). That covers the 80% case
+ * Input: the bottom composer forwards the prompt text and a separate
+ * Enter keystroke to `pty.write` (same path xterm uses for
+ * keystrokes — see Composer for why they're split). That covers the 80% case
  * (send a prompt, type a slash command in full). Interactive bits the
  * TUI renders — permission prompts, slash-command picker, @-mentions —
  * still need the Live view.
@@ -121,7 +122,7 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
   return (
     <div className="turns-pane">
       <div className="turns-scroll" ref={scrollRef} onScroll={onScroll}>
-        <TurnsBody turns={turns} error={error} isWorking={isWorking} />
+        <TurnsBody turns={turns} error={error} isWorking={isWorking} sessionId={sessionId} />
       </div>
       <Composer sessionId={sessionId} />
     </div>
@@ -129,8 +130,8 @@ export function TurnsPane({ sessionId }: Props): JSX.Element {
 }
 
 function TurnsBody({
-  turns, error, isWorking,
-}: { turns: SessionTurn[] | null; error: string | null; isWorking: boolean }): JSX.Element {
+  turns, error, isWorking, sessionId,
+}: { turns: SessionTurn[] | null; error: string | null; isWorking: boolean; sessionId: string }): JSX.Element {
   if (error) return <div className="empty"><p className="dim">{error}</p></div>;
   if (turns === null) return <div className="empty"><p className="dim">Loading turns…</p></div>;
   if (turns.length === 0) {
@@ -149,7 +150,7 @@ function TurnsBody({
   // in right above the composer.
   return (
     <div className="turns-list">
-      {turns.map((t) => <TurnCard key={t.id} turn={t} />)}
+      {turns.map((t) => <TurnCard key={t.id} turn={t} sessionId={sessionId} />)}
       {isWorking ? <WorkingIndicator /> : null}
     </div>
   );
@@ -166,7 +167,7 @@ function WorkingIndicator(): JSX.Element {
   );
 }
 
-function TurnCard({ turn }: { turn: SessionTurn }): JSX.Element {
+function TurnCard({ turn, sessionId }: { turn: SessionTurn; sessionId: string }): JSX.Element {
   // Progress collapsed by default — the whole point of this view is to
   // skim the user prompt + recap and only dig into progress when the
   // recap is missing or confusing.
@@ -175,7 +176,10 @@ function TurnCard({ turn }: { turn: SessionTurn }): JSX.Element {
   return (
     <article className="turn-card">
       <header className="turn-user">
-        <span className="turn-ts">{ts}</span>
+        <div className="turn-user-top">
+          <span className="turn-ts">{ts}</span>
+          <RevertControl sessionId={sessionId} turn={turn} />
+        </div>
         <pre className="turn-input">{turn.userInput}</pre>
       </header>
 
@@ -200,6 +204,86 @@ function TurnCard({ turn }: { turn: SessionTurn }): JSX.Element {
           : <p className="dim turn-recap-pending">…running</p>}
       </div>
     </article>
+  );
+}
+
+/** Per-turn "revert to here" control. Reverting drops this turn and
+ *  every turn after it from the conversation AND rolls the worktree's
+ *  files back to the snapshot taken before this turn ran. It's
+ *  destructive and irreversible, so the button expands into an explicit
+ *  Confirm / Cancel pair before doing anything. On success the backend
+ *  emits `session.prompt_submitted`, which makes TurnsPane re-read the
+ *  (now shorter) transcript — so this card simply disappears. */
+function RevertControl({ sessionId, turn }: { sessionId: string; turn: SessionTurn }): JSX.Element {
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function doRevert(): Promise<void> {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await window.baton.call('session.revertToTurn', {
+        sessionId,
+        turnId: turn.id,
+        turnTs: turn.ts,
+      });
+      // Success path: the prompt_submitted event reloads the list and
+      // this card unmounts, so there's nothing more to do here.
+    } catch (err) {
+      setError(String(err));
+      setBusy(false);
+      setConfirming(false);
+    }
+  }
+
+  if (error) {
+    return (
+      <button
+        type="button"
+        className="turn-revert turn-revert-err"
+        title={error}
+        onClick={() => setError(null)}
+      >
+        Revert failed ⟲
+      </button>
+    );
+  }
+
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        className="turn-revert"
+        title="Drop this turn and everything after it, and roll the files back to before it ran"
+        onClick={() => setConfirming(true)}
+      >
+        Revert
+      </button>
+    );
+  }
+
+  return (
+    <span className="turn-revert-confirm">
+      <span className="turn-revert-label">Revert &amp; discard later turns?</span>
+      <button
+        type="button"
+        className="turn-revert turn-revert-yes"
+        disabled={busy}
+        onClick={() => void doRevert()}
+      >
+        {busy ? '…' : 'Confirm'}
+      </button>
+      <button
+        type="button"
+        className="turn-revert turn-revert-no"
+        disabled={busy}
+        onClick={() => setConfirming(false)}
+      >
+        Cancel
+      </button>
+    </span>
   );
 }
 
@@ -228,14 +312,42 @@ function ProgressRow({ item }: { item: ProgressItem }): JSX.Element {
   );
 }
 
-/** Bottom-of-pane prompt composer. Sends plain text + `\r` to the pty
- *  via the same `pty.write` IPC xterm uses, so the TUI receives it
- *  exactly as if the user had typed in the live terminal. Enter sends,
- *  Shift+Enter inserts a newline (standard chat UX). */
+/** Gap between writing the prompt text and writing the submitting
+ *  Enter. Long enough that the agent's TUI doesn't fold the \r into the
+ *  preceding paste burst (which would insert a newline instead of
+ *  submitting), short enough to feel instant. */
+const ENTER_SUBMIT_DELAY_MS = 80;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => { window.setTimeout(resolve, ms); });
+}
+
+/** base64-of-UTF-8 encode `s` and write it to the session's pty —
+ *  mirrors TerminalPane's keystroke encoder so the TUI receives it
+ *  exactly as if typed in the live terminal. */
+function writeToPty(sessionId: string, s: string): Promise<unknown> {
+  const encoded = btoa(unescape(encodeURIComponent(s)));
+  return window.baton.call('pty.write', { sessionId, data: encoded });
+}
+
+/** Bottom-of-pane prompt composer. Sends the prompt text, then a
+ *  separate Enter keystroke, to the pty via the same `pty.write` IPC
+ *  xterm uses, so the TUI receives it as if typed in the live terminal.
+ *  Enter sends, Shift+Enter inserts a newline (standard chat UX). */
 function Composer({ sessionId }: { sessionId: string }): JSX.Element {
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+
+  // Focus the composer when the Turns view opens (and when the
+  // selected session changes while it's open). This overlay sits on
+  // top of the still-mounted live xterm, whose hidden helper textarea
+  // is directly underneath us. Without grabbing focus here, keyboard
+  // focus stays on that terminal, so Enter lands in the TUI as a
+  // newline instead of submitting the prompt.
+  useEffect(() => {
+    taRef.current?.focus();
+  }, [sessionId]);
 
   // Auto-grow up to ~6 rows, then scroll. Cheap measurement: reset to
   // 'auto' so scrollHeight reflects the natural content height.
@@ -251,14 +363,31 @@ function Composer({ sessionId }: { sessionId: string }): JSX.Element {
     if (!value.trim() || busy) return;
     setBusy(true);
     try {
-      // Mirror TerminalPane's encoder — base64 of UTF-8 bytes. Append \r
-      // to commit the prompt in the agent's TUI (Enter keystroke).
-      const payload = value + '\r';
-      const encoded = btoa(unescape(encodeURIComponent(payload)));
-      await window.baton.call('pty.write', { sessionId, data: encoded });
+      // Send the prompt text and the submitting Enter as TWO separate
+      // pty writes with a gap between them — do NOT append \r to the
+      // text in a single write.
+      //
+      // The agent's TUI (Claude Code / Codex) runs a paste-detection
+      // heuristic: when a burst of bytes arrives together it's treated
+      // as pasted content, and a \r riding along at the end of that
+      // burst is inserted as a literal newline in the input box instead
+      // of submitting. That's the "Enter just makes a newline in the
+      // terminal" bug. In the Live terminal each keystroke arrives on
+      // its own (human typing), so Enter there always submits.
+      //
+      // Writing the text first, letting it settle, then writing \r on
+      // its own makes the TUI read the \r as a real Enter keypress.
+      await writeToPty(sessionId, value);
+      await delay(ENTER_SUBMIT_DELAY_MS);
+      await writeToPty(sessionId, '\r');
       setText('');
     } finally {
       setBusy(false);
+      // Keep focus on the composer after a send. The Send-button click
+      // moves focus to the button, and any blur drops keystrokes into
+      // the xterm sitting underneath this overlay — so the next Enter
+      // would leak to the terminal instead of submitting here.
+      taRef.current?.focus();
     }
   }
 
@@ -283,7 +412,6 @@ function Composer({ sessionId }: { sessionId: string }): JSX.Element {
         rows={1}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
-        disabled={busy}
       />
       <button
         type="submit"
