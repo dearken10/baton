@@ -114,6 +114,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const session = getSessionManager().setSnoozed(req.sessionId, req.snoozed);
     return { session };
   },
+  'session.setTitle': (req) => {
+    const session = getSessionManager().setTitle(req.sessionId, req.title);
+    return { session };
+  },
 
   'connection.list': () => ({ profiles: listConnections() }),
   'connection.create': (req) => {

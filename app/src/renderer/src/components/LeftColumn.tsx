@@ -53,6 +53,85 @@ function saveSidebarView(v: SidebarView): void {
   try { localStorage.setItem(SIDEBAR_VIEW_LS_KEY, v); } catch { /* best-effort */ }
 }
 
+/** The primary label for a session row: the (editable) title, falling
+ *  back to the git branch until a title is auto-generated. Hovering the
+ *  row reveals a pencil; clicking it — or double-clicking the text —
+ *  swaps in an inline input. Enter / blur commits, Escape cancels. */
+function SessionTitleLabel({ session }: { session: Session }): JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // The branch renders on its own dedicated sub-row, so the title slot
+  // shows a muted placeholder — not the branch — while a session is
+  // still awaiting its auto-generated title (avoids showing the branch
+  // twice).
+  const hasTitle = !!session.title;
+  const display = session.title ?? 'Untitled session';
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  function begin(e: React.MouseEvent): void {
+    e.stopPropagation();
+    setDraft(session.title ?? '');
+    setEditing(true);
+  }
+
+  function commit(): void {
+    if (!editing) return;
+    setEditing(false);
+    const next = draft.trim();
+    if (next === (session.title ?? '')) return; // no change
+    void window.baton
+      .call('session.setTitle', { sessionId: session.id, title: next })
+      .catch(() => { /* best-effort — event will reconcile on success */ });
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        className="session-title-input"
+        value={draft}
+        placeholder={session.branch}
+        onChange={(e) => setDraft(e.target.value)}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') { e.preventDefault(); commit(); }
+          else if (e.key === 'Escape') { e.preventDefault(); setEditing(false); }
+        }}
+        onBlur={commit}
+      />
+    );
+  }
+
+  return (
+    <span className="session-title" onDoubleClick={begin}>
+      <span
+        className={`session-title-text${hasTitle ? '' : ' session-title-placeholder'}`}
+        title={display}
+      >
+        {display}
+      </span>
+      <button
+        type="button"
+        className="session-title-edit"
+        title="Rename this session"
+        aria-label="Rename this session"
+        onClick={begin}
+      >
+        ✎
+      </button>
+    </span>
+  );
+}
+
 export function LeftColumn(): JSX.Element {
   const projectsRecord = useAppStore((s) => s.projects);
   const sessionsRecord = useAppStore((s) => s.sessions);
@@ -850,14 +929,16 @@ function TimelineView(props: TimelineViewProps): JSX.Element {
             aria-busy={isPending || undefined}
           >
             <div className="session-row-main">
-              <span className="timeline-head">
-                <span className="timeline-project" title={project?.path}>
-                  {project?.name ?? 'Unknown project'}
-                </span>
+              <span className="session-title-row">
+                <span className={`session-badge ${badge.cls}`} aria-hidden>{badge.glyph}</span>
+                <SessionTitleLabel session={s} />
                 <span className="timeline-time">{formatRelativeTime(s.lastActiveAt, now)}</span>
               </span>
-              <span className="branch">
-                <span className={`session-badge ${badge.cls}`} aria-hidden>{badge.glyph}</span>
+              <span className="branch branch-sub">
+                <span className="branch-project" title={project?.path}>
+                  {project?.name ?? 'Unknown project'}
+                </span>
+                <span className="branch-sep" aria-hidden>/</span>
                 {s.branch}
               </span>
               {s.lastSummary ? (
@@ -1141,10 +1222,11 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                 }}
               >
                 <div className="session-row-main">
-                  <span className="branch">
+                  <span className="session-title-row">
                     <span className={`session-badge ${badge.cls}`} aria-hidden>{badge.glyph}</span>
-                    {s.branch}
+                    <SessionTitleLabel session={s} />
                   </span>
+                  <span className="branch branch-sub">{s.branch}</span>
                   {s.lastSummary ? (
                     <span className="session-intent" title={s.lastSummary}>
                       {s.lastSummary}

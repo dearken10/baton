@@ -775,6 +775,86 @@ button {
   white-space: nowrap;
   font-style: italic;
 }
+
+/* Session title — the primary, user-editable label. The badge sits
+   inline; the title text ellipsises; a pencil reveals on row hover. */
+.session-row .session-title-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+/* Relative-time stamp, pushed to the right of the title (the title's
+   flex:1 does the pushing). */
+.session-row .session-title-row .timeline-time {
+  flex: 0 0 auto;
+  margin-left: 8px;
+}
+.session-row .session-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.session-row .session-title-text {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+/* Not-yet-titled session: muted, italic so it reads as a placeholder. */
+.session-row .session-title-text.session-title-placeholder {
+  color: var(--text-faint);
+  font-weight: 500;
+  font-style: italic;
+}
+.session-row .session-title-edit {
+  flex: 0 0 auto;
+  opacity: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px 3px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.session-row:hover .session-title-edit { opacity: 1; }
+.session-row .session-title-edit:hover { background: var(--bg-3); color: var(--text); }
+/* Branch demoted to a monospace sub-label beneath the title. The whole
+   line ellipsises via the base `.branch` rule. */
+.session-row .branch.branch-sub {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+/* Timeline view prefixes the branch with the owning project name. */
+.session-row .branch.branch-sub .branch-project {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.session-row .branch.branch-sub .branch-sep {
+  margin: 0 4px;
+  color: var(--text-faint);
+}
+/* Inline rename input — sized to blend into the row's primary line. */
+.session-row .session-title-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg-0, var(--bg-1));
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  padding: 1px 5px;
+  outline: none;
+}
 .session-row .tokens {
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   font-size: 10.5px;

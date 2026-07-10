@@ -201,6 +201,16 @@ function runMigrations(d: Database.Database): void {
     d.exec('ALTER TABLE sessions ADD COLUMN parent_session_id TEXT');
   } catch { /* already migrated */ }
 
+  // title = a stable, user-editable session name. Auto-generated once
+  // from the first turn's intent summary (see updateIntentSummary in
+  // sessionManager.ts), then frozen unless the user edits it inline in
+  // the sidebar. NULL until the first summary lands — the row falls back
+  // to the git branch name for its label. See SessionTitleLabel in
+  // LeftColumn.tsx.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN title TEXT');
+  } catch { /* already migrated */ }
+
   // Connection model. Old databases predate connection_profiles and
   // have no connection_id on their project rows; everything pre-existing
   // is a local project.

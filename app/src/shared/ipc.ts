@@ -144,6 +144,11 @@ export const Session = z.object({
   tokensIn: z.number(),
   tokensOut: z.number(),
   lastSummary: z.string().nullable(),
+  /** Stable, user-editable session name. Auto-generated once from the
+   *  first turn's intent summary, then frozen unless the user edits it
+   *  inline in the sidebar. Null until the first summary lands — the row
+   *  falls back to the git branch for its label. */
+  title: z.string().nullable(),
   /** Claude's internal session id (captured from SessionStart hook). */
   claudeSessionId: z.string().nullable(),
   /** Tool-permission posture for this session, passed to the agent at
@@ -492,6 +497,14 @@ const SessionSetSnoozedRequest = z.object({
   snoozed: z.boolean(),
 });
 const SessionSetSnoozedResponse = z.object({ session: Session });
+
+/** Set (or clear) a session's title. An empty/whitespace-only string
+ *  clears the title, reverting the row to its branch-name label. */
+const SessionSetTitleRequest = z.object({
+  sessionId: SessionId,
+  title: z.string(),
+});
+const SessionSetTitleResponse = z.object({ session: Session });
 
 // ── Worktree readers (right column) ─────────────────────────────
 // Recursive node type defined first, then z.lazy with that as the
@@ -922,6 +935,7 @@ export const ControlVerbs = {
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
+  'session.setTitle': { request: SessionSetTitleRequest, response: SessionSetTitleResponse },
 
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
   'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },
@@ -1035,6 +1049,13 @@ const SessionSummarizedEvent = EventEnvelope.extend({
   summary: z.string(),
 });
 
+const SessionTitledEvent = EventEnvelope.extend({
+  type: z.literal('session.titled'),
+  sessionId: SessionId,
+  /** Null when the title was cleared (row reverts to its branch label). */
+  title: z.string().nullable(),
+});
+
 const SessionExitedEvent = EventEnvelope.extend({
   type: z.literal('session.exited'),
   sessionId: SessionId,
@@ -1104,6 +1125,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   SessionStartingEvent,
   SessionStatusChangedEvent,
   SessionSummarizedEvent,
+  SessionTitledEvent,
   SessionExitedEvent,
   SessionDeletedEvent,
   SessionRenamedEvent,

@@ -535,7 +535,7 @@ export class SessionManager {
     const rows = getDatabase()
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
-                started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary,
+                started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
                 claude_session_id, permission_mode, model, snoozed_at, parent_session_id
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
@@ -545,6 +545,7 @@ export class SessionManager {
         branch: string; worktree_path: string; status: string;
         started_at: number; last_active_at: number | null; ended_at: number | null;
         tokens_in: number; tokens_out: number; last_summary: string | null;
+        title: string | null;
         claude_session_id: string | null;
         permission_mode: string;
         model: string | null;
@@ -568,6 +569,7 @@ export class SessionManager {
         tokensIn: r.tokens_in,
         tokensOut: r.tokens_out,
         lastSummary: r.last_summary,
+        title: r.title,
         claudeSessionId: r.claude_session_id,
         permissionMode: r.permission_mode as PermissionMode,
         model: r.model,
@@ -710,6 +712,11 @@ export class SessionManager {
       // return live.meta with `lastSummary: null` and the chip would
       // lose the intent label between restarts.
       let savedSummary: string | null = null;
+      // Preserve the user's title across resume/respawn — it lives only
+      // in the DB row and isn't re-emitted on spawn, so without seeding
+      // it here live.meta would carry `title: null` and the first Stop
+      // hook would regenerate (overwriting a title the user may have set).
+      let savedTitle: string | null = null;
       let savedTokensIn = 0;
       let savedTokensOut = 0;
       let savedSnoozedAt: number | null = null;
@@ -723,12 +730,13 @@ export class SessionManager {
       if (opts.reuseSessionId) {
         try {
           const prev = getDatabase()
-            .prepare('SELECT last_summary, tokens_in, tokens_out, snoozed_at, last_active_at FROM sessions WHERE id = ?')
+            .prepare('SELECT last_summary, title, tokens_in, tokens_out, snoozed_at, last_active_at FROM sessions WHERE id = ?')
             .get(opts.reuseSessionId) as
-            | { last_summary: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null; last_active_at: number | null }
+            | { last_summary: string | null; title: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null; last_active_at: number | null }
             | undefined;
           if (prev) {
             savedSummary = prev.last_summary;
+            savedTitle = prev.title;
             savedTokensIn = prev.tokens_in ?? 0;
             savedTokensOut = prev.tokens_out ?? 0;
             savedSnoozedAt = prev.snoozed_at;
@@ -750,6 +758,7 @@ export class SessionManager {
         tokensIn: savedTokensIn,
         tokensOut: savedTokensOut,
         lastSummary: savedSummary,
+        title: savedTitle,
         claudeSessionId: opts.resumeAgentSessionId ?? null,
         permissionMode,
         model,
@@ -771,8 +780,8 @@ export class SessionManager {
       // may have changed it between runs.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, claude_session_id, permission_mode, model, parent_session_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title, claude_session_id, permission_mode, model, parent_session_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              status          = excluded.status,
              ended_at        = NULL,
@@ -793,6 +802,7 @@ export class SessionManager {
           0,
           0,
           null,
+          session.title,
           session.claudeSessionId,
           session.permissionMode,
           session.model,
@@ -1438,7 +1448,7 @@ export class SessionManager {
       const row = getDatabase()
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
-                  started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary,
+                  started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
                   claude_session_id, permission_mode, model, snoozed_at, parent_session_id
              FROM sessions WHERE id = ?`
         )
@@ -1448,7 +1458,7 @@ export class SessionManager {
             branch: string; worktree_path: string; status: string;
             started_at: number; last_active_at: number | null; ended_at: number | null;
             tokens_in: number; tokens_out: number;
-            last_summary: string | null; claude_session_id: string | null;
+            last_summary: string | null; title: string | null; claude_session_id: string | null;
             permission_mode: string;
             model: string | null;
             snoozed_at: number | null;
@@ -1496,6 +1506,7 @@ export class SessionManager {
         tokensOut: row.tokens_out,
         snoozedAt: row.snoozed_at,
         lastSummary: row.last_summary,
+        title: row.title,
         claudeSessionId: row.claude_session_id,
         permissionMode: row.permission_mode as PermissionMode,
         model: row.model,
@@ -1607,6 +1618,26 @@ export class SessionManager {
     return session;
   }
 
+  /** Set (or clear) a session's title. An empty/whitespace-only string
+   *  clears it, reverting the row to its branch-name label. Persists to
+   *  the DB, updates in-memory meta, and emits `session.titled`. Once the
+   *  user sets a title, the auto-summariser stops overwriting it (see the
+   *  `!currentTitle` guard in updateIntentSummary). */
+  setTitle(sessionId: string, title: string): Session {
+    const trimmed = title.trim();
+    const value = trimmed.length > 0 ? trimmed : null;
+    const res = getDatabase()
+      .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+      .run(value, sessionId);
+    if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, title: value };
+    emit({ type: 'session.titled', sessionId, title: value });
+    const session = this.listAll().find((s) => s.id === sessionId);
+    if (!session) throw new Error(`Session disappeared after title set: ${sessionId}`);
+    return session;
+  }
+
   /** Re-stamp display_order for the given sessions in order. The
    *  renderer scopes this per-project, so we don't enforce a single
    *  cross-project sequence. */
@@ -1706,6 +1737,16 @@ export class SessionManager {
         .run(summary, sessionId);
     } catch { /* best-effort */ }
     live.meta = { ...live.meta, lastSummary: summary };
+    // First terminal summary seeds the (editable) title — set once.
+    if (!live.meta.title) {
+      try {
+        getDatabase()
+          .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+          .run(summary, sessionId);
+      } catch { /* best-effort */ }
+      live.meta = { ...live.meta, title: summary };
+      emit({ type: 'session.titled', sessionId, title: summary });
+    }
     // A refreshed terminal summary is the main activity signal for shell
     // sessions (no tokens, status pinned to 'running') — keep them ranked.
     this.bumpActivity(sessionId);
@@ -1716,7 +1757,7 @@ export class SessionManager {
     const live = this.live.get(sessionId);
     const dbRow = getDatabase()
       .prepare(
-        'SELECT claude_session_id, worktree_path, last_summary, backend_id ' +
+        'SELECT claude_session_id, worktree_path, last_summary, title, backend_id ' +
         'FROM sessions WHERE id = ?'
       )
       .get(sessionId) as
@@ -1724,6 +1765,7 @@ export class SessionManager {
           claude_session_id: string | null;
           worktree_path: string;
           last_summary: string | null;
+          title: string | null;
           backend_id: string;
         }
       | undefined;
@@ -1788,6 +1830,22 @@ export class SessionManager {
       });
     }
     if (live) live.meta = { ...live.meta, lastSummary: summary };
+
+    // The first real summary doubles as the session's initial title — a
+    // stable name derived from the opening turn, which the user can later
+    // edit inline. Set it exactly once; a title already present (auto or
+    // user-set) is never overwritten by later turns.
+    const currentTitle = live?.meta.title ?? dbRow?.title ?? null;
+    if (!currentTitle) {
+      try {
+        getDatabase()
+          .prepare('UPDATE sessions SET title = ? WHERE id = ?')
+          .run(summary, sessionId);
+      } catch { /* best-effort */ }
+      if (live) live.meta = { ...live.meta, title: summary };
+      emit({ type: 'session.titled', sessionId, title: summary });
+    }
+
     this.bumpActivity(sessionId);
     const t0 = this.promptSubmittedAt.get(sessionId);
     trace('SUMM_EMIT', {
