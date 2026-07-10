@@ -259,6 +259,11 @@ export const useAppStore = create<AppState>()(
             }
             break;
           }
+          case 'session.titled': {
+            const sess = s.sessions[event.sessionId];
+            if (sess) sess.title = event.title;
+            break;
+          }
           case 'session.exited': {
             const sess = s.sessions[event.sessionId];
             if (sess) {
