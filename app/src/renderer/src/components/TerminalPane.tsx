@@ -9,6 +9,8 @@ import '@xterm/xterm/css/xterm.css';
 import { DRAG_FILE_PATH } from './FilesPanel.js';
 import { useAppStore } from '../store.js';
 import { webUrlTabId } from './tabIds.js';
+import { findFileRefs } from './fileRefParse.js';
+import { resolveAndOpenFileRef } from './openFileRef.js';
 import { getTheme, subscribeTheme, type Theme } from '../lib/theme.js';
 
 function xtermThemeFor(t: Theme): {
@@ -75,6 +77,12 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
   // without re-creating the addon on every render.
   const openFileRef = useRef(openFile);
   openFileRef.current = openFile;
+  // Same trick for the worktree path — the file-ref link provider
+  // (bound once at mount) resolves relative refs against the session's
+  // current worktree.
+  const worktreePath = useAppStore((s) => s.sessions[sessionId]?.worktreePath ?? null);
+  const worktreePathRef = useRef(worktreePath);
+  worktreePathRef.current = worktreePath;
 
   // ── Search overlay state ──────────────────────────────────
   const [searchOpen, setSearchOpen] = useState(false);
@@ -216,6 +224,42 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       },
     );
     term.loadAddon(webLinks);
+
+    // Make file references (`src/foo/bar.ts:42`) in the terminal output
+    // clickable — the same links the Turns view renders, but for the
+    // Live "claude code session" terminal. A custom link provider scans
+    // each buffer line with the shared parser; clicking resolves the ref
+    // against the worktree file index and opens it in the editor pane,
+    // jumping to the referenced line. `bufferLineNumber` is 1-based and
+    // buffer-absolute; IBufferRange end is inclusive, so a match at
+    // string offsets [start, end) maps to cells start+1 .. end.
+    const fileLinks = term.registerLinkProvider({
+      provideLinks(bufferLineNumber, callback) {
+        const line = term.buffer.active.getLine(bufferLineNumber - 1);
+        if (!line) { callback(undefined); return; }
+        const text = line.translateToString(true);
+        const found = findFileRefs(text);
+        if (found.length === 0) { callback(undefined); return; }
+        callback(
+          found.map(({ ref, start, end }) => ({
+            text: ref.raw,
+            range: {
+              start: { x: start + 1, y: bufferLineNumber },
+              end: { x: end, y: bufferLineNumber },
+            },
+            activate: (event) => {
+              event.preventDefault();
+              void resolveAndOpenFileRef({
+                ref,
+                sessionId,
+                worktreePath: worktreePathRef.current,
+                openFile: openFileRef.current,
+              });
+            },
+          })),
+        );
+      },
+    });
 
     // Find-in-terminal. The overlay UI (rendered below) drives this
     // addon via `searchRef`; `onDidChangeResults` feeds the match
@@ -372,6 +416,7 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       resizeSub.dispose();
       searchResultsSub.dispose();
       try { webLinks.dispose(); } catch { /* ignore */ }
+      try { fileLinks.dispose(); } catch { /* ignore */ }
       term.dispose();
       termRef.current = null;
       searchRef.current = null;

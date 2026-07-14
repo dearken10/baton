@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
+import { FileRefText } from './FileRefText.js';
 
 interface Props {
   sessionId: string;
@@ -194,13 +195,13 @@ function TurnCard({ turn, sessionId }: { turn: SessionTurn; sessionId: string })
       </button>
       {open ? (
         <ol className="turn-progress">
-          {turn.progress.map((p, i) => <li key={i}><ProgressRow item={p} /></li>)}
+          {turn.progress.map((p, i) => <li key={i}><ProgressRow item={p} sessionId={sessionId} /></li>)}
         </ol>
       ) : null}
 
       <div className="turn-recap">
         {turn.recap !== null
-          ? <pre className="turn-recap-text">{turn.recap}</pre>
+          ? <pre className="turn-recap-text"><FileRefText text={turn.recap} sessionId={sessionId} /></pre>
           : <p className="dim turn-recap-pending">…running</p>}
       </div>
     </article>
@@ -287,12 +288,12 @@ function RevertControl({ sessionId, turn }: { sessionId: string; turn: SessionTu
   );
 }
 
-function ProgressRow({ item }: { item: ProgressItem }): JSX.Element {
+function ProgressRow({ item, sessionId }: { item: ProgressItem; sessionId: string }): JSX.Element {
   if (item.kind === 'tool_use') {
     return (
       <div className="turn-prog turn-prog-tool">
         <span className="turn-prog-tag">⚙ {item.name}</span>
-        <code className="turn-prog-arg">{item.inputPreview}</code>
+        <code className="turn-prog-arg"><FileRefText text={item.inputPreview} sessionId={sessionId} /></code>
       </div>
     );
   }
@@ -300,14 +301,14 @@ function ProgressRow({ item }: { item: ProgressItem }): JSX.Element {
     return (
       <div className={`turn-prog turn-prog-result ${item.ok ? '' : 'err'}`}>
         <span className="turn-prog-tag">{item.ok ? '✓' : '✗'}</span>
-        <code className="turn-prog-arg">{item.preview}</code>
+        <code className="turn-prog-arg"><FileRefText text={item.preview} sessionId={sessionId} /></code>
       </div>
     );
   }
   return (
     <div className="turn-prog turn-prog-text">
       <span className="turn-prog-tag">›</span>
-      <span>{item.text}</span>
+      <span><FileRefText text={item.text} sessionId={sessionId} /></span>
     </div>
   );
 }

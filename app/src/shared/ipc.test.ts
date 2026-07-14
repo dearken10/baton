@@ -92,6 +92,7 @@ describe('control verb registry', () => {
         "worktree.listOrphans",
         "worktree.readDir",
         "worktree.removeOrphan",
+        "worktree.resolveFile",
         "worktree.search",
       ]
     `);
