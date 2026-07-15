@@ -793,6 +793,24 @@ const WorktreeSearchResponse = z.object({
   error: z.string().nullable(),
 });
 
+/** Resolve a file reference (bare basename or partial repo path, e.g.
+ *  "process-sop.service.ts" or "src/foo/bar.ts") that appears in
+ *  transcript text into concrete repo-relative paths, so the renderer
+ *  can turn it into a clickable link that opens the editor. Backed by
+ *  `git ls-files` so it covers the whole tree (not just the depth-capped
+ *  fileTree) and respects .gitignore. */
+const WorktreeResolveFileRequest = z.object({
+  sessionId: SessionId,
+  /** The reference as it appeared in the text, with any `:line[:col]`
+   *  suffix already stripped by the caller. */
+  ref: z.string().min(1),
+});
+const WorktreeResolveFileResponse = z.object({
+  /** Repo-relative paths, best match first, capped. Empty when nothing
+   *  in the worktree matches. */
+  matches: z.array(z.string()),
+});
+
 /** Orphan = a git worktree on disk that doesn't match any session row.
  *  Surfaced read-only here; deletion happens via worktree.removeOrphan. */
 const OrphanWorktree = z.object({
@@ -945,6 +963,7 @@ export const ControlVerbs = {
   'worktree.listOrphans':  { request: WorktreeListOrphansRequest, response: WorktreeListOrphansResponse },
   'worktree.removeOrphan': { request: WorktreeRemoveOrphanRequest, response: WorktreeRemoveOrphanResponse },
   'worktree.search':       { request: WorktreeSearchRequest,      response: WorktreeSearchResponse },
+  'worktree.resolveFile':  { request: WorktreeResolveFileRequest, response: WorktreeResolveFileResponse },
   'git.stage':             { request: GitStageRequest,             response: GitStageResponse },
   'git.unstage':           { request: GitUnstageRequest,           response: GitUnstageResponse },
   'git.commit':            { request: GitCommitRequest,            response: GitCommitResponse },

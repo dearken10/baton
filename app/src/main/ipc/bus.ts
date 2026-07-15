@@ -486,6 +486,15 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     if (!fs) return { matches: [], truncated: false, error: 'session not found' };
     return await runGitGrep(fs, cwd, req);
   },
+  'worktree.resolveFile': async (req) => {
+    // Tolerant: a stale click after the session was deleted should
+    // resolve to "no match" rather than throw.
+    const worktreePath = tryResolveWorktreePath(req.sessionId);
+    if (!worktreePath) return { matches: [] };
+    const fs = getFsForSession(req.sessionId);
+    if (!fs) return { matches: [] };
+    return await resolveWorktreeFile(fs, worktreePath, req.ref);
+  },
   'shell.openPath': async (req) => {
     // openPath returns a string — empty on success, error message on
     // failure. We surface it as a boolean for the renderer.
@@ -954,6 +963,82 @@ async function runOneGrep(
     if (matches.length >= maxMatches) { truncated = true; break; }
   }
   return { matches, truncated, error: null };
+}
+
+/** Resolve a file reference (bare basename or partial repo path) that
+ *  appeared in transcript text into concrete repo-relative paths.
+ *
+ *  Uses `git ls-files` (cached + untracked-but-not-ignored) so it sees
+ *  the whole tree — the fileTree reader is depth-capped, which would
+ *  miss deeply-nested files. Ranking, best first:
+ *    1. exact path match
+ *    2. path-suffix match (file ends with `/<ref>`)
+ *    3. basename match (last path segment equals the ref's basename)
+ *  For a ref that already carries directories we favour suffix matches
+ *  over loose basename matches; for a bare basename the two collapse. */
+async function resolveWorktreeFile(
+  fs: import('../services/fs/types.js').BatonFs,
+  cwd: string,
+  rawRef: string,
+): Promise<ResponseOf<'worktree.resolveFile'>> {
+  // Defensive normalisation: strip a leading "./", surrounding quotes,
+  // and any `:line[:col]` suffix the caller didn't remove.
+  const rel = rawRef
+    .trim()
+    .replace(/^["'`(]+|["'`)]+$/g, '')
+    .replace(/^\.\//, '')
+    .replace(/:\d+(?::\d+)?$/, '');
+  if (!rel || rel.includes('..')) return { matches: [] };
+
+  // Two passes, merged — mirrors runGitGrep. `git ls-files` can't
+  // combine `--others` (untracked) with `--recurse-submodules` in one
+  // invocation, and many worktrees here keep their real source in
+  // submodules (backend/, frontend/). So:
+  //   pass A: tracked + untracked in the top repo (misses submodules)
+  //   pass B: tracked, recursing into submodules (misses untracked)
+  // Union covers both. Submodule paths come back parent-repo-relative,
+  // which is exactly what we join against the worktree root.
+  const runLsFiles = async (args: readonly string[]): Promise<string[]> => {
+    try {
+      const res = await fs.exec('git', ['ls-files', '-z', ...args], {
+        cwd, timeoutMs: 15_000, maxStdoutBytes: 32 * 1024 * 1024,
+      });
+      if (res.code !== 0) return [];
+      return res.stdout.split('\0').filter((f) => f.length > 0);
+    } catch {
+      return [];
+    }
+  };
+  const [topFiles, subFiles] = await Promise.all([
+    runLsFiles(['--cached', '--others', '--exclude-standard']),
+    runLsFiles(['--recurse-submodules']),
+  ]);
+  const files = [...new Set([...topFiles, ...subFiles])];
+  const base = rel.split('/').pop() ?? rel;
+  const hasSlash = rel.includes('/');
+
+  const exact: string[] = [];
+  const suffix: string[] = [];
+  const byBase: string[] = [];
+  for (const f of files) {
+    if (f === rel) exact.push(f);
+    else if (f.endsWith(`/${rel}`)) suffix.push(f);
+    else if ((f.split('/').pop() ?? f) === base) byBase.push(f);
+  }
+
+  const ranked = hasSlash
+    ? [...exact, ...suffix, ...byBase]
+    : [...exact, ...byBase, ...suffix];
+
+  const seen = new Set<string>();
+  const matches: string[] = [];
+  for (const f of ranked) {
+    if (seen.has(f)) continue;
+    seen.add(f);
+    matches.push(f);
+    if (matches.length >= 20) break;
+  }
+  return { matches };
 }
 
 /** Pick a non-conflicting destination name for `file.copy` when the

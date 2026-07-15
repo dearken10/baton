@@ -1430,6 +1430,28 @@ button.terminal-tab,
 }
 .turn-recap-pending { margin: 0; font-style: italic; }
 
+/* Clickable file reference (foo/bar.ts:42) inside transcript text.
+   Reset the button chrome so it flows inline like the surrounding
+   text, then style it as a subtle link. */
+.file-ref {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+  border-radius: 3px;
+  /* Keep long paths wrapping with the rest of the text. */
+  white-space: inherit;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.file-ref:hover { text-decoration: underline; }
+.file-ref:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* ── Turns composer ──────────────────────────────────────── */
 .turns-composer {
   flex: 0 0 auto;
