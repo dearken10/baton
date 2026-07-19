@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from './store.js';
 import { Titlebar } from './components/Titlebar.js';
+import { SettingsDialog } from './components/SettingsDialog.js';
 import { LeftColumn } from './components/LeftColumn.js';
 import { MiddleColumn } from './components/MiddleColumn.js';
 import { RightColumn } from './components/RightColumn.js';
@@ -37,6 +38,7 @@ export function App(): JSX.Element {
   const selectedSessionId = useAppStore((s) => s.selectedSessionId);
   const [meta, setMeta] = useState<{ version: string } | null>(null);
   const [preloadError, setPreloadError] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Persisted column widths. Saved to localStorage on every change.
   const [leftWidth, setLeftWidth] = useState(() =>
@@ -123,7 +125,11 @@ export function App(): JSX.Element {
 
   return (
     <div className="app">
-      <Titlebar version={meta?.version ?? 'dev'} />
+      <Titlebar
+        version={meta?.version ?? 'dev'}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+      <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       <main
         className="main"
         style={{

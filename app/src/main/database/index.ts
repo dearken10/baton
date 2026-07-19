@@ -211,6 +211,15 @@ function runMigrations(d: Database.Database): void {
     d.exec('ALTER TABLE sessions ADD COLUMN title TEXT');
   } catch { /* already migrated */ }
 
+  // jira_task_id = the Jira ticket this session's effort is attributed
+  // to (e.g. "IMBEE-8704"). Captured at spawn (user-entered or
+  // auto-detected from the branch) and stamped onto the session's OTEL
+  // metrics as `jira.ticket`. NULL = untagged. See jiraTaskId in
+  // src/shared/ipc.ts and buildOtelEnv in settingsStore.ts.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN jira_task_id TEXT');
+  } catch { /* already migrated */ }
+
   // Connection model. Old databases predate connection_profiles and
   // have no connection_id on their project rows; everything pre-existing
   // is a local project.
