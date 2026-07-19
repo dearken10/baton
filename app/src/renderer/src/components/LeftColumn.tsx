@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { ConnectionProfile, Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
+import { NewSessionDialog, type NewSessionTarget } from './NewSessionDialog.js';
 import { NewTerminalDialog, type NewTerminalChoice } from './NewTerminalDialog.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
@@ -301,6 +302,17 @@ export function LeftColumn(): JSX.Element {
   }
 
   const [busy, setBusy] = useState(false);
+  // Whether OTEL telemetry is on — gates the worktree dialog's Jira
+  // field. Fetched at mount and refreshed when opening the dialog.
+  const [otelEnabled, setOtelEnabled] = useState(false);
+  useEffect(() => {
+    void window.baton
+      .call('settings.getOtel', {})
+      .then((r) => setOtelEnabled(r.otel.enabled))
+      .catch(() => { /* default off */ });
+  }, []);
+  // Project-root "New Session" Jira prompt (only used when OTEL is on).
+  const [newSessionTarget, setNewSessionTarget] = useState<NewSessionTarget | null>(null);
   const [worktreeDialogProject, setWorktreeDialogProject] =
     useState<{ id: string; name: string; backendId: 'claude-code' | 'codex' } | null>(null);
   const [worktreeDefault, setWorktreeDefault] = useState('');
@@ -352,37 +364,65 @@ export function LeftColumn(): JSX.Element {
     setShowAddProjectDialog(true);
   }
 
-  async function spawnAgent(projectId: string): Promise<void> {
+  /** The actual project-root spawn. Shared by the direct path (OTEL off)
+   *  and the Jira-prompt confirm (OTEL on). `jira` is optional — blank
+   *  lets main auto-detect the ticket from the branch. */
+  async function doSpawnAgent(
+    projectId: string,
+    backendId: 'claude-code' | 'codex',
+    jira?: string,
+  ): Promise<void> {
     setBusy(true);
     try {
       const { session } = await window.baton.call('session.spawn', {
         projectId,
-        backendId: 'claude-code',
+        backendId,
+        ...(jira && jira.trim() ? { jiraTaskId: jira.trim() } : {}),
       });
       selectSession(session.id);
     } catch (err) {
-      alert(`Spawn failed: ${String(err)}`);
+      const what = backendId === 'codex' ? 'Codex spawn' : 'Spawn';
+      alert(`${what} failed: ${String(err)}`);
     } finally {
       setBusy(false);
     }
   }
 
-  /** Spawn a Codex session in the project root. Same xterm + hook
-   *  plumbing path Claude uses; backend writes a per-session profile
-   *  TOML and spawns `codex -p baton-<sid>`. */
-  async function spawnCodexAgent(projectId: string): Promise<void> {
-    setBusy(true);
-    try {
-      const { session } = await window.baton.call('session.spawn', {
+  /** New Session in the project root. When telemetry is on, first prompt
+   *  for a Jira ticket (so the session can be attributed); otherwise
+   *  spawn straight away to keep the one-click path frictionless. */
+  function spawnAgent(projectId: string): void {
+    if (otelEnabled) {
+      setNewSessionTarget({
         projectId,
+        projectName: projectsRecord[projectId]?.name ?? 'project',
+        backendId: 'claude-code',
+      });
+    } else {
+      void doSpawnAgent(projectId, 'claude-code');
+    }
+  }
+
+  /** Codex variant of {@link spawnAgent}. Same xterm + hook plumbing;
+   *  backend writes a per-session profile TOML and spawns
+   *  `codex -p baton-<sid>`. */
+  function spawnCodexAgent(projectId: string): void {
+    if (otelEnabled) {
+      setNewSessionTarget({
+        projectId,
+        projectName: projectsRecord[projectId]?.name ?? 'project',
         backendId: 'codex',
       });
-      selectSession(session.id);
-    } catch (err) {
-      alert(`Codex spawn failed: ${String(err)}`);
-    } finally {
-      setBusy(false);
+    } else {
+      void doSpawnAgent(projectId, 'codex');
     }
+  }
+
+  function confirmNewSession(jira: string): void {
+    const t = newSessionTarget;
+    if (!t) return;
+    setNewSessionTarget(null);
+    void doSpawnAgent(t.projectId, t.backendId, jira);
   }
 
   // "New terminal" opens a picker so the user can choose project root /
@@ -429,10 +469,16 @@ export function LeftColumn(): JSX.Element {
     backendId: 'claude-code' | 'codex' = 'claude-code',
   ): void {
     setWorktreeDefault(`wip-${randomHex(6)}`);
+    // Refresh the OTEL flag so the dialog shows the Jira field iff
+    // telemetry is currently on (the user may have just toggled it).
+    void window.baton
+      .call('settings.getOtel', {})
+      .then((r) => setOtelEnabled(r.otel.enabled))
+      .catch(() => { /* leave prior value */ });
     setWorktreeDialogProject({ id: project.id, name: project.name, backendId });
   }
 
-  async function createWorktreeFromDialog(branch: string): Promise<void> {
+  async function createWorktreeFromDialog(branch: string, jira: string): Promise<void> {
     const target = worktreeDialogProject;
     if (!target) return;
     setBusy(true);
@@ -441,6 +487,7 @@ export function LeftColumn(): JSX.Element {
         projectId: target.id,
         backendId: target.backendId,
         newWorktreeBranch: branch,
+        ...(jira.trim() ? { jiraTaskId: jira.trim() } : {}),
       });
       selectSession(session.id);
       setWorktreeDialogProject(null);
@@ -789,12 +836,19 @@ export function LeftColumn(): JSX.Element {
           ))
         )}
       </div>
+      <NewSessionDialog
+        target={newSessionTarget}
+        onCancel={() => setNewSessionTarget(null)}
+        onConfirm={confirmNewSession}
+        busy={busy}
+      />
       <NewWorktreeDialog
         project={worktreeDialogProject}
         defaultBranch={worktreeDefault}
         onCancel={() => setWorktreeDialogProject(null)}
-        onCreate={(branch) => void createWorktreeFromDialog(branch)}
+        onCreate={(branch, jira) => void createWorktreeFromDialog(branch, jira)}
         busy={busy}
+        showJira={otelEnabled}
       />
       <NewWorktreeDialog
         project={

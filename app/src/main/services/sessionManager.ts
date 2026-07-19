@@ -38,6 +38,8 @@ import { ShellBackend } from './shellBackend.js';
 import { MockAgentBackend } from './mockAgentBackend.js';
 import { LifecycleQueue } from './lifecycleQueue.js';
 import { emit } from './eventBus.js';
+import { getOtelSettings, buildOtelEnv } from './settingsStore.js';
+import { extractJiraKey } from '../../shared/jira.js';
 import { getHookServer, type HookEvent } from './hookServer.js';
 import { readCurrentBranch } from './gitReader.js';
 import {
@@ -536,7 +538,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
-                claude_session_id, permission_mode, model, snoozed_at, parent_session_id
+                claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
@@ -551,6 +553,7 @@ export class SessionManager {
         model: string | null;
         snoozed_at: number | null;
         parent_session_id: string | null;
+        jira_task_id: string | null;
       }[];
 
     return rows.map((r) => {
@@ -575,6 +578,7 @@ export class SessionManager {
         model: r.model,
         snoozedAt: r.snoozed_at,
         parentSessionId: r.parent_session_id,
+        jiraTaskId: r.jira_task_id,
       };
     });
   }
@@ -603,6 +607,13 @@ export class SessionManager {
     /** Optional `--model <name>` alias (claude-code only). Null/
      *  undefined → don't pass the flag. */
     model?: string | null;
+    /** Jira ticket to attribute this session to (OTEL `jira.ticket`).
+     *  When omitted, auto-detected from the branch name (or from the
+     *  persisted value on resume/respawn), else bucketed "untagged". */
+    jiraTaskId?: string | null;
+    /** Repo name for the OTEL `repo` attribute (usually the project
+     *  name). Only used when telemetry is enabled. */
+    repo?: string;
     /** When set, this is a companion shell terminal attached to the agent
      *  session with this id. Persisted so it survives restarts and stays
      *  grouped under the agent in the middle column. */
@@ -680,6 +691,21 @@ export class SessionManager {
       // "default" change doesn't silently swap models under live sessions.
       const model = opts.model
         ?? (opts.backendId === 'claude-code' ? DEFAULT_CLAUDE_MODEL : null);
+      // Resolve the Jira ticket for OTEL attribution: caller-supplied
+      // first, then the value persisted on the row (resume/respawn don't
+      // re-pass it), then auto-detected from the branch. Null → the
+      // OTEL layer buckets it as "untagged".
+      let jiraTaskId = opts.jiraTaskId?.trim() || null;
+      if (!jiraTaskId && opts.reuseSessionId) {
+        try {
+          const prevJira = getDatabase()
+            .prepare('SELECT jira_task_id FROM sessions WHERE id = ?')
+            .get(opts.reuseSessionId) as { jira_task_id: string | null } | undefined;
+          jiraTaskId = prevJira?.jira_task_id ?? null;
+        } catch { /* best-effort */ }
+      }
+      if (!jiraTaskId) jiraTaskId = extractJiraKey(branch);
+
       const spawnOpts: {
         sessionId: string;
         cwd: string;
@@ -688,6 +714,7 @@ export class SessionManager {
         resumeAgentSessionId?: string;
         permissionMode?: PermissionMode;
         model?: string | null;
+        env?: Record<string, string>;
         fs?: typeof batonFs;
       } = {
         sessionId,
@@ -701,6 +728,17 @@ export class SessionManager {
       }
       if (permissionMode !== 'default') spawnOpts.permissionMode = permissionMode;
       if (model && opts.backendId === 'claude-code') spawnOpts.model = model;
+
+      // Inject OpenTelemetry env for agent backends when telemetry is on.
+      // Shells/mock don't emit Claude Code metrics, so skip them.
+      if (opts.backendId === 'claude-code' || opts.backendId === 'codex') {
+        const otelEnv = buildOtelEnv({
+          settings: getOtelSettings(),
+          jiraTicket: jiraTaskId,
+          repo: opts.repo ?? '',
+        });
+        if (Object.keys(otelEnv).length > 0) spawnOpts.env = otelEnv;
+      }
       const handle = await (backend as { spawn: (o: typeof spawnOpts) => Promise<AgentHandle> }).spawn(spawnOpts);
 
       // When reusing an existing row (resume / respawn / auto-resume on
@@ -764,6 +802,7 @@ export class SessionManager {
         model,
         snoozedAt: savedSnoozedAt,
         parentSessionId: opts.parentSessionId ?? null,
+        jiraTaskId,
       };
 
       // Make the session visible to the hook handler IMMEDIATELY,
@@ -780,14 +819,15 @@ export class SessionManager {
       // may have changed it between runs.
       getDatabase()
         .prepare(
-          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title, claude_session_id, permission_mode, model, parent_session_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO sessions (id, project_id, backend_id, branch, worktree_path, status, started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title, claude_session_id, permission_mode, model, parent_session_id, jira_task_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              status          = excluded.status,
              ended_at        = NULL,
              worktree_path   = excluded.worktree_path,
              permission_mode = excluded.permission_mode,
-             model           = excluded.model`
+             model           = excluded.model,
+             jira_task_id    = excluded.jira_task_id`
         )
         .run(
           session.id,
@@ -806,7 +846,8 @@ export class SessionManager {
           session.claudeSessionId,
           session.permissionMode,
           session.model,
-          session.parentSessionId
+          session.parentSessionId,
+          session.jiraTaskId
         );
 
       // Wire pty → renderer via the dedicated pty.data channel.
@@ -1449,7 +1490,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
-                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id
+                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -1463,6 +1504,7 @@ export class SessionManager {
             model: string | null;
             snoozed_at: number | null;
             parent_session_id: string | null;
+            jira_task_id: string | null;
           }
         | undefined;
       if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -1511,6 +1553,7 @@ export class SessionManager {
         permissionMode: row.permission_mode as PermissionMode,
         model: row.model,
         parentSessionId: row.parent_session_id,
+        jiraTaskId: row.jira_task_id,
       };
       emit({
         type: 'session.renamed',
@@ -1614,6 +1657,25 @@ export class SessionManager {
     if (live) live.meta = { ...live.meta, snoozedAt: value };
     const session = this.listAll().find((s) => s.id === sessionId);
     if (!session) throw new Error(`Session disappeared after snooze toggle: ${sessionId}`);
+    emit({ type: 'session.refreshed', session });
+    return session;
+  }
+
+  /** Set (or clear) a session's Jira ticket for OTEL attribution.
+   *  Empty/whitespace → null. Persist-only: the value is read at spawn,
+   *  so a running session keeps the tag it launched with; the new value
+   *  takes effect on the next resume/respawn. Updates in-memory meta so
+   *  listAll() reflects the change without a re-fetch. */
+  setJiraTaskId(sessionId: string, jiraTaskId: string): Session {
+    const value = jiraTaskId.trim() || null;
+    const res = getDatabase()
+      .prepare('UPDATE sessions SET jira_task_id = ? WHERE id = ?')
+      .run(value, sessionId);
+    if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, jiraTaskId: value };
+    const session = this.listAll().find((s) => s.id === sessionId);
+    if (!session) throw new Error(`Session disappeared after jira edit: ${sessionId}`);
     emit({ type: 'session.refreshed', session });
     return session;
   }

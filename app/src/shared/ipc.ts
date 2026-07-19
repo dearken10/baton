@@ -68,6 +68,32 @@ export type SshAuthMethod = z.infer<typeof SshAuthMethod>;
 export const ClaudeCredsMode = z.enum(['remote', 'forward']);
 export type ClaudeCredsMode = z.infer<typeof ClaudeCredsMode>;
 
+/** OpenTelemetry export config for spawned agents. Global (app-wide),
+ *  persisted in the `settings` table. When `enabled`, the spawn path
+ *  injects Claude Code's native OTEL env vars (CLAUDE_CODE_ENABLE_
+ *  TELEMETRY + OTEL_EXPORTER_OTLP_*) plus a per-session
+ *  OTEL_RESOURCE_ATTRIBUTES carrying the Jira ticket, user email, and
+ *  repo — so token/cost/active-time metrics land in the team collector,
+ *  attributed to a ticket. Metrics only; no prompt/code content is
+ *  exported. */
+export const OtelSettings = z.object({
+  enabled: z.boolean(),
+  /** OTLP collector endpoint, e.g. "http://collector.host:4317". */
+  endpoint: z.string(),
+  /** Wire protocol. grpc → port 4317; http/protobuf → port 4318. */
+  protocol: z.enum(['grpc', 'http/protobuf']),
+  /** Stamped as the `user` resource attribute on every metric. Usually
+   *  the developer's work email. Empty = omit the attribute. */
+  userEmail: z.string(),
+  /** Auth headers for collectors that require one (SaaS / gateway-fronted).
+   *  Comma-separated `key=value` pairs, passed verbatim as
+   *  OTEL_EXPORTER_OTLP_HEADERS — e.g. "Authorization=Bearer <token>" or
+   *  "x-api-key=<key>". Empty for an unauthenticated in-network collector.
+   *  Defaulted so configs saved before this field existed still parse. */
+  headers: z.string().default(''),
+});
+export type OtelSettings = z.infer<typeof OtelSettings>;
+
 /** Test-connection result codes. `success` = SSH up + daemon probe OK;
  *  `daemon_missing` = SSH ok but `node`/`git` not available on remote;
  *  other codes are pre-handshake failures. Stage 1 only emits
@@ -171,6 +197,12 @@ export const Session = z.object({
    *  middle column rather than as standalone rows in the sidebar. Null for
    *  ordinary top-level sessions. */
   parentSessionId: SessionId.nullable(),
+  /** Jira ticket this session's effort is attributed to (e.g.
+   *  "IMBEE-8704"). Captured at spawn — supplied by the user or
+   *  auto-detected from the branch name — and stamped onto the session's
+   *  OTEL metrics as `jira.ticket`. Persisted so it survives resume/
+   *  respawn and re-applies on the next launch. Null = untagged. */
+  jiraTaskId: z.string().nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -382,6 +414,17 @@ const AppSelectedSessionRequest = z.object({
   sessionId: SessionId.nullable(),
 });
 const AppSelectedSessionResponse = z.object({});
+
+/* ─── App settings (global, SQLite-backed) ─── */
+
+const SettingsGetOtelRequest = z.object({});
+const SettingsGetOtelResponse = z.object({ otel: OtelSettings });
+/** Overwrites the stored OTEL config wholesale. Takes effect on the
+ *  NEXT session spawn — env is read once at launch, so already-running
+ *  sessions keep whatever they started with. */
+const SettingsSetOtelRequest = OtelSettings;
+const SettingsSetOtelResponse = z.object({ otel: OtelSettings });
+
 const SessionSpawnRequest = z.object({
   projectId: ProjectId,
   backendId: AgentBackendId.default('claude-code'),
@@ -400,6 +443,11 @@ const SessionSpawnRequest = z.object({
   /** Optional model alias passed via `--model <name>` (Claude only for
    *  now). Omit/null to let Claude use the user's configured default. */
   model: z.string().nullable().optional(),
+  /** Jira ticket to attribute this session to (e.g. "IMBEE-8704"). Used
+   *  as the `jira.ticket` OTEL resource attribute. Omit to let the
+   *  backend auto-detect from the branch name (or fall back to
+   *  "untagged"). */
+  jiraTaskId: z.string().optional(),
   /** When set, spawn a companion shell terminal attached to this agent
    *  session. The cwd is taken from the parent's worktree (no worktree
    *  lookup), `backendId` is forced to 'shell', and the new row is hidden
@@ -505,6 +553,16 @@ const SessionSetTitleRequest = z.object({
   title: z.string(),
 });
 const SessionSetTitleResponse = z.object({ session: Session });
+
+/** Set (or clear) the session's Jira ticket for OTEL attribution. An
+ *  empty/whitespace-only string clears it (→ null). Persist-only: the
+ *  new value governs future resume/respawn; metrics already emitted by a
+ *  running session keep the tag they launched with. */
+const SessionSetJiraTaskIdRequest = z.object({
+  sessionId: SessionId,
+  jiraTaskId: z.string(),
+});
+const SessionSetJiraTaskIdResponse = z.object({ session: Session });
 
 // ── Worktree readers (right column) ─────────────────────────────
 // Recursive node type defined first, then z.lazy with that as the
@@ -920,6 +978,9 @@ export const ControlVerbs = {
     response: AppSelectedSessionResponse,
   },
 
+  'settings.getOtel': { request: SettingsGetOtelRequest, response: SettingsGetOtelResponse },
+  'settings.setOtel': { request: SettingsSetOtelRequest, response: SettingsSetOtelResponse },
+
   'project.pickFolder': { request: Empty, response: ProjectPickResponse },
   'project.add':        { request: ProjectAddRequest, response: ProjectAddResponse },
   'project.create':     { request: ProjectCreateRequest, response: ProjectCreateResponse },
@@ -954,6 +1015,7 @@ export const ControlVerbs = {
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
   'session.setTitle': { request: SessionSetTitleRequest, response: SessionSetTitleResponse },
+  'session.setJiraTaskId': { request: SessionSetJiraTaskIdRequest, response: SessionSetJiraTaskIdResponse },
 
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
   'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },

@@ -38,6 +38,7 @@ import {
   testPath,
 } from '../services/connectionStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
+import { getOtelSettings, setOtelSettings } from '../services/settingsStore.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
 import { readSessionTurns } from '../services/sessionTurns.js';
@@ -63,6 +64,9 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     setSelectedSession(req.sessionId);
     return {};
   },
+
+  'settings.getOtel': () => ({ otel: getOtelSettings() }),
+  'settings.setOtel': (req) => ({ otel: setOtelSettings(req) }),
 
   'project.pickFolder': async () => {
     const focused = BrowserWindow.getFocusedWindow();
@@ -116,6 +120,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'session.setTitle': (req) => {
     const session = getSessionManager().setTitle(req.sessionId, req.title);
+    return { session };
+  },
+  'session.setJiraTaskId': (req) => {
+    const session = getSessionManager().setJiraTaskId(req.sessionId, req.jiraTaskId);
     return { session };
   },
 
@@ -246,11 +254,16 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       projectId: project.id,
       backendId: req.backendId,
       cwd,
+      // Repo name for the OTEL `repo` attribute; jira ticket (if the
+      // renderer supplied one) for `jira.ticket`. Both are no-ops when
+      // telemetry is disabled.
+      repo: project.name,
       ...(req.newWorktreeBranch
         ? { newWorktreeBranch: req.newWorktreeBranch }
         : {}),
       ...(req.permissionMode ? { permissionMode: req.permissionMode } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
+      ...(req.jiraTaskId ? { jiraTaskId: req.jiraTaskId } : {}),
     });
     return { session };
   },

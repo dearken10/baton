@@ -966,6 +966,15 @@ button {
   min-width: 0;
 }
 .sid-row-value.mono { font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+.sid-row-input {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 5px;
+  padding: 4px 8px;
+  outline: none;
+}
+.sid-row-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,141,239,0.18); }
+.sid-row-input::placeholder { color: var(--text-faint); }
 .sid-row-copy {
   background: var(--bg-2);
   border: 1px solid var(--border-2);
@@ -2447,6 +2456,69 @@ button.terminal-tab,
 }
 .dialog-field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,141,239,0.18); }
 .dialog-hint { font-size: 11px; color: var(--text-faint); }
+
+/* ── Settings dialog: sidebar-nav + panel layout (extensible home for
+   all app settings — see docs/settings-prd.md) ── */
+.settings-dialog { width: min(720px, 100%); }
+.settings-layout {
+  display: flex;
+  min-height: 340px;
+  max-height: min(560px, 70vh);
+  border-top: 1px solid var(--border-2);
+  border-bottom: 1px solid var(--border-2);
+}
+.settings-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 10px;
+  min-width: 150px;
+  border-right: 1px solid var(--border-2);
+  background: var(--bg-0, var(--bg-2));
+}
+.settings-nav button {
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.settings-nav button:hover { background: var(--bg-2); color: var(--text); }
+.settings-nav button.active { background: rgba(91,141,239,0.16); color: var(--text); }
+.settings-panel { flex: 1; padding: 16px 20px; overflow-y: auto; }
+.settings-section-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.dialog-field select {
+  background: var(--bg-2);
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.dialog-field select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91,141,239,0.18); }
+/* Segmented control (e.g. theme picker) */
+.seg { display: inline-flex; border: 1px solid var(--border-2); border-radius: 8px; overflow: hidden; width: max-content; }
+.seg button {
+  background: var(--bg-2);
+  border: none;
+  border-left: 1px solid var(--border-2);
+  color: var(--text-dim);
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.seg button:first-child { border-left: none; }
+.seg button:hover { color: var(--text); }
+.seg button.active { background: var(--accent); color: #fff; }
 .dialog-preview {
   display: flex;
   align-items: baseline;
