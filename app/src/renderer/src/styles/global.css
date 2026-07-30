@@ -1767,24 +1767,69 @@ button.terminal-tab,
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: auto;
+  overflow: hidden;
   padding: 16px;
+  cursor: grab;
 }
+.image-canvas.grabbing { cursor: grabbing; }
 .image-canvas img {
   max-width: 100%;
   max-height: 100%;
   object-fit: contain;
-  image-rendering: -webkit-optimize-contrast; /* crisp pixel art */
+  /* No will-change / optimize-contrast: both pin the raster at fit size
+     and blur the image when zoomed. Letting Chromium re-rasterize at the
+     transformed scale keeps it sharp at high zoom. */
   box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   background: white; /* visible boundary for transparent images */
+  transform-origin: center center;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 .image-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 6px 12px;
   border-top: 1px solid var(--border);
   font-size: 11px;
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   background: var(--bg-1);
 }
+.image-zoom {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.image-zoom-btn,
+.image-zoom-level {
+  height: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.image-zoom-btn {
+  width: 22px;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.image-zoom-level {
+  min-width: 44px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.image-zoom-btn:hover:not(:disabled),
+.image-zoom-level:hover:not(:disabled) { background: var(--bg-3); border-color: var(--accent); }
+.image-zoom-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.image-zoom-level:disabled { cursor: default; }
 
 /* Editor pane head (top zone of the middle split). */
 .editor-head {
