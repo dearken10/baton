@@ -1,11 +1,11 @@
 import { UsageBars } from './UsageBars.js';
-import { ThemeToggle } from './ThemeToggle.js';
 
 interface Props {
   version: string;
+  onOpenSettings: () => void;
 }
 
-export function Titlebar({ version }: Props): JSX.Element {
+export function Titlebar({ version, onOpenSettings }: Props): JSX.Element {
   // The lifetime-total tokens chip used to live here too, but with
   // the rolling 5h/7d bars it became redundant. Per-session totals
   // still appear on the session chip in the left column (PRD F11.1).
@@ -16,7 +16,15 @@ export function Titlebar({ version }: Props): JSX.Element {
       <div className="spacer" />
       <UsageBars source="claude" />
       <UsageBars source="codex" />
-      <ThemeToggle />
+      <button
+        type="button"
+        className="theme-toggle"
+        onClick={onOpenSettings}
+        title="Settings"
+        aria-label="Settings"
+      >
+        ⚙
+      </button>
     </header>
   );
 }

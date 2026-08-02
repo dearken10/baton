@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '@shared/ipc.js';
+import { extractJiraKey } from '@shared/jira.js';
 
 interface Props {
   /** Open when non-null. */
@@ -25,6 +26,11 @@ interface Props {
 export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.Element | null {
   const [cloning, setCloning] = useState(false);
   const [cloneError, setCloneError] = useState<string | null>(null);
+  // Editable Jira ticket (OTEL attribution). Draft is seeded from the
+  // session and re-seeded whenever the dialog opens for a new one.
+  const [jira, setJira] = useState('');
+  const [savingJira, setSavingJira] = useState(false);
+  const [jiraError, setJiraError] = useState<string | null>(null);
 
   // Esc to close — match the other dialogs' behaviour.
   useEffect(() => {
@@ -42,7 +48,10 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
   useEffect(() => {
     setCloning(false);
     setCloneError(null);
-  }, [session?.id]);
+    setJira(session?.jiraTaskId ?? '');
+    setSavingJira(false);
+    setJiraError(null);
+  }, [session?.id, session?.jiraTaskId]);
 
   if (!session) return null;
 
@@ -56,6 +65,30 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
     onCloned !== undefined &&
     (session.backendId === 'claude-code' || session.backendId === 'codex');
   const canClone = cloneSupported && agentSessionId != null;
+  // Jira attribution is only meaningful for agent backends (shell/mock
+  // don't emit OTEL metrics).
+  const isAgent = session.backendId === 'claude-code' || session.backendId === 'codex';
+  const normalisedJira = extractJiraKey(jira) ?? jira.trim();
+  const jiraDirty = normalisedJira !== (session.jiraTaskId ?? '');
+
+  async function handleSaveJira(): Promise<void> {
+    if (!session || savingJira || !jiraDirty) return;
+    setSavingJira(true);
+    setJiraError(null);
+    try {
+      await window.baton.call('session.setJiraTaskId', {
+        sessionId: session.id,
+        jiraTaskId: normalisedJira,
+      });
+      // The store updates from the session.refreshed event; our draft
+      // re-seeds via the open effect. Normalise the visible value now.
+      setJira(normalisedJira);
+    } catch (err) {
+      setJiraError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setSavingJira(false);
+    }
+  }
 
   async function handleClone(): Promise<void> {
     if (!session || !onCloned || !canClone || cloning) return;
@@ -88,7 +121,7 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
       >
         <div className="dialog-head">
           <h3 id="sid-title">Session info</h3>
-          <p className="dim">Read-only — useful when resuming from the CLI.</p>
+          <p className="dim">Ids are handy when resuming from the CLI.</p>
         </div>
 
         <div className="dialog-body">
@@ -102,6 +135,42 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
             mono={agentSessionId != null}
             copyable={agentSessionId != null}
           />
+          {isAgent ? (
+            <div className="sid-row">
+              <span className="sid-row-label">Jira ticket</span>
+              <input
+                className="sid-row-value mono sid-row-input"
+                type="text"
+                value={jira}
+                onChange={(e) => setJira(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.preventDefault(); void handleSaveJira(); }
+                }}
+                placeholder="IMBEE-8704 (untagged)"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+              <button
+                type="button"
+                className="sid-row-copy"
+                onClick={() => void handleSaveJira()}
+                disabled={!jiraDirty || savingJira}
+                title="Update this session's Jira attribution"
+              >
+                {savingJira ? '…' : 'Save'}
+              </button>
+            </div>
+          ) : null}
+          {isAgent ? (
+            <p className="dim" style={{ margin: '2px 0 0', fontSize: 11 }}>
+              Applies to future resume/respawn — metrics already emitted by a
+              running session keep the tag it launched with.
+            </p>
+          ) : null}
+          {jiraError ? (
+            <div className="dialog-error" role="alert">{jiraError}</div>
+          ) : null}
         </div>
 
         {cloneError ? (

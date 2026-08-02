@@ -27,7 +27,7 @@ import {
   type RequestOf,
   type ResponseOf,
 } from '../../shared/ipc.js';
-import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed } from '../services/projectStore.js';
+import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed, setProjectLoginDefaults } from '../services/projectStore.js';
 import { batonHome } from '../paths.js';
 import {
   listConnections,
@@ -38,6 +38,17 @@ import {
   testPath,
 } from '../services/connectionStore.js';
 import { getSessionManager } from '../services/sessionManager.js';
+import { getOtelSettings, setOtelSettings, getOnboarded, setOnboarded } from '../services/settingsStore.js';
+import {
+  listLoginSessions,
+  createLoginSession,
+  updateLoginSession,
+  deleteLoginSession,
+  probeLoginSession,
+  startLogin,
+  submitLoginCode,
+  cancelLogin,
+} from '../services/loginSessions.js';
 import { setSelectedSession } from '../services/notifier.js';
 import { readFileTree, readSubdir, readGitStatus } from '../services/worktreeReader.js';
 import { readSessionTurns } from '../services/sessionTurns.js';
@@ -64,6 +75,61 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return {};
   },
 
+  'settings.getOtel': () => ({ otel: getOtelSettings() }),
+  'settings.setOtel': (req) => ({ otel: setOtelSettings(req) }),
+
+  'loginSession.list': () => ({ sessions: listLoginSessions() }),
+  'loginSession.create': (req) => ({
+    session: createLoginSession({
+      agent: req.agent,
+      kind: req.kind,
+      name: req.name,
+      ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
+      ...(req.authScheme !== undefined ? { authScheme: req.authScheme } : {}),
+      model: req.model ?? null,
+      headers: req.headers ?? null,
+      ...(req.secret !== undefined ? { secret: req.secret } : {}),
+    }),
+  }),
+  'loginSession.update': (req) => ({
+    session: updateLoginSession({
+      id: req.id,
+      ...(req.name !== undefined ? { name: req.name } : {}),
+      ...(req.baseUrl !== undefined ? { baseUrl: req.baseUrl } : {}),
+      ...(req.authScheme !== undefined ? { authScheme: req.authScheme } : {}),
+      ...(req.model !== undefined ? { model: req.model } : {}),
+      ...(req.headers !== undefined ? { headers: req.headers } : {}),
+      ...(req.secret !== undefined ? { secret: req.secret } : {}),
+    }),
+  }),
+  'loginSession.delete': (req) => {
+    deleteLoginSession(req.id);
+    return { ok: true as const };
+  },
+  'loginSession.probe': (req) => probeLoginSession(req.id),
+  'loginSession.loginStart': (req) => startLogin(req.id),
+  'loginSession.submitCode': (req) => {
+    submitLoginCode(req.loginId, req.code);
+    return { ok: true as const };
+  },
+  'loginSession.cancel': (req) => {
+    cancelLogin(req.loginId);
+    return { ok: true as const };
+  },
+  'project.setLoginDefaults': (req) => ({
+    project: setProjectLoginDefaults(
+      req.projectId,
+      req.claudeLoginSessionId,
+      req.codexLoginSessionId,
+    ),
+  }),
+
+  'onboarding.getState': () => ({ done: getOnboarded() }),
+  'onboarding.complete': () => {
+    setOnboarded(true);
+    return { done: true as const };
+  },
+
   'project.pickFolder': async () => {
     const focused = BrowserWindow.getFocusedWindow();
     const res = await dialog.showOpenDialog(focused ?? new BrowserWindow({ show: false }), {
@@ -74,13 +140,20 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     return { path: res.filePaths[0] ?? null };
   },
   'project.add': (req) => ({
-    project: addProject(req.path, req.name, req.connectionId ?? 'local'),
+    project: addProject(req.path, req.name, req.connectionId ?? 'local', {
+      claudeLoginSessionId: req.claudeLoginSessionId ?? null,
+      codexLoginSessionId: req.codexLoginSessionId ?? null,
+    }),
   }),
   'project.create': async (req) => ({
     project: await createProject({
       path: req.path,
       ...(req.initGit !== undefined ? { initGit: req.initGit } : {}),
       ...(req.connectionId !== undefined ? { connectionId: req.connectionId } : {}),
+      logins: {
+        claudeLoginSessionId: req.claudeLoginSessionId ?? null,
+        codexLoginSessionId: req.codexLoginSessionId ?? null,
+      },
     }),
   }),
   'project.list': () => ({ projects: listProjects() }),
@@ -116,6 +189,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'session.setTitle': (req) => {
     const session = getSessionManager().setTitle(req.sessionId, req.title);
+    return { session };
+  },
+  'session.setJiraTaskId': (req) => {
+    const session = getSessionManager().setJiraTaskId(req.sessionId, req.jiraTaskId);
     return { session };
   },
 
@@ -246,11 +323,16 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       projectId: project.id,
       backendId: req.backendId,
       cwd,
+      // Repo name for the OTEL `repo` attribute; jira ticket (if the
+      // renderer supplied one) for `jira.ticket`. Both are no-ops when
+      // telemetry is disabled.
+      repo: project.name,
       ...(req.newWorktreeBranch
         ? { newWorktreeBranch: req.newWorktreeBranch }
         : {}),
       ...(req.permissionMode ? { permissionMode: req.permissionMode } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
+      ...(req.jiraTaskId ? { jiraTaskId: req.jiraTaskId } : {}),
     });
     return { session };
   },

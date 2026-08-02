@@ -75,8 +75,10 @@ export class ClaudeCodeBackend implements AgentBackend {
     // sit on the "Do you trust this directory?" prompt — that prompt
     // blocks SessionStart from firing, which means the session's
     // claude_session_id never lands in our DB, which means restart
-    // can't auto-resume. Idempotent + silent on failure.
-    trustDirectoryForClaude(opts.cwd);
+    // can't auto-resume. Idempotent + silent on failure. When this
+    // session uses a baton-managed login, CLAUDE_CONFIG_DIR relocates
+    // the config — write trust into that dir so the pre-seed still lands.
+    trustDirectoryForClaude(opts.cwd, opts.env?.['CLAUDE_CONFIG_DIR']);
 
     const hooks = getHookServer();
     const forwarder = hooks.forwarderPath();

@@ -21,7 +21,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-const CLAUDE_JSON = path.join(os.homedir(), '.claude.json');
+/** Where Claude keeps `.claude.json`. Defaults to the home dir, but a
+ *  baton-managed login relocates the whole config via CLAUDE_CONFIG_DIR,
+ *  so trust must be written into that dir instead. */
+function claudeJsonPath(configDir?: string): string {
+  return path.join(configDir ?? os.homedir(), '.claude.json');
+}
 
 interface ClaudeConfig {
   projects?: Record<string, ProjectEntry>;
@@ -51,13 +56,14 @@ const STUB: ProjectEntry = {
  * stores. Silent on any error — the app must keep working even if
  * the user's Claude config is locked / unreadable.
  */
-export function trustDirectoryForClaude(cwd: string): void {
+export function trustDirectoryForClaude(cwd: string, configDir?: string): void {
   let real = cwd;
   try { real = fs.realpathSync(cwd); } catch { /* fall back to cwd */ }
 
+  const claudeJson = claudeJsonPath(configDir);
   let cfg: ClaudeConfig;
   try {
-    const raw = fs.readFileSync(CLAUDE_JSON, 'utf-8');
+    const raw = fs.readFileSync(claudeJson, 'utf-8');
     cfg = JSON.parse(raw) as ClaudeConfig;
   } catch {
     // File doesn't exist or is unreadable. Don't try to create it
@@ -73,9 +79,9 @@ export function trustDirectoryForClaude(cwd: string): void {
 
   try {
     // Atomic-ish write via a temp file in the same dir.
-    const tmp = CLAUDE_JSON + '.baton.tmp';
+    const tmp = claudeJson + '.baton.tmp';
     fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2));
-    fs.renameSync(tmp, CLAUDE_JSON);
+    fs.renameSync(tmp, claudeJson);
   } catch {
     // best-effort
   }

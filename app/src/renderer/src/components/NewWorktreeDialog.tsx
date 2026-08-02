@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { extractJiraKey } from '@shared/jira.js';
 
 interface Props {
   /** Open when non-null; the project name shows in the header. */
@@ -6,8 +7,13 @@ interface Props {
   /** Suggested branch name; pre-fills the input. */
   defaultBranch: string;
   onCancel: () => void;
-  onCreate: (branch: string) => void;
+  onCreate: (branch: string, jiraTaskId: string) => void;
   busy: boolean;
+  /** Show the optional "Jira ticket" field. Enabled by the caller when
+   *  OTEL telemetry is on, so the session's effort is attributed to a
+   *  ticket. The field auto-fills from the branch name (our convention
+   *  encodes the key, e.g. `IMBEE-8704-…`). */
+  showJira?: boolean;
   /** Optional copy overrides so the same dialog can front other
    *  worktree-creating flows (e.g. "Clone to worktree"). */
   title?: string;
@@ -32,15 +38,30 @@ export function NewWorktreeDialog({
   subtitle,
   submitLabel,
   busyLabel,
+  showJira,
 }: Props): JSX.Element | null {
   const [branch, setBranch] = useState(defaultBranch);
+  // The Jira key. Auto-mirrors whatever the branch encodes until the
+  // user edits it by hand (tracked by jiraTouched), after which we stop
+  // clobbering their choice.
+  const [jira, setJira] = useState('');
+  const [jiraTouched, setJiraTouched] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // Reset the input whenever the dialog opens for a different
+  // Reset the inputs whenever the dialog opens for a different
   // project (or with a different default).
   useEffect(() => {
-    if (project) setBranch(defaultBranch);
+    if (project) {
+      setBranch(defaultBranch);
+      setJira(extractJiraKey(defaultBranch) ?? '');
+      setJiraTouched(false);
+    }
   }, [project, defaultBranch]);
+
+  // Keep the Jira field mirrored to the branch until the user overrides.
+  useEffect(() => {
+    if (!jiraTouched) setJira(extractJiraKey(branch) ?? '');
+  }, [branch, jiraTouched]);
 
   // Focus the input when the dialog opens. Doing this in an effect
   // (rather than autoFocus) lets us also select the text so the user
@@ -89,7 +110,7 @@ export function NewWorktreeDialog({
         aria-labelledby="nwd-title"
         onSubmit={(e) => {
           e.preventDefault();
-          if (canCreate) onCreate(trimmed);
+          if (canCreate) onCreate(trimmed, jira.trim());
         }}
       >
         <div className="dialog-head">
@@ -124,6 +145,28 @@ export function NewWorktreeDialog({
               {`<project>/.baton/worktrees/`}{slug || '<branch-name>'}/
             </code>
           </div>
+
+          {showJira && (
+            <label className="dialog-field">
+              <span>Jira ticket (optional)</span>
+              <input
+                type="text"
+                value={jira}
+                onChange={(e) => {
+                  setJiraTouched(true);
+                  setJira(e.target.value);
+                }}
+                placeholder="IMBEE-8704"
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+              <span className="dialog-hint">
+                Attributes this session's tokens, cost &amp; engaged time to a
+                ticket. Auto-filled from the branch; blank = untagged.
+              </span>
+            </label>
+          )}
         </div>
 
         <div className="dialog-actions">

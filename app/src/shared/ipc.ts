@@ -68,6 +68,32 @@ export type SshAuthMethod = z.infer<typeof SshAuthMethod>;
 export const ClaudeCredsMode = z.enum(['remote', 'forward']);
 export type ClaudeCredsMode = z.infer<typeof ClaudeCredsMode>;
 
+/** OpenTelemetry export config for spawned agents. Global (app-wide),
+ *  persisted in the `settings` table. When `enabled`, the spawn path
+ *  injects Claude Code's native OTEL env vars (CLAUDE_CODE_ENABLE_
+ *  TELEMETRY + OTEL_EXPORTER_OTLP_*) plus a per-session
+ *  OTEL_RESOURCE_ATTRIBUTES carrying the Jira ticket, user email, and
+ *  repo — so token/cost/active-time metrics land in the team collector,
+ *  attributed to a ticket. Metrics only; no prompt/code content is
+ *  exported. */
+export const OtelSettings = z.object({
+  enabled: z.boolean(),
+  /** OTLP collector endpoint, e.g. "http://collector.host:4317". */
+  endpoint: z.string(),
+  /** Wire protocol. grpc → port 4317; http/protobuf → port 4318. */
+  protocol: z.enum(['grpc', 'http/protobuf']),
+  /** Stamped as the `user` resource attribute on every metric. Usually
+   *  the developer's work email. Empty = omit the attribute. */
+  userEmail: z.string(),
+  /** Auth headers for collectors that require one (SaaS / gateway-fronted).
+   *  Comma-separated `key=value` pairs, passed verbatim as
+   *  OTEL_EXPORTER_OTLP_HEADERS — e.g. "Authorization=Bearer <token>" or
+   *  "x-api-key=<key>". Empty for an unauthenticated in-network collector.
+   *  Defaulted so configs saved before this field existed still parse. */
+  headers: z.string().default(''),
+});
+export type OtelSettings = z.infer<typeof OtelSettings>;
+
 /** Test-connection result codes. `success` = SSH up + daemon probe OK;
  *  `daemon_missing` = SSH ok but `node`/`git` not available on remote;
  *  other codes are pre-handshake failures. Stage 1 only emits
@@ -123,6 +149,12 @@ export const Project = z.object({
    *  for projects on this Mac (the default); a profile id for remote
    *  projects. */
   connectionId: z.string().min(1),
+  /** Default Claude login session id for sessions in this project. Null →
+   *  the built-in global login. An individual session may still override. */
+  claudeLoginSessionId: z.string().nullable(),
+  /** Default Codex login session id for sessions in this project. Null →
+   *  the built-in global login. */
+  codexLoginSessionId: z.string().nullable(),
 });
 export type Project = z.infer<typeof Project>;
 
@@ -171,6 +203,16 @@ export const Session = z.object({
    *  middle column rather than as standalone rows in the sidebar. Null for
    *  ordinary top-level sessions. */
   parentSessionId: SessionId.nullable(),
+  /** Jira ticket this session's effort is attributed to (e.g.
+   *  "IMBEE-8704"). Captured at spawn — supplied by the user or
+   *  auto-detected from the branch name — and stamped onto the session's
+   *  OTEL metrics as `jira.ticket`. Persisted so it survives resume/
+   *  respawn and re-applies on the next launch. Null = untagged. */
+  jiraTaskId: z.string().nullable(),
+  /** Login session this agent session authenticates with. Null → inherit
+   *  the project's default for this backend (which itself falls back to
+   *  the built-in global login). Persisted so it survives resume/respawn. */
+  loginSessionId: z.string().nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -194,6 +236,9 @@ const ProjectAddRequest = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   /** Connection profile id. Defaults to "local" — the built-in row. */
   connectionId: z.string().min(1).optional(),
+  /** Default login session ids for this project (null/omitted → global). */
+  claudeLoginSessionId: z.string().nullable().optional(),
+  codexLoginSessionId: z.string().nullable().optional(),
 });
 const ProjectAddResponse = z.object({ project: Project });
 
@@ -210,8 +255,20 @@ const ProjectCreateRequest = z.object({
    *  connections in Stage 1, mkdir/git-init happen lazily on first
    *  use; the project is registered as metadata-only. */
   connectionId: z.string().min(1).optional(),
+  /** Default login session ids for this project (null/omitted → global). */
+  claudeLoginSessionId: z.string().nullable().optional(),
+  codexLoginSessionId: z.string().nullable().optional(),
 });
 const ProjectCreateResponse = z.object({ project: Project });
+
+/** Update a project's default login sessions. Either field may be null
+ *  to reset that agent to the built-in global login. */
+const ProjectSetLoginDefaultsRequest = z.object({
+  projectId: ProjectId,
+  claudeLoginSessionId: z.string().nullable(),
+  codexLoginSessionId: z.string().nullable(),
+});
+const ProjectSetLoginDefaultsResponse = z.object({ project: Project });
 
 /* ─── Connection profile CRUD + probes ─── */
 
@@ -382,6 +439,132 @@ const AppSelectedSessionRequest = z.object({
   sessionId: SessionId.nullable(),
 });
 const AppSelectedSessionResponse = z.object({});
+
+/* ─── App settings (global, SQLite-backed) ─── */
+
+const SettingsGetOtelRequest = z.object({});
+const SettingsGetOtelResponse = z.object({ otel: OtelSettings });
+/** Overwrites the stored OTEL config wholesale. Takes effect on the
+ *  NEXT session spawn — env is read once at launch, so already-running
+ *  sessions keep whatever they started with. */
+const SettingsSetOtelRequest = OtelSettings;
+const SettingsSetOtelResponse = z.object({ otel: OtelSettings });
+
+/* ─── Login sessions (named credential profiles per agent) ─── */
+
+/** Which agent a login session is for. Only the two real CLIs have
+ *  logins; `mock`/`shell` never appear here. */
+export const AgentAccountId = z.enum(['claude-code', 'codex']);
+export type AgentAccountId = z.infer<typeof AgentAccountId>;
+
+/** The credential kind of a login session:
+ *   global → the machine's default CLI login (no env override).
+ *   browser → a separate account signed in via the browser, stored in a
+ *     baton-managed config dir (CLAUDE_CONFIG_DIR / CODEX_HOME).
+ *   custom → a custom API endpoint / gateway (base URL + key).
+ *   token → a pasted long-lived token (Claude: CLAUDE_CODE_OAUTH_TOKEN
+ *     from `claude setup-token`; Codex: an OpenAI API key). */
+export const LoginKind = z.enum(['global', 'browser', 'custom', 'token']);
+export type LoginKind = z.infer<typeof LoginKind>;
+
+/** How a custom endpoint's secret is presented to the CLI.
+ *  Claude: `token` → ANTHROPIC_AUTH_TOKEN (Bearer), `apikey` →
+ *  ANTHROPIC_API_KEY (x-api-key). Codex only uses `apikey` (OPENAI_API_KEY). */
+export const AuthScheme = z.enum(['token', 'apikey']);
+export type AuthScheme = z.infer<typeof AuthScheme>;
+
+/** Custom-endpoint fields for the UI. Never carries the secret itself. */
+export const CustomEndpointInfo = z.object({
+  baseUrl: z.string(),
+  authScheme: AuthScheme,
+  /** Optional model override (ANTHROPIC_MODEL / codex `-c model`). */
+  model: z.string().nullable(),
+  /** Optional extra headers (Claude only; newline-separated `Name: Value`). */
+  headers: z.string().nullable(),
+});
+export type CustomEndpointInfo = z.infer<typeof CustomEndpointInfo>;
+
+/** One login session as shown in the UI. `hasSecret` and `custom` are
+ *  populated for custom/token kinds; the secret itself never leaves main. */
+export const LoginSession = z.object({
+  id: z.string(),
+  name: z.string(),
+  agent: AgentAccountId,
+  kind: LoginKind,
+  builtIn: z.boolean(),
+  hasSecret: z.boolean(),
+  custom: CustomEndpointInfo.nullable(),
+});
+export type LoginSession = z.infer<typeof LoginSession>;
+
+/** Live probe result for a session (CLI installed + signed-in state). */
+export const LoginSessionStatus = z.object({
+  installed: z.boolean(),
+  valid: z.boolean(),
+  label: z.string().nullable(),
+});
+export type LoginSessionStatus = z.infer<typeof LoginSessionStatus>;
+
+const LoginSessionListRequest = z.object({});
+const LoginSessionListResponse = z.object({ sessions: z.array(LoginSession) });
+
+/** Create a login session. `custom`/`secret` apply to custom+token kinds
+ *  (token uses only `secret`). The secret is encrypted at rest (OS keychain
+ *  via safeStorage) and never read back over IPC. */
+const LoginSessionCreateRequest = z.object({
+  agent: AgentAccountId,
+  kind: LoginKind,
+  name: z.string().trim().min(1).max(80),
+  baseUrl: z.string().optional(),
+  authScheme: AuthScheme.optional(),
+  model: z.string().nullable().optional(),
+  headers: z.string().nullable().optional(),
+  secret: z.string().optional(),
+});
+const LoginSessionCreateResponse = z.object({ session: LoginSession });
+
+/** Edit a session. Every field is optional — omit `secret` to keep the
+ *  stored one. Built-in sessions reject edits other than `name`. */
+const LoginSessionUpdateRequest = z.object({
+  id: z.string(),
+  name: z.string().trim().min(1).max(80).optional(),
+  baseUrl: z.string().optional(),
+  authScheme: AuthScheme.optional(),
+  model: z.string().nullable().optional(),
+  headers: z.string().nullable().optional(),
+  secret: z.string().optional(),
+});
+const LoginSessionUpdateResponse = z.object({ session: LoginSession });
+
+const LoginSessionDeleteRequest = z.object({ id: z.string() });
+const LoginSessionDeleteResponse = z.object({ ok: z.literal(true) });
+
+/** Live status probe (runs the CLI's `auth status` in the session's env). */
+const LoginSessionProbeRequest = z.object({ id: z.string() });
+const LoginSessionProbeResponse = LoginSessionStatus;
+
+/** Kick off the browser sign-in for a `browser` session. Main spawns the
+ *  CLI login in a pty, opens the browser at the auth URL, and streams
+ *  progress via `account.login_progress` events keyed by `loginId`. */
+const LoginSessionLoginStartRequest = z.object({ id: z.string() });
+const LoginSessionLoginStartResponse = z.object({ loginId: z.string() });
+
+const LoginSessionSubmitCodeRequest = z.object({
+  loginId: z.string(),
+  code: z.string(),
+});
+const LoginSessionSubmitCodeResponse = z.object({ ok: z.literal(true) });
+
+const LoginSessionCancelRequest = z.object({ loginId: z.string() });
+const LoginSessionCancelResponse = z.object({ ok: z.literal(true) });
+
+/* ─── First-run onboarding ─── */
+
+const OnboardingGetStateRequest = z.object({});
+const OnboardingGetStateResponse = z.object({ done: z.boolean() });
+const OnboardingCompleteRequest = z.object({});
+const OnboardingCompleteResponse = z.object({ done: z.literal(true) });
+
 const SessionSpawnRequest = z.object({
   projectId: ProjectId,
   backendId: AgentBackendId.default('claude-code'),
@@ -400,11 +583,19 @@ const SessionSpawnRequest = z.object({
   /** Optional model alias passed via `--model <name>` (Claude only for
    *  now). Omit/null to let Claude use the user's configured default. */
   model: z.string().nullable().optional(),
+  /** Jira ticket to attribute this session to (e.g. "IMBEE-8704"). Used
+   *  as the `jira.ticket` OTEL resource attribute. Omit to let the
+   *  backend auto-detect from the branch name (or fall back to
+   *  "untagged"). */
+  jiraTaskId: z.string().optional(),
   /** When set, spawn a companion shell terminal attached to this agent
    *  session. The cwd is taken from the parent's worktree (no worktree
    *  lookup), `backendId` is forced to 'shell', and the new row is hidden
    *  from the sidebar — it shows as an extra tab in the middle column. */
   parentSessionId: SessionId.optional(),
+  /** Login session to authenticate with. Omit/null → inherit the
+   *  project's default for this backend (→ built-in global). */
+  loginSessionId: z.string().nullable().optional(),
 });
 const SessionSpawnResponse = z.object({ session: Session });
 const SessionKillRequest = z.object({ sessionId: SessionId });
@@ -505,6 +696,16 @@ const SessionSetTitleRequest = z.object({
   title: z.string(),
 });
 const SessionSetTitleResponse = z.object({ session: Session });
+
+/** Set (or clear) the session's Jira ticket for OTEL attribution. An
+ *  empty/whitespace-only string clears it (→ null). Persist-only: the
+ *  new value governs future resume/respawn; metrics already emitted by a
+ *  running session keep the tag they launched with. */
+const SessionSetJiraTaskIdRequest = z.object({
+  sessionId: SessionId,
+  jiraTaskId: z.string(),
+});
+const SessionSetJiraTaskIdResponse = z.object({ session: Session });
 
 // ── Worktree readers (right column) ─────────────────────────────
 // Recursive node type defined first, then z.lazy with that as the
@@ -920,6 +1121,22 @@ export const ControlVerbs = {
     response: AppSelectedSessionResponse,
   },
 
+  'settings.getOtel': { request: SettingsGetOtelRequest, response: SettingsGetOtelResponse },
+  'settings.setOtel': { request: SettingsSetOtelRequest, response: SettingsSetOtelResponse },
+
+  'loginSession.list':        { request: LoginSessionListRequest,       response: LoginSessionListResponse },
+  'loginSession.create':      { request: LoginSessionCreateRequest,     response: LoginSessionCreateResponse },
+  'loginSession.update':      { request: LoginSessionUpdateRequest,     response: LoginSessionUpdateResponse },
+  'loginSession.delete':      { request: LoginSessionDeleteRequest,     response: LoginSessionDeleteResponse },
+  'loginSession.probe':       { request: LoginSessionProbeRequest,      response: LoginSessionProbeResponse },
+  'loginSession.loginStart':  { request: LoginSessionLoginStartRequest, response: LoginSessionLoginStartResponse },
+  'loginSession.submitCode':  { request: LoginSessionSubmitCodeRequest, response: LoginSessionSubmitCodeResponse },
+  'loginSession.cancel':      { request: LoginSessionCancelRequest,     response: LoginSessionCancelResponse },
+  'project.setLoginDefaults': { request: ProjectSetLoginDefaultsRequest, response: ProjectSetLoginDefaultsResponse },
+
+  'onboarding.getState': { request: OnboardingGetStateRequest, response: OnboardingGetStateResponse },
+  'onboarding.complete': { request: OnboardingCompleteRequest, response: OnboardingCompleteResponse },
+
   'project.pickFolder': { request: Empty, response: ProjectPickResponse },
   'project.add':        { request: ProjectAddRequest, response: ProjectAddResponse },
   'project.create':     { request: ProjectCreateRequest, response: ProjectCreateResponse },
@@ -954,6 +1171,7 @@ export const ControlVerbs = {
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
   'session.setTitle': { request: SessionSetTitleRequest, response: SessionSetTitleResponse },
+  'session.setJiraTaskId': { request: SessionSetJiraTaskIdRequest, response: SessionSetJiraTaskIdResponse },
 
   'worktree.fileTree':     { request: WorktreeFileTreeRequest,    response: WorktreeFileTreeResponse },
   'worktree.readDir':      { request: WorktreeReadDirRequest,     response: WorktreeReadDirResponse },
@@ -1133,6 +1351,24 @@ const ConnectionRemovedEvent = EventEnvelope.extend({
   id: z.string().min(1),
 });
 
+/** Progress of an in-flight browser login (see AccountsLoginStart).
+ *  Phases: `browser_opened` (auth URL opened) → optionally `awaiting_code`
+ *  (Claude's paste-the-code prompt) → `success` | `error`. */
+const AccountLoginProgressEvent = EventEnvelope.extend({
+  type: z.literal('account.login_progress'),
+  loginId: z.string(),
+  /** The login session being signed into. */
+  sessionId: z.string(),
+  backend: AgentAccountId,
+  phase: z.enum(['browser_opened', 'awaiting_code', 'success', 'error']),
+  /** The auth URL (on `browser_opened`), for a manual fallback link. */
+  url: z.string().nullable().optional(),
+  /** Signed-in account label on `success`. */
+  account: z.string().nullable().optional(),
+  /** Failure detail on `error`. */
+  message: z.string().nullable().optional(),
+});
+
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   ProjectRemovedEvent,
@@ -1154,6 +1390,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ConnectionAddedEvent,
   ConnectionUpdatedEvent,
   ConnectionRemovedEvent,
+  AccountLoginProgressEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 
