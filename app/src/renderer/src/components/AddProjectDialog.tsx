@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ConnectionProfile, Project } from '@shared/ipc.js';
+import type { ConnectionProfile, LoginSession, Project } from '@shared/ipc.js';
 import { useAppStore } from '../store.js';
 import { NewConnectionDialog } from './NewConnectionDialog.js';
 import { RemoteFolderPicker } from './RemoteFolderPicker.js';
@@ -118,6 +118,18 @@ export function AddProjectDialog({ onCancel, onAdded, busy }: Props): JSX.Elemen
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Default login sessions for this project (per agent). '' → inherit
+  // the built-in global login. Loaded once when the dialog mounts.
+  const [loginSessions, setLoginSessions] = useState<LoginSession[]>([]);
+  const [claudeLoginId, setClaudeLoginId] = useState('');
+  const [codexLoginId, setCodexLoginId] = useState('');
+  useEffect(() => {
+    void window.baton
+      .call('loginSession.list', {})
+      .then((r) => setLoginSessions(r.sessions))
+      .catch(() => { /* non-fatal — dropdowns just show Global */ });
+  }, []);
+
   // RemoteFolderPicker open state. The picker is used for two purposes:
   //   - 'existing' (Add existing tab): pick the project folder itself
   //   - 'parent'   (Create new   tab): pick the parent dir, then we
@@ -153,12 +165,17 @@ export function AddProjectDialog({ onCancel, onAdded, busy }: Props): JSX.Elemen
     }
     setSubmitting(true);
     try {
+      const loginDefaults = {
+        claudeLoginSessionId: claudeLoginId || null,
+        codexLoginSessionId: codexLoginId || null,
+      };
       let project: Project;
       if (mode === 'existing') {
         if (!existingPath.trim()) throw new Error('Pick a folder.');
-        const req: { path: string; name?: string; connectionId?: string } = {
-          path: existingPath.trim(),
-        };
+        const req: {
+          path: string; name?: string; connectionId?: string;
+          claudeLoginSessionId: string | null; codexLoginSessionId: string | null;
+        } = { path: existingPath.trim(), ...loginDefaults };
         const name = existingName.trim();
         if (name) req.name = name;
         if (isRemote) req.connectionId = effectiveConnectionId;
@@ -169,10 +186,10 @@ export function AddProjectDialog({ onCancel, onAdded, busy }: Props): JSX.Elemen
         if (!targetPath || targetPath === DEFAULT_PARENT + '/') {
           throw new Error('Project name is required.');
         }
-        const req: { path: string; initGit?: boolean; connectionId?: string } = {
-          path: targetPath,
-          initGit,
-        };
+        const req: {
+          path: string; initGit?: boolean; connectionId?: string;
+          claudeLoginSessionId: string | null; codexLoginSessionId: string | null;
+        } = { path: targetPath, initGit, ...loginDefaults };
         if (isRemote) req.connectionId = effectiveConnectionId;
         const res = await window.baton.call('project.create', req);
         project = res.project;
@@ -486,6 +503,46 @@ export function AddProjectDialog({ onCancel, onAdded, busy }: Props): JSX.Elemen
               </label>
             </>
           )}
+          <div className="login-defaults">
+            <span className="login-defaults-title">Default logins</span>
+            <div className="login-defaults-grid">
+              <label className="dialog-field">
+                <span>Claude Code</span>
+                <select
+                  value={claudeLoginId}
+                  onChange={(e) => setClaudeLoginId(e.target.value)}
+                  disabled={disabled}
+                >
+                  <option value="">Global (machine login)</option>
+                  {loginSessions
+                    .filter((s) => s.agent === 'claude-code' && s.kind !== 'global')
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                </select>
+              </label>
+              <label className="dialog-field">
+                <span>Codex</span>
+                <select
+                  value={codexLoginId}
+                  onChange={(e) => setCodexLoginId(e.target.value)}
+                  disabled={disabled}
+                >
+                  <option value="">Global (machine login)</option>
+                  {loginSessions
+                    .filter((s) => s.agent === 'codex' && s.kind !== 'global')
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                </select>
+              </label>
+            </div>
+            <span className="dialog-hint">
+              Which login new sessions use by default. Manage logins in Settings →
+              Login sessions. Individual sessions can override this.
+            </span>
+          </div>
+
           {error ? <div className="dialog-error">{error}</div> : null}
         </div>
 

@@ -22,6 +22,8 @@ interface ProjectRow {
   added_at: number;
   connection_id: string;
   snoozed_at: number | null;
+  claude_login_session_id: string | null;
+  codex_login_session_id: string | null;
 }
 
 function rowToProject(r: ProjectRow): Project {
@@ -32,7 +34,15 @@ function rowToProject(r: ProjectRow): Project {
     addedAt: r.added_at,
     connectionId: r.connection_id,
     snoozedAt: r.snoozed_at,
+    claudeLoginSessionId: r.claude_login_session_id,
+    codexLoginSessionId: r.codex_login_session_id,
   };
+}
+
+/** Optional per-agent default login sessions supplied at project creation. */
+export interface ProjectLoginDefaults {
+  claudeLoginSessionId?: string | null;
+  codexLoginSessionId?: string | null;
 }
 
 /** ID is keyed on (connectionId, path) so the same path on two
@@ -48,6 +58,7 @@ export function addProject(
   absolutePath: string,
   nameOverride?: string,
   connectionId: string = 'local',
+  logins?: ProjectLoginDefaults,
 ): Project {
   const id = projectIdFromPath(absolutePath, connectionId);
   const name = (nameOverride?.trim() || basename(absolutePath));
@@ -55,15 +66,19 @@ export function addProject(
 
   getDatabase()
     .prepare(
-      `INSERT INTO projects (id, path, name, added_at, connection_id)
-       VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO projects (id, path, name, added_at, connection_id, claude_login_session_id, codex_login_session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO NOTHING`
     )
-    .run(id, absolutePath, name, addedAt, connectionId);
+    .run(
+      id, absolutePath, name, addedAt, connectionId,
+      logins?.claudeLoginSessionId ?? null,
+      logins?.codexLoginSessionId ?? null,
+    );
 
   const row = getDatabase()
     .prepare(
-      'SELECT id, path, name, added_at, connection_id, snoozed_at FROM projects WHERE id = ?'
+      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id FROM projects WHERE id = ?'
     )
     .get(id) as ProjectRow;
 
@@ -75,7 +90,7 @@ export function addProject(
 export function listProjects(): Project[] {
   const rows = getDatabase()
     .prepare(
-      `SELECT id, path, name, added_at, connection_id, snoozed_at
+      `SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id
          FROM projects
         ORDER BY display_order ASC, added_at ASC`
     )
@@ -114,6 +129,7 @@ export async function createProject(opts: {
   path: string;
   initGit?: boolean;
   connectionId?: string;
+  logins?: ProjectLoginDefaults;
 }): Promise<Project> {
   const connectionId = opts.connectionId ?? 'local';
 
@@ -122,6 +138,7 @@ export async function createProject(opts: {
       path: opts.path,
       connectionId,
       initGit: opts.initGit ?? true,
+      ...(opts.logins ? { logins: opts.logins } : {}),
     });
   }
 
@@ -150,7 +167,7 @@ export async function createProject(opts: {
       console.warn('[baton] git init failed for new project:', err);
     }
   }
-  return addProject(target, undefined, 'local');
+  return addProject(target, undefined, 'local', opts.logins);
 }
 
 /** Remote variant: mkdir + (optionally) `git init` on the remote
@@ -166,6 +183,7 @@ async function createRemoteProject(opts: {
   path: string;
   connectionId: string;
   initGit: boolean;
+  logins?: ProjectLoginDefaults;
 }): Promise<Project> {
   // Lazy require avoids a circular import (registry → projectStore).
   const { getFs } = await import('./fs/registry.js');
@@ -211,7 +229,26 @@ async function createRemoteProject(opts: {
       );
     }
   }
-  return addProject(absTarget, undefined, opts.connectionId);
+  return addProject(absTarget, undefined, opts.connectionId, opts.logins);
+}
+
+/** Update a project's default per-agent login sessions. Null resets an
+ *  agent to the built-in global login. */
+export function setProjectLoginDefaults(
+  id: string,
+  claudeLoginSessionId: string | null,
+  codexLoginSessionId: string | null,
+): Project {
+  const res = getDatabase()
+    .prepare(
+      'UPDATE projects SET claude_login_session_id = ?, codex_login_session_id = ? WHERE id = ?'
+    )
+    .run(claudeLoginSessionId, codexLoginSessionId, id);
+  if (res.changes === 0) throw new Error(`Unknown project: ${id}`);
+  const project = getProject(id);
+  if (!project) throw new Error(`Project disappeared after login update: ${id}`);
+  emit({ type: 'project.renamed', project });
+  return project;
 }
 
 /** POSIX single-quote with embedded-quote escape via `'\''`. Kept
@@ -252,7 +289,7 @@ export function reorderProjects(orderedIds: string[]): void {
 export function getProject(id: string): Project | undefined {
   const row = getDatabase()
     .prepare(
-      'SELECT id, path, name, added_at, connection_id, snoozed_at FROM projects WHERE id = ?'
+      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id FROM projects WHERE id = ?'
     )
     .get(id) as ProjectRow | undefined;
   if (!row) return undefined;

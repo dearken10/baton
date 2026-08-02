@@ -55,6 +55,16 @@ describe('control verb registry', () => {
         "git.push",
         "git.stage",
         "git.unstage",
+        "loginSession.cancel",
+        "loginSession.create",
+        "loginSession.delete",
+        "loginSession.list",
+        "loginSession.loginStart",
+        "loginSession.probe",
+        "loginSession.submitCode",
+        "loginSession.update",
+        "onboarding.complete",
+        "onboarding.getState",
         "project.add",
         "project.create",
         "project.list",
@@ -62,6 +72,7 @@ describe('control verb registry', () => {
         "project.remove",
         "project.rename",
         "project.reorder",
+        "project.setLoginDefaults",
         "project.setSnoozed",
         "pty.resize",
         "pty.write",
@@ -156,6 +167,7 @@ describe('session.list', () => {
           snoozedAt: null,
           parentSessionId: null,
           jiraTaskId: null,
+          loginSessionId: null,
           status: 'running',
           startedAt: Date.now(),
           lastActiveAt: Date.now(),
@@ -250,6 +262,21 @@ describe('AppEvent', () => {
     });
     if (e.type !== 'session.summarized') throw new Error('discriminator');
     expect(e.summary).toBe('editing svc.ts');
+  });
+  it('parses account.login_progress', () => {
+    const e = AppEvent.parse({
+      seq: 1,
+      bootId: '11111111-1111-1111-1111-111111111111',
+      ts: Date.now(),
+      type: 'account.login_progress',
+      loginId: 'login-abc-1',
+      sessionId: 'abc',
+      backend: 'claude-code',
+      phase: 'browser_opened',
+      url: 'https://claude.com/oauth/authorize?x=1',
+    });
+    if (e.type !== 'account.login_progress') throw new Error('discriminator');
+    expect(e.phase).toBe('browser_opened');
   });
   it('rejects an unknown event type', () => {
     expect(() =>
