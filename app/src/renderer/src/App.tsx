@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAppStore } from './store.js';
 import { Titlebar } from './components/Titlebar.js';
 import { SettingsDialog } from './components/SettingsDialog.js';
+import { OnboardingDialog } from './components/OnboardingDialog.js';
 import { LeftColumn } from './components/LeftColumn.js';
 import { MiddleColumn } from './components/MiddleColumn.js';
 import { RightColumn } from './components/RightColumn.js';
@@ -39,6 +40,7 @@ export function App(): JSX.Element {
   const [meta, setMeta] = useState<{ version: string } | null>(null);
   const [preloadError, setPreloadError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
 
   // Persisted column widths. Saved to localStorage on every change.
   const [leftWidth, setLeftWidth] = useState(() =>
@@ -90,6 +92,14 @@ export function App(): JSX.Element {
       if (c && c.status === 'fulfilled') loadConnections(c.value.profiles);
     });
 
+    // First-run onboarding — show the account setup once.
+    void window.baton
+      .call('onboarding.getState', {})
+      .then((r) => {
+        if (!r.done) setOnboardingOpen(true);
+      })
+      .catch(() => { /* non-fatal — skip onboarding on error */ });
+
     // Single subscription to the event stream (PRD F10.4).
     const offEvents = window.baton.onEvent(ingestEvent);
     // Main asks us to focus a specific session when the user clicks a
@@ -130,6 +140,13 @@ export function App(): JSX.Element {
         onOpenSettings={() => setSettingsOpen(true)}
       />
       <SettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <OnboardingDialog
+        open={onboardingOpen}
+        onDone={() => {
+          setOnboardingOpen(false);
+          void window.baton.call('onboarding.complete', {}).catch(() => { /* best-effort */ });
+        }}
+      />
       <main
         className="main"
         style={{

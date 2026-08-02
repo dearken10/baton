@@ -50,6 +50,9 @@ export interface CodexSpawnOpts extends AgentSpawnOpts {
    *  `--dangerously-bypass-approvals-and-sandbox`. Every other value
    *  (including 'default') leaves Codex in its prompt-each-tool mode. */
   permissionMode?: PermissionMode;
+  /** Extra `-c key=value` CLI args from the resolved login session
+   *  (custom/token endpoints). Appended verbatim to the codex argv. */
+  extraArgs?: string[];
 }
 
 const HOOK_EVENTS = [
@@ -73,17 +76,24 @@ export class CodexBackend implements AgentBackend {
   }
 
   async spawn(opts: CodexSpawnOpts): Promise<AgentHandle> {
+    // Resolve the effective CODEX_HOME up front. A baton-managed login
+    // passes CODEX_HOME via opts.env; both the trust marker and the
+    // per-session profile must land in that same dir so `codex` (which
+    // runs with the override) actually reads them.
+    const codexHome =
+      opts.env?.['CODEX_HOME']
+      ?? process.env['CODEX_HOME']
+      ?? path.join(os.homedir(), '.codex');
+
     // Pre-trust the cwd so Codex doesn't block our hooks on a "Trust
     // this workspace?" prompt. Same defensive pattern as Claude.
-    trustDirectoryForCodex(opts.cwd);
+    trustDirectoryForCodex(opts.cwd, codexHome);
 
     const hooks = getHookServer();
     const forwarder = hooks.forwarderPath();
 
     // Per-session profile. Codex resolves `-p NAME` to
     // `$CODEX_HOME/NAME.config.toml`, layered atop the base config.
-    const codexHome = process.env['CODEX_HOME']
-      ?? path.join(os.homedir(), '.codex');
     fs.mkdirSync(codexHome, { recursive: true });
     const profileName = `baton-${opts.sessionId}`;
     const profilePath = path.join(codexHome, `${profileName}.config.toml`);
@@ -128,6 +138,10 @@ export class CodexBackend implements AgentBackend {
     // We wrote the profile ourselves — skip Codex's hook-trust prompt
     // so the agent doesn't block on first-run confirmation.
     args.push('--dangerously-bypass-hook-trust');
+    // Login-session `-c` overrides (custom/token sessions force API-key
+    // auth + pin the model). Empty for global/browser. The endpoint + key
+    // arrive via env (OPENAI_BASE_URL / OPENAI_API_KEY, see buildLoginEnv).
+    if (opts.extraArgs) args.push(...opts.extraArgs);
     if (opts.permissionMode === 'bypassPermissions') {
       args.push('--dangerously-bypass-approvals-and-sandbox');
     }

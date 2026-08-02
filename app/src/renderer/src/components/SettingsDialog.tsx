@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { OtelSettings } from '@shared/ipc.js';
 import { setTheme, useTheme, type Theme } from '../lib/theme.js';
+import { LoginSessionsSection } from './LoginSessionsSection.js';
 
 interface Props {
   open: boolean;
@@ -12,6 +13,7 @@ interface Props {
  *  single home for all app settings. */
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
+  { id: 'logins', label: 'Login sessions' },
   { id: 'telemetry', label: 'Telemetry' },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -129,6 +131,7 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
             {active === 'appearance' && (
               <AppearanceSection theme={theme} onSetTheme={setTheme} />
             )}
+            {active === 'logins' && <LoginSessionsSection />}
             {active === 'telemetry' && (
               <TelemetrySection otel={otel} setOtel={setOtel} disabled={!loaded} />
             )}

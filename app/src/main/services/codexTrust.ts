@@ -17,10 +17,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-function codexConfigPath(): string {
-  return process.env['CODEX_HOME']
-    ? path.join(process.env['CODEX_HOME'] as string, 'config.toml')
-    : path.join(os.homedir(), '.codex', 'config.toml');
+function codexConfigPath(codexHome?: string): string {
+  const home =
+    codexHome ?? process.env['CODEX_HOME'] ?? path.join(os.homedir(), '.codex');
+  return path.join(home, 'config.toml');
 }
 
 /**
@@ -28,11 +28,11 @@ function codexConfigPath(): string {
  * isn't already. Silent on any error — keep the app working even if
  * the user's Codex config is locked / missing.
  */
-export function trustDirectoryForCodex(cwd: string): void {
+export function trustDirectoryForCodex(cwd: string, codexHome?: string): void {
   let real = cwd;
   try { real = fs.realpathSync(cwd); } catch { /* fall back to cwd */ }
 
-  const configPath = codexConfigPath();
+  const configPath = codexConfigPath(codexHome);
   let raw = '';
   try { raw = fs.readFileSync(configPath, 'utf-8'); }
   catch {
