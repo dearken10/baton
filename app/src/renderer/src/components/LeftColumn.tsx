@@ -6,6 +6,7 @@ import { NewSessionDialog, type NewSessionTarget } from './NewSessionDialog.js';
 import { NewTerminalDialog, type NewTerminalChoice } from './NewTerminalDialog.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
+import { EditProjectLoginsDialog } from './EditProjectLoginsDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
 import { formatTokens, formatRelativeTime } from '../lib/format.js';
 
@@ -324,6 +325,8 @@ export function LeftColumn(): JSX.Element {
   useEffect(() => { refreshLoginSessions(); }, [refreshLoginSessions]);
   // Project-root "New Session" prompt (login override, plus Jira when OTEL is on).
   const [newSessionTarget, setNewSessionTarget] = useState<NewSessionTarget | null>(null);
+  // Project whose default logins are being edited (⋮ → Edit logins…).
+  const [editingLoginsProject, setEditingLoginsProject] = useState<Project | null>(null);
   const [worktreeDialogProject, setWorktreeDialogProject] =
     useState<{ id: string; name: string; backendId: 'claude-code' | 'codex' } | null>(null);
   const [worktreeDefault, setWorktreeDefault] = useState('');
@@ -851,6 +854,7 @@ export function LeftColumn(): JSX.Element {
               }}
               onNewTerminal={() => openTerminalDialog(p)}
               onRenameProject={() => renameProjectInList(p)}
+              onEditLogins={() => { refreshLoginSessions(); setEditingLoginsProject(p); }}
               onRemoveProject={() => void removeProjectFromList(p)}
               onToggleSnooze={() => void toggleSnoozeProject(p)}
               onReorderProjects={reorderProjects}
@@ -920,6 +924,12 @@ export function LeftColumn(): JSX.Element {
           confirmLabel="Rename"
           onCancel={() => setRenamingProject(null)}
           onConfirm={(v) => void submitProjectRename(v)}
+        />
+      ) : null}
+      {editingLoginsProject ? (
+        <EditProjectLoginsDialog
+          project={editingLoginsProject}
+          onClose={() => setEditingLoginsProject(null)}
         />
       ) : null}
       {showAddProjectDialog ? (
@@ -1088,6 +1098,7 @@ interface ProjectBlockProps {
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRenameProject: () => void;
+  onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
   onReorderProjects: (fromId: string, beforeId: string) => void;
@@ -1107,7 +1118,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, connection, sessions, selectedId,
     onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze,
-    onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
+    onGetInfo, onNewTerminal, onRenameProject, onEditLogins, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
     busy, pendingSessionIds,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -1217,6 +1228,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           onGetInfo={onGetInfo}
           onNewTerminal={onNewTerminal}
           onRename={onRenameProject}
+          onEditLogins={onEditLogins}
           onRemoveProject={onRemoveProject}
           onToggleSnooze={onToggleSnooze}
           busy={busy}
@@ -1466,6 +1478,7 @@ function SpawnMenu(props: {
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRename: () => void;
+  onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
   busy: boolean;
@@ -1566,6 +1579,16 @@ function SpawnMenu(props: {
                 <span className="spawn-menu-title">Rename…</span>
                 <span className="spawn-menu-sub">
                   Change the display name. Folder on disk isn't renamed.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onEditLogins(); }}
+              >
+                <span className="spawn-menu-title">Edit logins…</span>
+                <span className="spawn-menu-sub">
+                  Default Claude / Codex login for new sessions here.
                 </span>
               </button>
               <button
