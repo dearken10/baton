@@ -10,6 +10,7 @@ import { getDatabase } from '../database/index.js';
 import { OtelSettings } from '../../shared/ipc.js';
 
 const OTEL_KEY = 'otel';
+const ONBOARDED_KEY = 'onboarded';
 
 /** Initial OTEL config for a fresh install. Seeds endpoint/protocol from
  *  the ambient OTEL_* env when present so an operator can pre-point the
@@ -48,6 +49,24 @@ export function setOtelSettings(next: OtelSettings): OtelSettings {
     )
     .run(OTEL_KEY, JSON.stringify(next));
   return next;
+}
+
+/* ─── First-run onboarding flag ─── */
+
+export function getOnboarded(): boolean {
+  const row = getDatabase()
+    .prepare('SELECT value FROM settings WHERE key = ?')
+    .get(ONBOARDED_KEY) as { value: string } | undefined;
+  return row?.value === 'true';
+}
+
+export function setOnboarded(done: boolean): void {
+  getDatabase()
+    .prepare(
+      `INSERT INTO settings (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+    )
+    .run(ONBOARDED_KEY, done ? 'true' : 'false');
 }
 
 /** Build the env vars that turn on Claude Code's native OpenTelemetry

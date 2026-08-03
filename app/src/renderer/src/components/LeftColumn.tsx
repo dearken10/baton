@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
-import type { ConnectionProfile, Project, Session } from '@shared/ipc.js';
+import type { ConnectionProfile, LoginSession, Project, Session } from '@shared/ipc.js';
 import { NewWorktreeDialog } from './NewWorktreeDialog.js';
 import { NewSessionDialog, type NewSessionTarget } from './NewSessionDialog.js';
 import { NewTerminalDialog, type NewTerminalChoice } from './NewTerminalDialog.js';
 import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
+import { EditProjectLoginsDialog } from './EditProjectLoginsDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
 import { formatTokens, formatRelativeTime } from '../lib/format.js';
 
@@ -311,8 +312,21 @@ export function LeftColumn(): JSX.Element {
       .then((r) => setOtelEnabled(r.otel.enabled))
       .catch(() => { /* default off */ });
   }, []);
-  // Project-root "New Session" Jira prompt (only used when OTEL is on).
+  // Login sessions, for the per-session login override in the New Session
+  // dialog. Refreshed on mount and whenever the dialog is opened so a
+  // just-created login shows up without an app restart.
+  const [loginSessions, setLoginSessions] = useState<LoginSession[]>([]);
+  const refreshLoginSessions = useCallback(() => {
+    void window.baton
+      .call('loginSession.list', {})
+      .then((r) => setLoginSessions(r.sessions))
+      .catch(() => { /* none → dropdown hidden */ });
+  }, []);
+  useEffect(() => { refreshLoginSessions(); }, [refreshLoginSessions]);
+  // Project-root "New Session" prompt (login override, plus Jira when OTEL is on).
   const [newSessionTarget, setNewSessionTarget] = useState<NewSessionTarget | null>(null);
+  // Project whose default logins are being edited (⋮ → Edit logins…).
+  const [editingLoginsProject, setEditingLoginsProject] = useState<Project | null>(null);
   const [worktreeDialogProject, setWorktreeDialogProject] =
     useState<{ id: string; name: string; backendId: 'claude-code' | 'codex' } | null>(null);
   const [worktreeDefault, setWorktreeDefault] = useState('');
@@ -371,6 +385,7 @@ export function LeftColumn(): JSX.Element {
     projectId: string,
     backendId: 'claude-code' | 'codex',
     jira?: string,
+    loginSessionId?: string | null,
   ): Promise<void> {
     setBusy(true);
     try {
@@ -378,6 +393,7 @@ export function LeftColumn(): JSX.Element {
         projectId,
         backendId,
         ...(jira && jira.trim() ? { jiraTaskId: jira.trim() } : {}),
+        ...(loginSessionId ? { loginSessionId } : {}),
       });
       selectSession(session.id);
     } catch (err) {
@@ -391,8 +407,18 @@ export function LeftColumn(): JSX.Element {
   /** New Session in the project root. When telemetry is on, first prompt
    *  for a Jira ticket (so the session can be attributed); otherwise
    *  spawn straight away to keep the one-click path frictionless. */
+  /** Whether to prompt before spawning: telemetry needs a Jira ticket, or
+   *  the user has extra (non-global) logins for this agent to choose from. */
+  function needsNewSessionPrompt(backendId: 'claude-code' | 'codex'): boolean {
+    return (
+      otelEnabled ||
+      loginSessions.some((s) => s.agent === backendId && s.kind !== 'global')
+    );
+  }
+
   function spawnAgent(projectId: string): void {
-    if (otelEnabled) {
+    refreshLoginSessions();
+    if (needsNewSessionPrompt('claude-code')) {
       setNewSessionTarget({
         projectId,
         projectName: projectsRecord[projectId]?.name ?? 'project',
@@ -407,7 +433,8 @@ export function LeftColumn(): JSX.Element {
    *  backend writes a per-session profile TOML and spawns
    *  `codex -p baton-<sid>`. */
   function spawnCodexAgent(projectId: string): void {
-    if (otelEnabled) {
+    refreshLoginSessions();
+    if (needsNewSessionPrompt('codex')) {
       setNewSessionTarget({
         projectId,
         projectName: projectsRecord[projectId]?.name ?? 'project',
@@ -418,11 +445,14 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
-  function confirmNewSession(jira: string): void {
+  function confirmNewSession(opts: {
+    jiraTaskId: string;
+    loginSessionId: string | null;
+  }): void {
     const t = newSessionTarget;
     if (!t) return;
     setNewSessionTarget(null);
-    void doSpawnAgent(t.projectId, t.backendId, jira);
+    void doSpawnAgent(t.projectId, t.backendId, opts.jiraTaskId, opts.loginSessionId);
   }
 
   // "New terminal" opens a picker so the user can choose project root /
@@ -824,6 +854,7 @@ export function LeftColumn(): JSX.Element {
               }}
               onNewTerminal={() => openTerminalDialog(p)}
               onRenameProject={() => renameProjectInList(p)}
+              onEditLogins={() => { refreshLoginSessions(); setEditingLoginsProject(p); }}
               onRemoveProject={() => void removeProjectFromList(p)}
               onToggleSnooze={() => void toggleSnoozeProject(p)}
               onReorderProjects={reorderProjects}
@@ -841,6 +872,15 @@ export function LeftColumn(): JSX.Element {
         onCancel={() => setNewSessionTarget(null)}
         onConfirm={confirmNewSession}
         busy={busy}
+        showJira={otelEnabled}
+        loginSessions={loginSessions}
+        defaultLoginId={
+          newSessionTarget
+            ? newSessionTarget.backendId === 'claude-code'
+              ? projectsRecord[newSessionTarget.projectId]?.claudeLoginSessionId ?? null
+              : projectsRecord[newSessionTarget.projectId]?.codexLoginSessionId ?? null
+            : null
+        }
       />
       <NewWorktreeDialog
         project={worktreeDialogProject}
@@ -884,6 +924,12 @@ export function LeftColumn(): JSX.Element {
           confirmLabel="Rename"
           onCancel={() => setRenamingProject(null)}
           onConfirm={(v) => void submitProjectRename(v)}
+        />
+      ) : null}
+      {editingLoginsProject ? (
+        <EditProjectLoginsDialog
+          project={editingLoginsProject}
+          onClose={() => setEditingLoginsProject(null)}
         />
       ) : null}
       {showAddProjectDialog ? (
@@ -1052,6 +1098,7 @@ interface ProjectBlockProps {
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRenameProject: () => void;
+  onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
   onReorderProjects: (fromId: string, beforeId: string) => void;
@@ -1071,7 +1118,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, connection, sessions, selectedId,
     onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze,
-    onGetInfo, onNewTerminal, onRenameProject, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
+    onGetInfo, onNewTerminal, onRenameProject, onEditLogins, onRemoveProject, onToggleSnooze, onReorderProjects, onReorderSessions,
     busy, pendingSessionIds,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -1181,6 +1228,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           onGetInfo={onGetInfo}
           onNewTerminal={onNewTerminal}
           onRename={onRenameProject}
+          onEditLogins={onEditLogins}
           onRemoveProject={onRemoveProject}
           onToggleSnooze={onToggleSnooze}
           busy={busy}
@@ -1430,6 +1478,7 @@ function SpawnMenu(props: {
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRename: () => void;
+  onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
   busy: boolean;
@@ -1530,6 +1579,16 @@ function SpawnMenu(props: {
                 <span className="spawn-menu-title">Rename…</span>
                 <span className="spawn-menu-sub">
                   Change the display name. Folder on disk isn't renamed.
+                </span>
+              </button>
+              <button
+                className="spawn-menu-item"
+                role="menuitem"
+                onClick={() => { close(); props.onEditLogins(); }}
+              >
+                <span className="spawn-menu-title">Edit logins…</span>
+                <span className="spawn-menu-sub">
+                  Default Claude / Codex login for new sessions here.
                 </span>
               </button>
               <button

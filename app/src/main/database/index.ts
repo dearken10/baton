@@ -259,6 +259,45 @@ function runMigrations(d: Database.Database): void {
      ON CONFLICT(id) DO NOTHING`
   ).run(Date.now(), Date.now());
 
+  // Login sessions: named credential profiles per agent. `kind` is one
+  // of global | browser | custom | token; `config` is a kind-specific
+  // JSON blob (endpoint fields, encrypted secret). A project picks a
+  // default Claude + Codex session; an individual session may override.
+  try {
+    d.exec(`CREATE TABLE IF NOT EXISTS login_sessions (
+      id          TEXT PRIMARY KEY,
+      name        TEXT NOT NULL,
+      agent       TEXT NOT NULL,
+      kind        TEXT NOT NULL,
+      config      TEXT NOT NULL DEFAULT '{}',
+      built_in    INTEGER NOT NULL DEFAULT 0,
+      created_at  INTEGER NOT NULL
+    )`);
+  } catch { /* already migrated */ }
+
+  // Per-project default login session ids (NULL → the built-in global
+  // for that agent). Per-session override lives on sessions.login_session_id.
+  try {
+    d.exec('ALTER TABLE projects ADD COLUMN claude_login_session_id TEXT');
+  } catch { /* already migrated */ }
+  try {
+    d.exec('ALTER TABLE projects ADD COLUMN codex_login_session_id TEXT');
+  } catch { /* already migrated */ }
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN login_session_id TEXT');
+  } catch { /* already migrated */ }
+
+  // Seed the two built-in "Global" login sessions (the machine default
+  // login for each agent). Non-deletable; always present so projects can
+  // fall back to them. Fixed ids so resolution is stable across boots.
+  const now = Date.now();
+  const seedGlobal = d.prepare(
+    `INSERT INTO login_sessions (id, name, agent, kind, config, built_in, created_at)
+     VALUES (?, ?, ?, 'global', '{}', 1, ?)
+     ON CONFLICT(id) DO NOTHING`
+  );
+  seedGlobal.run('global-claude-code', 'Global (machine login)', 'claude-code', now);
+  seedGlobal.run('global-codex', 'Global (machine login)', 'codex', now);
 }
 
 export function getDatabase(): Database.Database {
