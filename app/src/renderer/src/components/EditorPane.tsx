@@ -793,14 +793,11 @@ export function EditorPane(): JSX.Element {
                 )}
               </div>
           ) : activeMeta.status === 'image' && activeMeta.imageSrc ? (
-              <div className="image-viewer">
-                <div className="image-canvas">
-                  <img src={activeMeta.imageSrc} alt={activeFilePath} />
-                </div>
-                <div className="image-meta dim">
-                  {(activeMeta.size / 1024).toFixed(1)} KB · {activeFilePath.split('/').pop()}
-                </div>
-              </div>
+              <ImageViewer
+                src={activeMeta.imageSrc}
+                sizeBytes={activeMeta.size}
+                name={activeFilePath.split('/').pop() ?? ''}
+              />
           ) : activeMeta.status === 'tooLarge' ? (
               <div className="empty">
                 <p className="dim">
@@ -998,6 +995,151 @@ function EditorActionRow({
           {saveBusy ? 'Saving…' : 'Save'}
         </button>
       )}
+    </div>
+  );
+}
+
+/** Image preview with zoom controls (buttons + scroll-wheel) and
+ *  drag-to-pan when zoomed in (PRD F6.2). Zoom resets whenever the
+ *  source image changes. */
+const ZOOM_MIN = 0.1;
+const ZOOM_MAX = 64;
+const clampZoom = (v: number): number => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, v));
+
+/** Pan offset (screen px) applied before scale, so panning speed is
+ *  constant regardless of zoom. transform-origin is the canvas centre. */
+interface ImageView { scale: number; x: number; y: number }
+const FIT_VIEW: ImageView = { scale: 1, x: 0, y: 0 };
+
+function ImageViewer({
+  src, sizeBytes, name,
+}: { src: string; sizeBytes: number; name: string }): JSX.Element {
+  const [view, setView] = useState<ImageView>(FIT_VIEW);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const viewRef = useRef<ImageView>(view);
+  viewRef.current = view;
+  const dragRef = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
+
+  // Reset pan+zoom when a different image is opened.
+  useEffect(() => { setView(FIT_VIEW); }, [src]);
+
+  // Zoom around a screen point (clientX/Y): the pixel under the cursor
+  // stays put while the rest scales toward/away from it.
+  const zoomAround = useCallback((factor: number, clientX: number, clientY: number): void => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    // Cursor position relative to the canvas centre (the transform origin).
+    const cx = clientX - (rect.left + rect.width / 2);
+    const cy = clientY - (rect.top + rect.height / 2);
+    setView((v) => {
+      const next = clampZoom(v.scale * factor);
+      const k = next / v.scale;
+      return { scale: next, x: cx - k * (cx - v.x), y: cy - k * (cy - v.y) };
+    });
+  }, []);
+
+  // Zoom around the canvas centre (for the +/− buttons).
+  const zoomCentre = useCallback((factor: number): void => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    zoomAround(factor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  }, [zoomAround]);
+
+  // Native, non-passive wheel listener so we can preventDefault and stop
+  // the scroll from bubbling to the surrounding editor body.
+  // Ctrl/⌘ + wheel zooms toward the cursor; plain wheel pans (handy for
+  // scrolling through a long image). Trackpad pinch also arrives as a
+  // ctrlKey wheel event, so it zooms too.
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent): void => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        zoomAround(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX, e.clientY);
+      } else {
+        setView((v) => ({ ...v, x: v.x - e.deltaX, y: v.y - e.deltaY }));
+      }
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [zoomAround]);
+
+  const onMouseDown = useCallback((e: React.MouseEvent): void => {
+    if (e.button !== 0) return;
+    dragRef.current = { px: e.clientX, py: e.clientY, ox: viewRef.current.x, oy: viewRef.current.y };
+    canvasRef.current?.classList.add('grabbing');
+  }, []);
+  const onMouseMove = useCallback((e: React.MouseEvent): void => {
+    const d = dragRef.current;
+    if (!d) return;
+    setView((v) => ({ ...v, x: d.ox + (e.clientX - d.px), y: d.oy + (e.clientY - d.py) }));
+  }, []);
+  const endDrag = useCallback((): void => {
+    dragRef.current = null;
+    canvasRef.current?.classList.remove('grabbing');
+  }, []);
+
+  // Double-click toggles between fit and a 2× zoom centred on the cursor.
+  const onDoubleClick = useCallback((e: React.MouseEvent): void => {
+    if (viewRef.current.scale !== 1 || viewRef.current.x !== 0 || viewRef.current.y !== 0) {
+      setView(FIT_VIEW);
+    } else {
+      zoomAround(2, e.clientX, e.clientY);
+    }
+  }, [zoomAround]);
+
+  const atFit = view.scale === 1 && view.x === 0 && view.y === 0;
+
+  return (
+    <div className="image-viewer">
+      <div
+        ref={canvasRef}
+        className="image-canvas"
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={endDrag}
+        onMouseLeave={endDrag}
+        onDoubleClick={onDoubleClick}
+      >
+        <img
+          src={src}
+          alt={name}
+          draggable={false}
+          style={{ transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+        />
+      </div>
+      <div className="image-meta dim">
+        <span>{(sizeBytes / 1024).toFixed(1)} KB · {name}</span>
+        <span className="image-zoom">
+          <button
+            type="button"
+            className="image-zoom-btn"
+            title="Zoom out"
+            aria-label="Zoom out"
+            disabled={view.scale <= ZOOM_MIN}
+            onClick={() => zoomCentre(1 / 1.25)}
+          >−</button>
+          <button
+            type="button"
+            className="image-zoom-level"
+            title="Reset to fit"
+            aria-label="Reset to fit"
+            disabled={atFit}
+            onClick={() => setView(FIT_VIEW)}
+          >{Math.round(view.scale * 100)}%</button>
+          <button
+            type="button"
+            className="image-zoom-btn"
+            title="Zoom in"
+            aria-label="Zoom in"
+            disabled={view.scale >= ZOOM_MAX}
+            onClick={() => zoomCentre(1.25)}
+          >+</button>
+        </span>
+      </div>
     </div>
   );
 }

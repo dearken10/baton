@@ -128,6 +128,10 @@ export class CodexBackend implements AgentBackend {
       BATON_SESSION_ID: opts.sessionId,
       ...(opts.env ?? {}),
     } as Record<string, string>;
+    // A login env sets conflicting inherited auth vars to '' to mean
+    // "unset" (see buildLoginEnv) — otherwise an inherited OPENAI_API_KEY
+    // in the parent shell env would shadow the selected login.
+    for (const k of Object.keys(env)) if (env[k] === '') delete env[k];
 
     // Build args. Subcommand (resume) must come BEFORE options.
     const args: string[] = [];

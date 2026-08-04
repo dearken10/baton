@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import type { Session } from '@shared/ipc.js';
+import { useEffect, useRef, useState } from 'react';
+import type { Session, LoginSession } from '@shared/ipc.js';
 import { extractJiraKey } from '@shared/jira.js';
 
 interface Props {
@@ -31,16 +31,26 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
   const [jira, setJira] = useState('');
   const [savingJira, setSavingJira] = useState(false);
   const [jiraError, setJiraError] = useState<string | null>(null);
+  // Login switch: available logins for this agent + the current draft.
+  // '' → follow the project default (which falls back to global).
+  const [logins, setLogins] = useState<LoginSession[]>([]);
+  const [loginDraft, setLoginDraft] = useState('');
+  const [switchingLogin, setSwitchingLogin] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+
+  // Holds the latest close-request handler so the Esc listener (registered
+  // before the null-session guard) can honour the unsaved-changes prompt.
+  const requestCloseRef = useRef(onClose);
 
   // Esc to close — match the other dialogs' behaviour.
   useEffect(() => {
     if (!session) return;
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape') requestCloseRef.current();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [session, onClose]);
+  }, [session]);
 
   // Reset transient clone state when the dialog opens for a different
   // session — otherwise a leftover error from one session would haunt
@@ -51,7 +61,22 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
     setJira(session?.jiraTaskId ?? '');
     setSavingJira(false);
     setJiraError(null);
-  }, [session?.id, session?.jiraTaskId]);
+    setLoginDraft(session?.loginSessionId ?? '');
+    setSwitchingLogin(false);
+    setLoginError(null);
+  }, [session?.id, session?.jiraTaskId, session?.loginSessionId]);
+
+  // Load the login sessions once the dialog opens for an agent session, so
+  // the dropdown can offer the alternatives to switch to.
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    window.baton
+      .call('loginSession.list', {})
+      .then((res) => { if (!cancelled) setLogins(res.sessions); })
+      .catch(() => { /* leave empty — the dropdown just won't render */ });
+    return () => { cancelled = true; };
+  }, [session?.id]);
 
   if (!session) return null;
 
@@ -70,6 +95,24 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
   const isAgent = session.backendId === 'claude-code' || session.backendId === 'codex';
   const normalisedJira = extractJiraKey(jira) ?? jira.trim();
   const jiraDirty = normalisedJira !== (session.jiraTaskId ?? '');
+  // Non-global logins for this agent are the switch targets; global is
+  // offered via the "Project default" option.
+  const agentLogins = logins.filter(
+    (s) => s.agent === session.backendId && s.kind !== 'global'
+  );
+  const loginDirty = (loginDraft || null) !== (session.loginSessionId ?? null);
+  // Unsaved edits: the Jira draft or the login draft differs from what's
+  // stored. Closing (Esc / overlay / Close button) while dirty warns first.
+  const dirty = (isAgent && jiraDirty) || (agentLogins.length > 0 && loginDirty);
+
+  function requestClose(): void {
+    if (dirty && !window.confirm(
+      'You have unsaved changes. Close and discard your edits?'
+    )) return;
+    onClose();
+  }
+  // Keep the Esc listener pointed at the current handler (with fresh `dirty`).
+  requestCloseRef.current = requestClose;
 
   async function handleSaveJira(): Promise<void> {
     if (!session || savingJira || !jiraDirty) return;
@@ -87,6 +130,24 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
       setJiraError(String(err instanceof Error ? err.message : err));
     } finally {
       setSavingJira(false);
+    }
+  }
+
+  async function handleSwitchLogin(): Promise<void> {
+    if (!session || switchingLogin || !loginDirty) return;
+    setSwitchingLogin(true);
+    setLoginError(null);
+    try {
+      await window.baton.call('session.setLoginSessionId', {
+        sessionId: session.id,
+        loginSessionId: loginDraft || null,
+      });
+      // The session.refreshed event updates the store; our draft re-seeds
+      // via the open effect once the new loginSessionId lands.
+    } catch (err) {
+      setLoginError(String(err instanceof Error ? err.message : err));
+    } finally {
+      setSwitchingLogin(false);
     }
   }
 
@@ -110,7 +171,7 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
   return (
     <div
       className="dialog-overlay"
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) requestClose(); }}
       role="presentation"
     >
       <div
@@ -125,6 +186,41 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
         </div>
 
         <div className="dialog-body">
+          {isAgent && agentLogins.length > 0 ? (
+            <>
+              <div className="sid-row">
+                <span className="sid-row-label">Login</span>
+                <select
+                  className="sid-row-value sid-row-input"
+                  value={loginDraft}
+                  onChange={(e) => setLoginDraft(e.target.value)}
+                  disabled={switchingLogin}
+                >
+                  <option value="">Project default (Global machine login)</option>
+                  {agentLogins.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="sid-row-copy"
+                  onClick={() => void handleSwitchLogin()}
+                  disabled={!loginDirty || switchingLogin}
+                  title="Restart this session under the chosen login"
+                >
+                  {switchingLogin ? '…' : 'Switch'}
+                </button>
+              </div>
+              <p className="dim" style={{ margin: '2px 0 0', fontSize: 11 }}>
+                Restarts the session under the new login. Conversation history
+                is preserved via <code className="mono">--resume</code>.
+              </p>
+              {loginError ? (
+                <div className="dialog-error" role="alert">{loginError}</div>
+              ) : null}
+            </>
+          ) : null}
+
           <InfoRow label="Backend"        value={backendLabel} />
           <InfoRow label="Branch"         value={session.branch} mono />
           <InfoRow label="Worktree"       value={session.worktreePath} mono copyable />
@@ -164,8 +260,9 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
           ) : null}
           {isAgent ? (
             <p className="dim" style={{ margin: '2px 0 0', fontSize: 11 }}>
-              Applies to future resume/respawn — metrics already emitted by a
-              running session keep the tag it launched with.
+              Saving restarts a running session so the new tag takes effect;
+              history is preserved via <code className="mono">--resume</code>.
+              Metrics already emitted keep the tag they were sent with.
             </p>
           ) : null}
           {jiraError ? (
@@ -193,7 +290,7 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
               {cloning ? 'Cloning…' : 'Clone'}
             </button>
           ) : null}
-          <button type="button" className="btn primary" onClick={onClose}>
+          <button type="button" className="btn primary" onClick={requestClose}>
             Close
           </button>
         </div>

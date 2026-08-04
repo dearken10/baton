@@ -13,6 +13,28 @@ import { findFileRefs } from './fileRefParse.js';
 import { resolveAndOpenFileRef } from './openFileRef.js';
 import { getTheme, subscribeTheme, type Theme } from '../lib/theme.js';
 
+/** True for an http(s) URL whose host isn't a local dev server. These
+ *  open in the OS default browser; localhost URLs still render in the
+ *  in-app browser tab (most external sites block iframe embedding via
+ *  X-Frame-Options / frame-ancestors, so they can't render in-app). */
+function isExternalWebUrl(raw: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+  const host = u.hostname;
+  return (
+    host !== 'localhost' &&
+    host !== '127.0.0.1' &&
+    host !== '0.0.0.0' &&
+    host !== '::1' &&
+    host !== '[::1]'
+  );
+}
+
 function xtermThemeFor(t: Theme): {
   background: string; foreground: string; cursor: string;
   cursorAccent: string; selectionBackground: string;
@@ -170,7 +192,11 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
       linkHandler: {
         activate: (event, text) => {
           event.preventDefault();
-          openFileRef.current(webUrlTabId(text), 'sticky');
+          if (isExternalWebUrl(text)) {
+            void window.baton.call('shell.openExternal', { url: text });
+          } else {
+            openFileRef.current(webUrlTabId(text), 'sticky');
+          }
         },
         allowNonHttpProtocols: false,
       },
@@ -215,12 +241,17 @@ export function TerminalPane({ sessionId }: Props): JSX.Element {
     term.loadAddon(serialize);
     // Make URLs in the terminal clickable. Default behaviour is
     // window.open() which would just hand the URL to the OS browser;
-    // we intercept and route it to an in-app browser tab in the
-    // editor pane instead.
+    // we intercept and route external http(s) links to the OS browser
+    // ourselves (via shell.openExternal), while localhost dev-server
+    // URLs open in the in-app browser tab in the editor pane.
     const webLinks = new WebLinksAddon(
       (event, uri) => {
         event.preventDefault();
-        openFileRef.current(webUrlTabId(uri), 'sticky');
+        if (isExternalWebUrl(uri)) {
+          void window.baton.call('shell.openExternal', { url: uri });
+        } else {
+          openFileRef.current(webUrlTabId(uri), 'sticky');
+        }
       },
     );
     term.loadAddon(webLinks);

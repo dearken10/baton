@@ -1,4 +1,4 @@
-import { UsageBars } from './UsageBars.js';
+import { UsageMeters } from './UsageBars.js';
 
 interface Props {
   version: string;
@@ -14,8 +14,7 @@ export function Titlebar({ version, onOpenSettings }: Props): JSX.Element {
       <div className="brand">baton</div>
       <div className="meta">v{version}</div>
       <div className="spacer" />
-      <UsageBars source="claude" />
-      <UsageBars source="codex" />
+      <UsageMeters />
       <button
         type="button"
         className="theme-toggle"

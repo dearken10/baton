@@ -1500,6 +1500,105 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Persist a new login session for an agent session and restart it under
+   * that login (using `--resume` so the conversation history survives).
+   * `loginSessionId: null` clears the per-session choice so it falls back
+   * to the project default (→ built-in global). Mirrors setModel's
+   * kill/respawn dance — including the intentionalKills marker so the chip
+   * doesn't briefly flash `errored` between the kill and the new spawn.
+   */
+  async setLoginSessionId(
+    sessionId: string,
+    loginSessionId: string | null,
+  ): Promise<Session> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, worktree_path,
+                claude_session_id, permission_mode, model, login_session_id
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string; project_id: string; backend_id: string;
+          worktree_path: string; claude_session_id: string | null;
+          permission_mode: string; model: string | null;
+          login_session_id: string | null;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+    // Only agent backends authenticate with a login session.
+    if (row.backend_id !== 'claude-code' && row.backend_id !== 'codex') {
+      throw new Error('Only Claude Code / Codex sessions have a login session.');
+    }
+
+    // Persist BEFORE the kill so a crash mid-change still leaves the
+    // intended state in the DB. restartLive re-reads the row, so the new
+    // login is what the respawn authenticates with.
+    try {
+      getDatabase()
+        .prepare('UPDATE sessions SET login_session_id = ? WHERE id = ?')
+        .run(loginSessionId, sessionId);
+    } catch { /* best-effort */ }
+
+    return this.restartLive(sessionId);
+  }
+
+  /** Kill a live agent session and respawn it (resuming its transcript
+   *  when possible), so a per-session config change that's only read at
+   *  spawn time — login session, Jira/OTEL tag — takes effect now. Reads
+   *  everything from the persisted row, so callers must persist first.
+   *  No-op for a session that isn't live: the new value is picked up on
+   *  the next resume/respawn, so we just return its refreshed row. */
+  private async restartLive(sessionId: string): Promise<Session> {
+    const row = getDatabase()
+      .prepare(
+        `SELECT id, project_id, backend_id, worktree_path,
+                claude_session_id, permission_mode, model, login_session_id
+           FROM sessions WHERE id = ?`
+      )
+      .get(sessionId) as
+      | {
+          id: string; project_id: string; backend_id: string;
+          worktree_path: string; claude_session_id: string | null;
+          permission_mode: string; model: string | null;
+          login_session_id: string | null;
+        }
+      | undefined;
+    if (!row) throw new Error(`No such session: ${sessionId}`);
+
+    if (!this.live.has(sessionId)) {
+      const session = this.listAll().find((s) => s.id === sessionId);
+      if (!session) throw new Error(`No such session: ${sessionId}`);
+      return session;
+    }
+
+    this.intentionalKills.add(sessionId);
+    try { this.live.get(sessionId)?.handle.kill('SIGTERM'); }
+    catch { /* already gone */ }
+    await new Promise<void>((resolve) => setTimeout(resolve, 600));
+    this.live.delete(sessionId);
+
+    const useResume =
+      !!row.claude_session_id &&
+      (await transcriptExistsFor(
+        row.project_id, row.worktree_path, row.claude_session_id,
+      ));
+
+    return this.spawn({
+      projectId: row.project_id,
+      backendId: row.backend_id as AgentBackendId,
+      cwd: row.worktree_path,
+      reuseSessionId: row.id,
+      permissionMode: row.permission_mode as PermissionMode,
+      model: row.model,
+      loginSessionId: row.login_session_id,
+      ...(useResume && row.claude_session_id
+        ? { resumeAgentSessionId: row.claude_session_id }
+        : {}),
+    });
+  }
+
   async kill(sessionId: string): Promise<void> {
     return this.queue.run(sessionId, async () => {
       const live = this.live.get(sessionId);
@@ -1701,20 +1800,20 @@ export class SessionManager {
   }
 
   /** Set (or clear) a session's Jira ticket for OTEL attribution.
-   *  Empty/whitespace → null. Persist-only: the value is read at spawn,
-   *  so a running session keeps the tag it launched with; the new value
-   *  takes effect on the next resume/respawn. Updates in-memory meta so
-   *  listAll() reflects the change without a re-fetch. */
-  setJiraTaskId(sessionId: string, jiraTaskId: string): Session {
+   *  Empty/whitespace → null. The tag is read at spawn
+   *  (OTEL_RESOURCE_ATTRIBUTES), so a live session is restarted — via
+   *  restartLive, which resumes the transcript — for the new attribution
+   *  to take effect. A non-live session just re-seeds its row; the value
+   *  is picked up on its next resume/respawn. Note: metrics already
+   *  emitted keep the tag they were sent with — re-tagging isn't
+   *  retroactive. */
+  async setJiraTaskId(sessionId: string, jiraTaskId: string): Promise<Session> {
     const value = jiraTaskId.trim() || null;
     const res = getDatabase()
       .prepare('UPDATE sessions SET jira_task_id = ? WHERE id = ?')
       .run(value, sessionId);
     if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
-    const live = this.live.get(sessionId);
-    if (live) live.meta = { ...live.meta, jiraTaskId: value };
-    const session = this.listAll().find((s) => s.id === sessionId);
-    if (!session) throw new Error(`Session disappeared after jira edit: ${sessionId}`);
+    const session = await this.restartLive(sessionId);
     emit({ type: 'session.refreshed', session });
     return session;
   }
@@ -1858,7 +1957,7 @@ export class SessionManager {
     const live = this.live.get(sessionId);
     const dbRow = getDatabase()
       .prepare(
-        'SELECT claude_session_id, worktree_path, last_summary, title, backend_id ' +
+        'SELECT claude_session_id, worktree_path, last_summary, title, backend_id, login_session_id ' +
         'FROM sessions WHERE id = ?'
       )
       .get(sessionId) as
@@ -1868,6 +1967,7 @@ export class SessionManager {
           last_summary: string | null;
           title: string | null;
           backend_id: string;
+          login_session_id: string | null;
         }
       | undefined;
     const agentSid = live?.meta.claudeSessionId ?? dbRow?.claude_session_id;
@@ -1908,11 +2008,21 @@ export class SessionManager {
       return;
     }
     const previousSummary = live?.meta.lastSummary ?? dbRow?.last_summary ?? null;
+    // The summariser always shells out to the `claude` CLI (even for a
+    // Codex session), so it needs the session's *Claude* login env —
+    // otherwise it falls back to the machine's global CLI auth, which may
+    // not be logged in when the session runs under an isolated/browser
+    // login. A Codex login can't authenticate a `claude` call, so we only
+    // resolve it for claude-code backends.
+    const loginSessionId = live?.meta.loginSessionId ?? dbRow?.login_session_id ?? null;
+    const loginEnv =
+      backendId === 'claude-code' ? buildLoginEnv(loginSessionId, 'claude-code') : {};
     const summary = await summarizeSession({
       sessionId,
       backendId,
       transcriptPath,
       previousSummary,
+      ...(Object.keys(loginEnv).length ? { loginEnv } : {}),
       ...(opts?.force ? { force: true } : {}),
     });
     if (!summary) {

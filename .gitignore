@@ -20,3 +20,6 @@ app/tsconfig.node.tsbuildinfo
 
 # baton: per-project app state (worktrees, caches, …)
 .baton/
+
+# Local runtime scratch (Electron profiles, session DBs, mockups)
+tmp/

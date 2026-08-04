@@ -7,7 +7,7 @@
  *               baton-managed config dir (CLAUDE_CONFIG_DIR / CODEX_HOME),
  *               keyed by the session id (~/.baton/agents/<id>).
  *   • custom  — a custom API endpoint / gateway (base URL + key).
- *   • token   — a pasted long-lived token (Claude: CLAUDE_CODE_OAUTH_TOKEN;
+ *   • token   — a pasted long-lived token (Claude: ANTHROPIC_AUTH_TOKEN;
  *               Codex: an OpenAI API key).
  *
  * Sessions live in the `login_sessions` table. Projects pick a default
@@ -204,6 +204,21 @@ export function deleteLoginSession(id: string): void {
   }
 }
 
+/** Decrypted secret for a session (the pasted token / API key), or null
+ *  when the session has none. Used by the usage meters to query the plan
+ *  API for a `token` login directly. Stays in the main process. */
+export function getLoginSecret(id: string): string | null {
+  const row = getLoginRow(id);
+  return row ? decryptSecret(row.config.secretEnc ?? null) : null;
+}
+
+/** The isolated config dir for a browser login (CLAUDE_CONFIG_DIR /
+ *  CODEX_HOME), or null for any other kind. */
+export function loginConfigDir(id: string): string | null {
+  const row = getLoginRow(id);
+  return row && row.kind === 'browser' ? agentConfigDir(row) : null;
+}
+
 /* ─── Spawn env / args resolution ───────────────────────────────────── */
 
 /** The env var each CLI honours to relocate its config dir. */
@@ -236,8 +251,37 @@ function resolveRow(id: string | null | undefined, agent: AgentAccountId): Login
   return getLoginRow(globalSessionId(agent));
 }
 
+/** Auth/endpoint env keys the parent process may already carry (from the
+ *  user's shell) that would SHADOW a selected login. Claude Code treats
+ *  ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN as an explicit auth override
+ *  that wins over the subscription CLAUDE_CODE_OAUTH_TOKEN, so an inherited
+ *  one silently defeats a token/browser login ("still says token used up").
+ *  A non-global login owns auth completely, so we blank every one of these
+ *  first — value '' is the caller's "unset this inherited var" sentinel —
+ *  then layer the login's own vars on top. CLAUDE_CONFIG_DIR / CODEX_HOME
+ *  are deliberately excluded: browser sets them, and the backends read them
+ *  from the raw login env before the merge. */
+const CONFLICTING_AUTH_KEYS: Record<AgentAccountId, string[]> = {
+  'claude-code': [
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_AUTH_TOKEN',
+    'ANTHROPIC_BASE_URL',
+    'ANTHROPIC_MODEL',
+    'ANTHROPIC_CUSTOM_HEADERS',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+  ],
+  codex: ['OPENAI_API_KEY', 'OPENAI_BASE_URL'],
+};
+
+function clearedAuth(agent: AgentAccountId): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const k of CONFLICTING_AUTH_KEYS[agent]) env[k] = '';
+  return env;
+}
+
 /** Env override for a spawn, given the resolved login session id and the
- *  backend. Global → {}. Spread into the spawn env by the caller. */
+ *  backend. Global → {}. Spread into the spawn env by the caller. A value
+ *  of '' means "delete the inherited var" — the backends honour this. */
 export function buildLoginEnv(
   id: string | null | undefined,
   agent: AgentAccountId
@@ -248,7 +292,7 @@ export function buildLoginEnv(
   if (row.kind === 'browser') {
     const dir = agentConfigDir(row);
     try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
-    return { [configEnvVar(agent)]: dir };
+    return { ...clearedAuth(agent), [configEnvVar(agent)]: dir };
   }
 
   const secret = decryptSecret(row.config.secretEnc ?? null);
@@ -256,15 +300,15 @@ export function buildLoginEnv(
   if (row.kind === 'token') {
     if (!secret) return {};
     return agent === 'claude-code'
-      ? { CLAUDE_CODE_OAUTH_TOKEN: secret }
-      : { OPENAI_API_KEY: secret };
+      ? { ...clearedAuth(agent), ANTHROPIC_AUTH_TOKEN: secret }
+      : { ...clearedAuth(agent), OPENAI_API_KEY: secret };
   }
 
   // custom
   const baseUrl = (row.config.baseUrl ?? '').trim();
   if (!baseUrl) return {};
   if (agent === 'claude-code') {
-    const env: Record<string, string> = { ANTHROPIC_BASE_URL: baseUrl };
+    const env: Record<string, string> = { ...clearedAuth(agent), ANTHROPIC_BASE_URL: baseUrl };
     if (secret) {
       env[row.config.authScheme === 'token' ? 'ANTHROPIC_AUTH_TOKEN' : 'ANTHROPIC_API_KEY'] =
         secret;
@@ -275,7 +319,7 @@ export function buildLoginEnv(
     }
     return env;
   }
-  const env: Record<string, string> = { OPENAI_BASE_URL: baseUrl };
+  const env: Record<string, string> = { ...clearedAuth(agent), OPENAI_BASE_URL: baseUrl };
   if (secret) env['OPENAI_API_KEY'] = secret;
   return env;
 }
