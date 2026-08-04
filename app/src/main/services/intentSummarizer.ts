@@ -92,16 +92,40 @@ function readRecentTurn(transcriptPath: string): {
   };
 }
 
+/** Merge a login env override onto the parent process env for a spawned
+ *  `claude` call. A '' value is buildLoginEnv's "unset" sentinel — delete
+ *  the inherited var rather than pass an empty string (which some CLIs
+ *  treat as "set but blank"). Returns undefined when there's nothing to
+ *  override, so the caller inherits process.env as before. */
+function mergeLoginEnv(
+  overrides: Record<string, string> | undefined
+): NodeJS.ProcessEnv | undefined {
+  if (!overrides || Object.keys(overrides).length === 0) return undefined;
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const [k, v] of Object.entries(overrides)) {
+    if (v === '') delete env[k];
+    else env[k] = v;
+  }
+  return env;
+}
+
 /** Run Haiku via the Claude CLI. Returns the trimmed summary string,
- *  or null on any error. */
-async function callHaiku(sessionId: string, prompt: string): Promise<string | null> {
+ *  or null on any error. `loginEnv` (from buildLoginEnv) points the call
+ *  at the session's own login so an isolated/browser/token login is used
+ *  instead of the machine's global CLI auth. */
+async function callHaiku(
+  sessionId: string,
+  prompt: string,
+  loginEnv?: Record<string, string>,
+): Promise<string | null> {
   const t0 = Date.now();
   trace('SUMM_HAIKU_START', { sid: shortSid(sessionId), promptLen: prompt.length });
   try {
+    const env = mergeLoginEnv(loginEnv);
     const { stdout } = await execFileP(
       'claude',
       ['-p', '--model', MODEL, prompt],
-      { timeout: TIMEOUT_MS }
+      { timeout: TIMEOUT_MS, ...(env ? { env } : {}) }
     );
     const trimmed = stdout
       .trim()
@@ -146,6 +170,10 @@ export interface SummarizeArgs {
    *  too") still produce a meaningful chip — Haiku can keep the old
    *  summary as-is, refine it, or replace it when the user pivots. */
   previousSummary?: string | null;
+  /** Env override (from buildLoginEnv) so the summariser's `claude` call
+   *  authenticates with the session's own login rather than the global
+   *  machine login. Empty/omitted → inherit the parent env. */
+  loginEnv?: Record<string, string>;
 }
 
 /**
@@ -220,7 +248,7 @@ export async function summarizeSession(
       : '') +
     'Summary:';
 
-  return callHaiku(args.sessionId, prompt);
+  return callHaiku(args.sessionId, prompt, args.loginEnv);
 }
 
 /** Strip ANSI escape sequences and other terminal control codes so
@@ -243,6 +271,9 @@ export interface SummarizeTerminalArgs {
   force?: boolean;
   /** The session's current `last_summary` from the DB, if any. */
   previousSummary?: string | null;
+  /** Env override (from buildLoginEnv) so the summariser's `claude` call
+   *  authenticates with the session's own login. */
+  loginEnv?: Record<string, string>;
 }
 
 /** Same shape as summarizeSession but pulls context from a terminal's
@@ -283,5 +314,5 @@ export async function summarizeTerminal(
     text +
     '\n\nSummary:';
 
-  return callHaiku(args.sessionId, prompt);
+  return callHaiku(args.sessionId, prompt, args.loginEnv);
 }

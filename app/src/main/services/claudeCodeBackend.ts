@@ -141,6 +141,11 @@ export class ClaudeCodeBackend implements AgentBackend {
       BATON_SESSION_ID: opts.sessionId,
       ...(opts.env ?? {}),
     } as Record<string, string>;
+    // A login env sets conflicting inherited auth vars to '' to mean
+    // "unset" (see buildLoginEnv) — otherwise an ANTHROPIC_AUTH_TOKEN /
+    // ANTHROPIC_API_KEY in the parent shell env would shadow the selected
+    // login and the session would keep using the wrong (used-up) account.
+    for (const k of Object.keys(env)) if (env[k] === '') delete env[k];
 
     const args: string[] = ['--settings', settingsPath];
     if (opts.resumeAgentSessionId) {
@@ -310,6 +315,9 @@ export class ClaudeCodeBackend implements AgentBackend {
       BATON_SESSION_ID: opts.sessionId,
       ...(opts.env ?? {}),
     };
+    // Drop '' sentinels (buildLoginEnv's "unset" marker) — don't ship
+    // empty auth vars to the remote shell.
+    for (const k of Object.keys(remoteEnv)) if (remoteEnv[k] === '') delete remoteEnv[k];
 
     // Wrap the claude exec in `bash -ilc` to match the probe (see the
     // long comment above on the probe). Without -i, Ubuntu/Debian's

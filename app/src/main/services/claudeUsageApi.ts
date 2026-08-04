@@ -62,7 +62,10 @@ interface RawApiResponse {
 
 const EMPTY_WINDOW: UsageWindow = { utilization: 0, resetsAt: null };
 
-let cache: UsageResponse | null = null;
+/** Per-token-source cache. Keyed so the global login, a pasted-token
+ *  login, and each browser login are cached independently. */
+const caches = new Map<string, UsageResponse>();
+const inflights = new Map<string, Promise<UsageResponse>>();
 
 function getAccessTokenFromKeychain(): string | null {
   if (process.platform !== 'darwin') return null;
@@ -80,9 +83,8 @@ function getAccessTokenFromKeychain(): string | null {
   return null;
 }
 
-function getAccessTokenFromCredentialsFile(): string | null {
+function readCredentialsFile(p: string): string | null {
   try {
-    const p = path.join(os.homedir(), '.claude', '.credentials.json');
     if (!fs.existsSync(p)) return null;
     const creds = JSON.parse(fs.readFileSync(p, 'utf8')) as KeychainCredentials;
     return creds.claudeAiOauth?.accessToken ?? null;
@@ -91,8 +93,20 @@ function getAccessTokenFromCredentialsFile(): string | null {
   }
 }
 
+function getAccessTokenFromCredentialsFile(): string | null {
+  return readCredentialsFile(path.join(os.homedir(), '.claude', '.credentials.json'));
+}
+
 function getAccessToken(): string | null {
   return getAccessTokenFromKeychain() ?? getAccessTokenFromCredentialsFile();
+}
+
+/** Access token for a browser login stored in its own config dir. Claude
+ *  Code writes `.credentials.json` there when CLAUDE_CONFIG_DIR is set
+ *  (best-effort: on macOS it may instead use the shared keychain, in
+ *  which case this returns null and the meter reports "no credentials"). */
+function getAccessTokenFromDir(dir: string): string | null {
+  return readCredentialsFile(path.join(dir, '.credentials.json'));
 }
 
 function getClaudeCodeVersion(): string {
@@ -113,8 +127,7 @@ function getClaudeCodeVersion(): string {
   }
 }
 
-async function fetchOnce(): Promise<UsageResponse> {
-  const token = getAccessToken();
+async function fetchOnce(token: string | null): Promise<UsageResponse> {
   if (!token) {
     return {
       fiveH: EMPTY_WINDOW,
@@ -187,20 +200,53 @@ async function fetchOnce(): Promise<UsageResponse> {
   };
 }
 
-let inflight: Promise<UsageResponse> | null = null;
+/**
+ * Fetch usage for one token source, caching per `key`. `resolveToken`
+ * is only called on a cache miss so we don't hit the keychain / disk on
+ * every poll. Returns a fresh value when the cache is older than
+ * CACHE_TTL_MS (or never warmed); reuses the cached value otherwise.
+ */
+async function getUsageKeyed(
+  key: string,
+  resolveToken: () => string | null,
+  opts: { force?: boolean } = {}
+): Promise<UsageResponse> {
+  const cached = caches.get(key);
+  if (!opts.force && cached && Date.now() - cached.lastUpdated < CACHE_TTL_MS) {
+    return cached;
+  }
+  const existing = inflights.get(key);
+  if (existing) return existing;
+  const p = fetchOnce(resolveToken())
+    .then((res) => { caches.set(key, res); return res; })
+    .finally(() => { inflights.delete(key); });
+  inflights.set(key, p);
+  return p;
+}
 
 /**
- * Fetch the user's current plan utilization. Returns a fresh value
- * when the cache is older than CACHE_TTL_MS (or never warmed); reuses
- * the cached value otherwise. Pass { force: true } to bypass.
+ * Fetch the machine's default (global) plan utilization. Pass
+ * { force: true } to bypass the cache.
  */
 export async function getUsage(opts: { force?: boolean } = {}): Promise<UsageResponse> {
-  if (!opts.force && cache && Date.now() - cache.lastUpdated < CACHE_TTL_MS) {
-    return cache;
-  }
-  if (inflight) return inflight;
-  inflight = fetchOnce()
-    .then((res) => { cache = res; return res; })
-    .finally(() => { inflight = null; });
-  return inflight;
+  return getUsageKeyed('global', getAccessToken, opts);
+}
+
+/** Fetch usage for a login whose OAuth token we hold directly (a pasted
+ *  `token` login). */
+export async function getUsageForToken(
+  key: string,
+  token: string | null,
+  opts: { force?: boolean } = {}
+): Promise<UsageResponse> {
+  return getUsageKeyed(key, () => token, opts);
+}
+
+/** Fetch usage for a browser login stored in its own config dir. */
+export async function getUsageForConfigDir(
+  key: string,
+  dir: string,
+  opts: { force?: boolean } = {}
+): Promise<UsageResponse> {
+  return getUsageKeyed(key, () => getAccessTokenFromDir(dir), opts);
 }

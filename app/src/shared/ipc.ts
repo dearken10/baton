@@ -462,7 +462,7 @@ export type AgentAccountId = z.infer<typeof AgentAccountId>;
  *   browser → a separate account signed in via the browser, stored in a
  *     baton-managed config dir (CLAUDE_CONFIG_DIR / CODEX_HOME).
  *   custom → a custom API endpoint / gateway (base URL + key).
- *   token → a pasted long-lived token (Claude: CLAUDE_CODE_OAUTH_TOKEN
+ *   token → a pasted long-lived token (Claude: ANTHROPIC_AUTH_TOKEN
  *     from `claude setup-token`; Codex: an OpenAI API key). */
 export const LoginKind = z.enum(['global', 'browser', 'custom', 'token']);
 export type LoginKind = z.infer<typeof LoginKind>;
@@ -504,6 +504,21 @@ export const LoginSessionStatus = z.object({
   label: z.string().nullable(),
 });
 export type LoginSessionStatus = z.infer<typeof LoginSessionStatus>;
+
+/** Plan-usage for one login session, for the per-login usage meters in
+ *  the titlebar. Only sessions that can report usage are included:
+ *  Claude global/token/browser and Codex global/browser. Custom
+ *  endpoints (and Codex token/custom) can't be measured and are omitted. */
+const UsageListItem = z.object({
+  loginSessionId: z.string(),
+  /** The login session's display name — shown on hover. */
+  name: z.string(),
+  agent: AgentAccountId,
+  stats: UsageGetStatsResponse,
+});
+export type UsageListItem = z.infer<typeof UsageListItem>;
+const UsageListRequest = z.object({});
+const UsageListResponse = z.object({ items: z.array(UsageListItem) });
 
 const LoginSessionListRequest = z.object({});
 const LoginSessionListResponse = z.object({ sessions: z.array(LoginSession) });
@@ -622,6 +637,16 @@ const SessionSetModelRequest = z.object({
   model: z.string().nullable(),
 });
 const SessionSetModelResponse = z.object({ session: Session });
+
+/** Persist a new login session for this agent session and restart it
+ *  under that login (using `--resume` so the conversation history
+ *  survives). `loginSessionId: null` → fall back to the project default
+ *  for this backend (→ built-in global). */
+const SessionSetLoginSessionIdRequest = z.object({
+  sessionId: SessionId,
+  loginSessionId: z.string().nullable(),
+});
+const SessionSetLoginSessionIdResponse = z.object({ session: Session });
 
 /** Start a fresh Claude session inside an existing (ended) session's
  *  cwd, reusing the same baton session id. No `--resume` — the prior
@@ -794,6 +819,12 @@ const ShellOpenPathResponse = z.object({ ok: z.boolean() });
 const ShellOpenTerminalRequest = z.object({ absPath: z.string().min(1) });
 const ShellOpenTerminalResponse = z.object({ ok: z.boolean(), error: z.string().nullable() });
 
+/** Hand an external http(s) URL off to the OS default browser. Used for
+ *  links clicked in a terminal that aren't a local dev server (those
+ *  still open in the in-app browser tab). */
+const ShellOpenExternalRequest = z.object({ url: z.string().min(1) });
+const ShellOpenExternalResponse = z.object({ ok: z.boolean(), error: z.string().nullable() });
+
 /** Hand off the active file to a specific external editor. URL-scheme
  *  approach for the GUI editors that register one (VS Code, Cursor);
  *  CLI spawn for Zed. PRD F6.6. */
@@ -945,6 +976,17 @@ const FileCreateRequest = z.object({
   sessionId: SessionId.optional(),
 });
 const FileCreateResponse = z.object({ absPath: z.string() });
+
+/** Create a new directory at `absPath`. Refuses to clobber an existing
+ *  entry. Intermediate parents are created as needed (mkdir -p), so
+ *  paths like "src/new/pkg" relative to the worktree root work without
+ *  the caller pre-creating the folders. Goes through the session's Fs
+ *  so it works for remote projects too. */
+const FileMkdirRequest = z.object({
+  absPath: z.string().min(1),
+  sessionId: SessionId.optional(),
+});
+const FileMkdirResponse = z.object({ absPath: z.string() });
 
 const FileDeleteRequest = z.object({
   absPath: z.string().min(1),
@@ -1159,6 +1201,7 @@ export const ControlVerbs = {
   'session.list':   { request: Empty, response: SessionListResponse },
   'usage.getStats':      { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.getCodexStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
+  'usage.list':          { request: UsageListRequest,     response: UsageListResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },
@@ -1167,6 +1210,7 @@ export const ControlVerbs = {
   'session.revertToTurn': { request: SessionRevertToTurnRequest, response: SessionRevertToTurnResponse },
   'session.setPermissionMode': { request: SessionSetPermissionModeRequest, response: SessionSetPermissionModeResponse },
   'session.setModel':   { request: SessionSetModelRequest,   response: SessionSetModelResponse },
+  'session.setLoginSessionId': { request: SessionSetLoginSessionIdRequest, response: SessionSetLoginSessionIdResponse },
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
@@ -1189,6 +1233,7 @@ export const ControlVerbs = {
   'git.pull':              { request: GitPullRequest,              response: GitPullResponse },
   'shell.openPath':        { request: ShellOpenPathRequest,       response: ShellOpenPathResponse },
   'shell.openTerminal':    { request: ShellOpenTerminalRequest,   response: ShellOpenTerminalResponse },
+  'shell.openExternal':    { request: ShellOpenExternalRequest,   response: ShellOpenExternalResponse },
   'editor.openIn':         { request: EditorOpenInRequest,        response: EditorOpenInResponse },
   'file.read':             { request: FileReadRequest,            response: FileReadResponse },
   'file.readBinary':       { request: FileReadBinaryRequest,      response: FileReadBinaryResponse },
@@ -1198,6 +1243,7 @@ export const ControlVerbs = {
   'file.rename':           { request: FileRenameRequest,          response: FileRenameResponse },
   'file.move':             { request: FileMoveRequest,            response: FileMoveResponse },
   'file.create':           { request: FileCreateRequest,          response: FileCreateResponse },
+  'file.mkdir':            { request: FileMkdirRequest,           response: FileMkdirResponse },
   'file.delete':           { request: FileDeleteRequest,          response: FileDeleteResponse },
   'file.revealInFinder':   { request: FileRevealInFinderRequest,  response: FileRevealInFinderResponse },
 

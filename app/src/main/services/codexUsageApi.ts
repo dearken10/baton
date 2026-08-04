@@ -71,9 +71,11 @@ interface RolloutEvent {
 
 const EMPTY_WINDOW: UsageWindow = { utilization: 0, resetsAt: null };
 
-let cache: CodexUsageResponse | null = null;
+/** Per-sessions-root cache. Keyed so the global login and each browser
+ *  login (with its own CODEX_HOME) are cached independently. */
+const caches = new Map<string, CodexUsageResponse>();
 
-function codexSessionsRoot(): string {
+function defaultCodexSessionsRoot(): string {
   return process.env['CODEX_HOME']
     ? path.join(process.env['CODEX_HOME'] as string, 'sessions')
     : path.join(os.homedir(), '.codex', 'sessions');
@@ -81,8 +83,7 @@ function codexSessionsRoot(): string {
 
 /** Iterate rollout file paths newest-first across the last
  *  MAX_DAYS_BACK days. Stops after MAX_FILES_PER_REFRESH yields. */
-function* recentRolloutFiles(): Iterable<string> {
-  const root = codexSessionsRoot();
+function* recentRolloutFiles(root: string): Iterable<string> {
   let yielded = 0;
   const today = new Date();
   for (let i = 0; i < MAX_DAYS_BACK; i++) {
@@ -144,11 +145,11 @@ function toWindow(w: RateLimitWindow | null | undefined): UsageWindow {
   };
 }
 
-function refresh(): CodexUsageResponse {
+function refresh(root: string): CodexUsageResponse {
   let rateLimits: RateLimits | null = null;
   let filesScanned = 0;
   try {
-    for (const filePath of recentRolloutFiles()) {
+    for (const filePath of recentRolloutFiles(root)) {
       filesScanned++;
       const found = extractRateLimitsFromFile(filePath);
       if (found) { rateLimits = found; break; }
@@ -182,12 +183,32 @@ function refresh(): CodexUsageResponse {
   };
 }
 
-/** Fetch the user's current Codex plan utilisation. Cached for
- *  CACHE_TTL_MS unless `force: true`. */
-export function getCodexUsage(opts: { force?: boolean } = {}): CodexUsageResponse {
-  if (!opts.force && cache && Date.now() - cache.lastUpdated < CACHE_TTL_MS) {
-    return cache;
+function getCodexUsageKeyed(
+  key: string,
+  root: string,
+  opts: { force?: boolean } = {}
+): CodexUsageResponse {
+  const cached = caches.get(key);
+  if (!opts.force && cached && Date.now() - cached.lastUpdated < CACHE_TTL_MS) {
+    return cached;
   }
-  cache = refresh();
-  return cache;
+  const res = refresh(root);
+  caches.set(key, res);
+  return res;
+}
+
+/** Fetch the machine's default (global) Codex plan utilisation. Cached
+ *  for CACHE_TTL_MS unless `force: true`. */
+export function getCodexUsage(opts: { force?: boolean } = {}): CodexUsageResponse {
+  return getCodexUsageKeyed('global', defaultCodexSessionsRoot(), opts);
+}
+
+/** Fetch Codex usage for a browser login stored under its own
+ *  CODEX_HOME (`<configDir>/sessions`). */
+export function getCodexUsageForHome(
+  key: string,
+  codexHome: string,
+  opts: { force?: boolean } = {}
+): CodexUsageResponse {
+  return getCodexUsageKeyed(key, path.join(codexHome, 'sessions'), opts);
 }

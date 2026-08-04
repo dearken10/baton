@@ -340,7 +340,7 @@ function LoginEditor({
     <>
       Run <code className="mono">claude setup-token</code> in a terminal to
       generate a long-lived token, then paste it here. Sets{' '}
-      <code className="mono">CLAUDE_CODE_OAUTH_TOKEN</code>.
+      <code className="mono">ANTHROPIC_AUTH_TOKEN</code>.
     </>
   ) : (
     <>

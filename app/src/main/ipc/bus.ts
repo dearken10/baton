@@ -55,6 +55,7 @@ import { readSessionTurns } from '../services/sessionTurns.js';
 import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
+import { buildUsageList } from '../services/usageList.js';
 import { getDatabase } from '../database/index.js';
 import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
 
@@ -191,8 +192,8 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const session = getSessionManager().setTitle(req.sessionId, req.title);
     return { session };
   },
-  'session.setJiraTaskId': (req) => {
-    const session = getSessionManager().setJiraTaskId(req.sessionId, req.jiraTaskId);
+  'session.setJiraTaskId': async (req) => {
+    const session = await getSessionManager().setJiraTaskId(req.sessionId, req.jiraTaskId);
     return { session };
   },
 
@@ -277,6 +278,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   }),
   'usage.getStats': async () => getUsage(),
   'usage.getCodexStats': () => getCodexUsage(),
+  'usage.list': async () => ({ items: await buildUsageList() }),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
@@ -333,6 +335,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       ...(req.permissionMode ? { permissionMode: req.permissionMode } : {}),
       ...(req.model !== undefined ? { model: req.model } : {}),
       ...(req.jiraTaskId ? { jiraTaskId: req.jiraTaskId } : {}),
+      // The renderer's chosen login (New Session dialog). Without this the
+      // pick is silently dropped and the spawn falls back to the project
+      // default → global, inheriting the shell's auth vars.
+      ...(req.loginSessionId ? { loginSessionId: req.loginSessionId } : {}),
     });
     return { session };
   },
@@ -368,6 +374,13 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   },
   'session.setModel': async (req) => {
     const session = await getSessionManager().setModel(req.sessionId, req.model);
+    return { session };
+  },
+  'session.setLoginSessionId': async (req) => {
+    const session = await getSessionManager().setLoginSessionId(
+      req.sessionId,
+      req.loginSessionId,
+    );
     return { session };
   },
   'session.delete': async (req) => {
@@ -604,6 +617,20 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
       };
     }
   },
+  'shell.openExternal': async (req) => {
+    // Route an external http(s) link to the OS default browser. The
+    // renderer only calls this for non-localhost URLs; localhost dev
+    // servers still render in the in-app browser tab.
+    try {
+      await shell.openExternal(req.url);
+      return { ok: true, error: null };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  },
   'editor.openIn': async (req) => {
     // VS Code + Cursor register URL schemes that handle file:// paths.
     // Zed doesn't reliably ship a URL scheme on every install, so we
@@ -785,6 +812,21 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     // so we never silently truncate an existing file.
     const handle = await fsp.open(req.absPath, 'wx');
     await handle.close();
+    return { absPath: req.absPath };
+  },
+  'file.mkdir': async (req) => {
+    const base = path.basename(req.absPath);
+    if (!base || base === '.' || base === '..') {
+      throw new Error('Invalid name.');
+    }
+    const fs = req.sessionId ? getFsForSession(req.sessionId) ?? getFs('local') : getFs('local');
+    if (await fs.exists(req.absPath)) {
+      throw new Error(`"${base}" already exists in this folder.`);
+    }
+    // recursive: true creates intermediate parents (mkdir -p) so nested
+    // paths like "a/b/c" work in one go. The exists() check above still
+    // guards against clobbering an existing leaf.
+    await fs.mkdir(req.absPath, { recursive: true });
     return { absPath: req.absPath };
   },
   'file.delete': async (req) => {

@@ -39,6 +39,9 @@ export function buildFileMenuItems(opts: {
    *  the Files panel passes this; the Git panel leaves it undefined
    *  (and hits files, not dirs, anyway). */
   onRequestNewFile?: (parentAbsPath: string) => void;
+  /** Open a "new folder" prompt with `parentAbsPath` preselected. Only
+   *  the Files panel passes this. */
+  onRequestNewFolder?: (parentAbsPath: string) => void;
   /** Pass the active session id so file ops on a remote project go
    *  through SSH rather than the local fs. Undefined for places where
    *  the menu has no session context (e.g. project-level actions). */
@@ -48,7 +51,7 @@ export function buildFileMenuItems(opts: {
    *  "Delete (move to Trash)" since remote Linux has no trash. */
   isRemote?: boolean;
 }): MenuItem[] {
-  const { absPath, isDir, isRoot = false, openFile, onChanged, onRequestRename, onRequestNewFile, sessionId, isRemote } = opts;
+  const { absPath, isDir, isRoot = false, openFile, onChanged, onRequestRename, onRequestNewFile, onRequestNewFolder, sessionId, isRemote } = opts;
   const items: MenuItem[] = [];
   const sidPayload = sessionId ? { sessionId } : {};
 
@@ -56,6 +59,13 @@ export function buildFileMenuItems(opts: {
     items.push({
       label: 'New File…',
       onClick: () => onRequestNewFile(absPath),
+    });
+  }
+
+  if (isDir && onRequestNewFolder) {
+    items.push({
+      label: 'New Folder…',
+      onClick: () => onRequestNewFolder(absPath),
     });
   }
 

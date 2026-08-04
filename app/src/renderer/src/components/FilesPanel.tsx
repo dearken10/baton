@@ -65,6 +65,9 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   // when triggered from the toolbar; set to a subdir when triggered
   // from a directory's context menu.
   const [newFileParent, setNewFileParent] = useState<string | null>(null);
+  // "New folder" dialog target — like `newFileParent`, the directory
+  // the new folder will be created inside.
+  const [newFolderParent, setNewFolderParent] = useState<string | null>(null);
   // Absolute path of the directory currently being hovered with a drag,
   // or null if no drag is in progress. Drives the drop-target highlight.
   const [dragOverDir, setDragOverDir] = useState<string | null>(null);
@@ -97,6 +100,9 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
   }, []);
   const onRequestNewFile = useCallback((parentAbsPath: string) => {
     setNewFileParent(parentAbsPath);
+  }, []);
+  const onRequestNewFolder = useCallback((parentAbsPath: string) => {
+    setNewFolderParent(parentAbsPath);
   }, []);
 
   const loadChildren = useCallback(async (relPath: string): Promise<void> => {
@@ -172,6 +178,43 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
     }
   }
 
+  async function submitNewFolder(name: string): Promise<void> {
+    const parent = newFolderParent;
+    setNewFolderParent(null);
+    if (!parent) return;
+    // Allow forward-slash segments so "a/b/c" creates the intermediate
+    // dirs too — main does mkdir -p. Reject backslashes, leading slashes
+    // and reserved segments (would escape the worktree).
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.startsWith('/') || trimmed.includes('\\') ||
+        trimmed.split('/').some((s) => s === '' || s === '.' || s === '..')) {
+      alert('Invalid folder name.');
+      return;
+    }
+    const absPath = `${parent}/${trimmed}`;
+    try {
+      await window.baton.call('file.mkdir', { absPath, sessionId });
+      // Expand the parent chain plus every newly-created segment so the
+      // user sees the new (empty) folder revealed in the tree.
+      const parentRel = parent === worktreePath
+        ? ''
+        : parent.slice(worktreePath.length + 1);
+      setOpenPaths((prev) => {
+        const next = new Set(prev);
+        let acc = parentRel;
+        next.add(acc);
+        for (const seg of trimmed.split('/')) {
+          acc = acc ? `${acc}/${seg}` : seg;
+          next.add(acc);
+        }
+        return next;
+      });
+      onChanged();
+    } catch (err) {
+      alert(`Create folder failed: ${String(err)}`);
+    }
+  }
+
   function openContextMenu(e: React.MouseEvent, absPath: string, isDir: boolean, isRoot: boolean): void {
     e.preventDefault();
     setCtxMenu({ x: e.clientX, y: e.clientY, absPath, isDir, isRoot });
@@ -238,6 +281,14 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
         >
           + New File
         </button>
+        <button
+          type="button"
+          className="btn ghost file-tree-new"
+          onClick={() => setNewFolderParent(worktreePath)}
+          title="Create a new folder in the worktree root"
+        >
+          + New Folder
+        </button>
       </div>
       <TreeNode
         node={root}
@@ -266,6 +317,7 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
             onChanged,
             onRequestRename,
             onRequestNewFile,
+            onRequestNewFolder,
             sessionId,
             isRemote,
           })}
@@ -293,6 +345,19 @@ export function FilesPanel({ sessionId, worktreePath, refreshKey }: Props): JSX.
           confirmLabel="Create"
           onCancel={() => setNewFileParent(null)}
           onConfirm={(v) => void submitNewFile(v)}
+        />
+      ) : null}
+      {newFolderParent ? (
+        <PromptDialog
+          title="New Folder"
+          label={newFolderParent === worktreePath
+            ? 'Folder name (relative to worktree root)'
+            : `Folder name in ${newFolderParent.split('/').pop() ?? ''}`}
+          placeholder="new-folder"
+          initialValue=""
+          confirmLabel="Create"
+          onCancel={() => setNewFolderParent(null)}
+          onConfirm={(v) => void submitNewFolder(v)}
         />
       ) : null}
     </div>

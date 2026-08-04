@@ -1,45 +1,44 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { ControlVerb, ResponseOf } from '@shared/ipc.js';
+import type { AgentAccountId, ResponseOf, UsageListItem } from '@shared/ipc.js';
 
 /**
- * Plan-usage chip + popup, modeled on Nimbalyst. The chip is a small
- * circular progress showing the higher of the two windows (the
- * binding constraint at a glance). Click → popup with both windows,
- * each showing % + bar + a live "Resets in Xh Ym" countdown.
+ * Plan-usage chips + popup, modeled on Nimbalyst. Each chip is a small
+ * circular progress showing the higher of the two windows (the binding
+ * constraint at a glance). Click → popup with both windows, each showing
+ * % + bar + a live "Resets in Xh Ym" countdown.
  *
- * Data sources:
- *   - source="claude" → Anthropic OAuth-usage API (via main process)
- *   - source="codex"  → rate_limits embedded in Codex rollout JSONL
+ * One chip is rendered per login session that can report usage (the
+ * `usage.list` verb decides which). Hovering a chip shows the login
+ * session name so multiple Claude / Codex logins can be told apart.
+ *
+ * Data sources (resolved per login in the main process):
+ *   - Claude → Anthropic OAuth-usage API (keychain / token / config dir)
+ *   - Codex  → rate_limits embedded in Codex rollout JSONL
  *
  * Both come back in the same shape, so the UI is identical; the only
- * differences are the verb to call, the popup title, and the support
- * link in the footer.
+ * per-agent differences are the popup subtitle and the status link.
  */
 
 type Stats = ResponseOf<'usage.getStats'>;
 type Win = Stats['fiveH'];
 
-interface Source {
-  /** IPC verb that returns a UsageGetStatsResponse. */
-  verb: Extract<ControlVerb, `usage.${string}`>;
-  /** Title shown in the popup. */
+interface AgentMeta {
+  /** Brand label shown as the popup subtitle. */
   title: string;
   /** Link in the popup footer. */
   statusUrl: string;
-  /** When true, render nothing if the source has no data yet. Used
-   *  so a user without a Codex setup doesn't see an empty chip. */
+  /** When true, hide a chip that has no usable signal yet. Keeps a
+   *  user without a Codex setup from seeing an empty ring. */
   hideWhenEmpty: boolean;
 }
 
-const SOURCES: Record<'claude' | 'codex', Source> = {
-  claude: {
-    verb: 'usage.getStats',
+const AGENTS: Record<AgentAccountId, AgentMeta> = {
+  'claude-code': {
     title: 'Claude Usage',
     statusUrl: 'https://status.anthropic.com',
     hideWhenEmpty: false,
   },
   codex: {
-    verb: 'usage.getCodexStats',
     title: 'Codex Usage',
     statusUrl: 'https://status.openai.com',
     hideWhenEmpty: true,
@@ -51,33 +50,56 @@ const SOURCES: Record<'claude' | 'codex', Source> = {
  *  label stays approximately fresh. */
 const POLL_MS = 60_000;
 
-interface Props {
-  /** Which backend to show usage for. Defaults to Claude for backward
-   *  compatibility with the original single-indicator call site. */
-  source?: 'claude' | 'codex';
-}
-
-export function UsageBars({ source = 'claude' }: Props = {}): JSX.Element | null {
-  const cfg = SOURCES[source];
-  const [stats, setStats] = useState<Stats | null>(null);
-  const [open, setOpen] = useState(false);
+/** Container: fetch usage for every login session and render one chip
+ *  each. Replaces the previous fixed pair of Claude + Codex chips. */
+export function UsageMeters(): JSX.Element | null {
+  const [items, setItems] = useState<UsageListItem[] | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async (): Promise<void> => {
     setRefreshing(true);
     try {
-      const s = await window.baton.call(cfg.verb, {});
-      setStats(s);
-    } catch { /* leave previous reading */ }
+      const res = await window.baton.call('usage.list', {});
+      setItems(res.items);
+    } catch { /* leave previous readings */ }
     finally { setRefreshing(false); }
-  }, [cfg.verb]);
+  }, []);
 
   useEffect(() => {
     void refresh();
     const id = window.setInterval(() => { void refresh(); }, POLL_MS);
     return () => window.clearInterval(id);
   }, [refresh]);
+
+  if (!items) {
+    return <div className="usage-wrapper usage-loading">…</div>;
+  }
+
+  return (
+    <>
+      {items.map((item) => (
+        <UsageChip
+          key={item.loginSessionId}
+          item={item}
+          refreshing={refreshing}
+          onRefresh={() => void refresh()}
+        />
+      ))}
+    </>
+  );
+}
+
+interface ChipProps {
+  item: UsageListItem;
+  refreshing: boolean;
+  onRefresh: () => void;
+}
+
+function UsageChip({ item, refreshing, onRefresh }: ChipProps): JSX.Element | null {
+  const cfg = AGENTS[item.agent];
+  const stats = item.stats;
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
 
   // Close popup on outside click / Escape.
   useEffect(() => {
@@ -94,11 +116,6 @@ export function UsageBars({ source = 'claude' }: Props = {}): JSX.Element | null
     };
   }, [open]);
 
-  if (!stats) {
-    if (cfg.hideWhenEmpty) return null;
-    return <div className="usage-wrapper usage-loading">…</div>;
-  }
-
   // Pct shown in the chip = whichever window is currently binding.
   // Errored API → leave the ring empty + show a `?`.
   const fiveHPct  = clampPct(stats.fiveH.utilization);
@@ -112,10 +129,15 @@ export function UsageBars({ source = 'claude' }: Props = {}): JSX.Element | null
 
   // Codex: when both windows are zero AND there's an error (e.g. "no
   // rate_limits recorded yet"), the indicator carries no signal — hide
-  // it instead of showing an empty ring next to the Claude chip.
+  // it instead of showing an empty ring.
   if (cfg.hideWhenEmpty && stats.error && fiveHPct === 0 && sevenDPct === 0) {
     return null;
   }
+
+  const source = item.agent === 'claude-code' ? 'claude' : 'codex';
+  const tip = stats.error
+    ? `${item.name}: ${stats.error}`
+    : `${item.name} — ${chipPct.toFixed(0)}% of plan used — click for detail`;
 
   return (
     <div className={`usage-wrapper usage-source-${source}`} ref={ref}>
@@ -125,17 +147,18 @@ export function UsageBars({ source = 'claude' }: Props = {}): JSX.Element | null
         onClick={() => setOpen((v) => !v)}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={stats.error ?? `${cfg.title}: ${chipPct.toFixed(0)}% of plan used — click for detail`}
+        title={tip}
       >
         <CircleProgress pct={chipPct} tone={tone} error={!!stats.error} />
       </button>
       {open ? (
         <UsagePopup
           stats={stats}
-          title={cfg.title}
+          title={item.name}
+          subtitle={cfg.title}
           statusUrl={cfg.statusUrl}
           refreshing={refreshing}
-          onRefresh={() => void refresh()}
+          onRefresh={onRefresh}
         />
       ) : null}
     </div>
@@ -177,12 +200,14 @@ function CircleProgress(
 interface PopupProps {
   stats: Stats;
   title: string;
+  /** Agent brand line shown under the (login-session) title. */
+  subtitle: string;
   statusUrl: string;
   refreshing: boolean;
   onRefresh: () => void;
 }
 
-function UsagePopup({ stats, title, statusUrl, refreshing, onRefresh }: PopupProps): JSX.Element {
+function UsagePopup({ stats, title, subtitle, statusUrl, refreshing, onRefresh }: PopupProps): JSX.Element {
   // Recompute "Resets in" every 30s so the labels don't go stale
   // while the popup is open.
   const [now, setNow] = useState(() => Date.now());
@@ -192,9 +217,12 @@ function UsagePopup({ stats, title, statusUrl, refreshing, onRefresh }: PopupPro
   }, []);
 
   return (
-    <div className="usage-popup" role="dialog" aria-label={title}>
+    <div className="usage-popup" role="dialog" aria-label={`${title} — ${subtitle}`}>
       <div className="usage-popup-head">
-        <span className="usage-popup-title">{title}</span>
+        <span className="usage-popup-title">
+          {title}
+          <span className="usage-popup-subtitle dim">{subtitle}</span>
+        </span>
         <button
           type="button"
           className="usage-popup-refresh"
