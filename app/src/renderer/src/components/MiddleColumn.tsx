@@ -292,10 +292,15 @@ export function MiddleColumn(): JSX.Element {
   }
 
   const [permModeBusy, setPermModeBusy] = useState(false);
-  // Session-info dialog is keyed on the actual session rather than a
-  // boolean so the dialog disappears cleanly if the user switches to
-  // another session while it's open.
-  const [infoFor, setInfoFor] = useState<Session | null>(null);
+  // Session-info dialog is keyed on the session *id*, not a snapshot, so
+  // the dialog always renders the live session from the store. A frozen
+  // copy would go stale after an in-dialog action (login switch, jira
+  // save) restarts/refreshes the session — leaving `loginDirty` stuck
+  // true and the unsaved-changes prompt firing after a completed switch.
+  // Deriving from the store also closes the dialog cleanly if the session
+  // is deleted while open (the record entry disappears → infoFor null).
+  const [infoForId, setInfoForId] = useState<string | null>(null);
+  const infoFor = infoForId ? sessionsRecord[infoForId] ?? null : null;
   async function changePermissionMode(s: Session, next: PermissionMode): Promise<void> {
     if (permModeBusy) return;
     if (next === s.permissionMode) return;
@@ -342,7 +347,7 @@ export function MiddleColumn(): JSX.Element {
             <button
               type="button"
               className="conv-info-btn"
-              onClick={() => setInfoFor(selected)}
+              onClick={() => setInfoForId(selected.id)}
               title="Session info — agent session id, worktree, baton id"
               aria-label="Show session info"
             >
@@ -613,7 +618,7 @@ export function MiddleColumn(): JSX.Element {
       </div>
       <SessionInfoDialog
         session={infoFor}
-        onClose={() => setInfoFor(null)}
+        onClose={() => setInfoForId(null)}
         onCloned={(s) => selectSession(s.id)}
       />
     </main>
