@@ -27,12 +27,17 @@ export function PromptDialog({
 
   useEffect(() => {
     // Focus + select the existing text on open so the user can either
-    // start typing fresh or arrow-edit in place.
+    // start typing fresh or arrow-edit in place. Run once on mount only:
+    // re-running would re-select the text mid-edit (callers pass a fresh
+    // onCancel identity every render, so this must not depend on it).
     const el = inputRef.current;
     if (el) {
       el.focus();
       el.select();
     }
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onCancel();
     };

@@ -18,6 +18,7 @@
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import * as pty from 'node-pty';
 import { safeStorage } from 'electron';
@@ -279,6 +280,60 @@ function clearedAuth(agent: AgentAccountId): Record<string, string> {
   return env;
 }
 
+/** The shared Claude transcript dir — where the app (claudeTranscriptPath)
+ *  and the machine's global login both read/write conversation history. */
+function sharedClaudeProjectsDir(): string {
+  return path.join(os.homedir(), '.claude', 'projects');
+}
+
+/** Point a browser login's `<configDir>/projects` at the shared
+ *  ~/.claude/projects via a symlink, so its conversation transcripts land
+ *  where the app and every other login look. `CLAUDE_CONFIG_DIR` isolates
+ *  BOTH credentials and transcripts; isolating transcripts would break
+ *  `--resume`, intent summaries and the turns viewer (all resolve the
+ *  shared path) and strand history when a session's login is switched. This
+ *  keeps credentials isolated in the config dir while sharing transcripts.
+ *  Best-effort: on any error we leave the login's own projects dir in place.
+ *  (Empirically verified that Claude follows the symlink when writing.) */
+function linkClaudeProjectsToShared(configDir: string): void {
+  try {
+    const shared = sharedClaudeProjectsDir();
+    fs.mkdirSync(shared, { recursive: true });
+    const link = path.join(configDir, 'projects');
+    let st: fs.Stats | null = null;
+    try { st = fs.lstatSync(link); } catch { /* not there yet */ }
+    if (st?.isSymbolicLink()) return; // already linked
+    if (st?.isDirectory()) {
+      // A prior spawn wrote transcripts into the isolated dir — move them
+      // into the shared dir (never clobbering) before replacing with a link.
+      mergeDirInto(link, shared);
+      try { fs.rmSync(link, { recursive: true, force: true }); }
+      catch { return; } // couldn't clear — leave the isolated dir as-is
+    }
+    fs.symlinkSync(shared, link);
+  } catch { /* best-effort — falls back to isolated transcripts */ }
+}
+
+/** Move every `<slug>/<file>` under `src` into `dst`, skipping files that
+ *  already exist in `dst` (never overwrite). Best-effort per entry. */
+function mergeDirInto(src: string, dst: string): void {
+  let slugs: string[] = [];
+  try { slugs = fs.readdirSync(src); } catch { return; }
+  for (const slug of slugs) {
+    const from = path.join(src, slug);
+    try { if (!fs.statSync(from).isDirectory()) continue; } catch { continue; }
+    const to = path.join(dst, slug);
+    try { fs.mkdirSync(to, { recursive: true }); } catch { continue; }
+    let files: string[] = [];
+    try { files = fs.readdirSync(from); } catch { continue; }
+    for (const f of files) {
+      const tf = path.join(to, f);
+      if (fs.existsSync(tf)) continue;
+      try { fs.renameSync(path.join(from, f), tf); } catch { /* skip */ }
+    }
+  }
+}
+
 /** Env override for a spawn, given the resolved login session id and the
  *  backend. Global → {}. Spread into the spawn env by the caller. A value
  *  of '' means "delete the inherited var" — the backends honour this. */
@@ -292,6 +347,10 @@ export function buildLoginEnv(
   if (row.kind === 'browser') {
     const dir = agentConfigDir(row);
     try { fs.mkdirSync(dir, { recursive: true }); } catch { /* best-effort */ }
+    // Keep transcripts in the shared ~/.claude/projects (see helper).
+    // Codex is left isolated: its per-login usage is read from the
+    // isolated <CODEX_HOME>/sessions rollout logs.
+    if (agent === 'claude-code') linkClaudeProjectsToShared(dir);
     return { ...clearedAuth(agent), [configEnvVar(agent)]: dir };
   }
 
