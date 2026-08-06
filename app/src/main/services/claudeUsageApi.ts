@@ -27,6 +27,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -101,12 +102,45 @@ function getAccessToken(): string | null {
   return getAccessTokenFromKeychain() ?? getAccessTokenFromCredentialsFile();
 }
 
-/** Access token for a browser login stored in its own config dir. Claude
- *  Code writes `.credentials.json` there when CLAUDE_CONFIG_DIR is set
- *  (best-effort: on macOS it may instead use the shared keychain, in
- *  which case this returns null and the meter reports "no credentials"). */
+/** Access token for a browser login stored as a file in its own config
+ *  dir. Claude Code writes `.credentials.json` there on Linux/Windows when
+ *  CLAUDE_CONFIG_DIR is set. On macOS it uses the Keychain instead, so this
+ *  returns null there — see getAccessTokenFromKeychainForDir. */
 function getAccessTokenFromDir(dir: string): string | null {
   return readCredentialsFile(path.join(dir, '.credentials.json'));
+}
+
+/** The macOS Keychain service name Claude Code uses for a login's OAuth
+ *  credentials. The default config dir (`~/.claude`) uses the bare
+ *  "Claude Code-credentials"; a custom CLAUDE_CONFIG_DIR is scoped by
+ *  appending "-<first 8 hex of sha256(configDir)>" so multiple accounts
+ *  don't collide. Mirrors Claude Code's own derivation (reverse-engineered
+ *  from the 2.1.x bundle: service = `Claude Code-credentials-${sha256(NFC
+ *  configDir).slice(0,8)}`); the account field is $USER. Version-dependent
+ *  — if a Claude Code update changes the scheme this silently returns no
+ *  token and the meter falls back to the "no credentials" state. */
+function keychainServiceForConfigDir(configDir: string): string {
+  const norm = configDir.normalize('NFC');
+  const hash8 = createHash('sha256').update(norm).digest('hex').slice(0, 8);
+  return `Claude Code-credentials-${hash8}`;
+}
+
+/** Read a browser login's OAuth token from the macOS Keychain. On macOS
+ *  Claude stores it there (not in <configDir>/.credentials.json), under a
+ *  config-dir-scoped service name. Non-macOS / not found → null. */
+function getAccessTokenFromKeychainForDir(dir: string): string | null {
+  if (process.platform !== 'darwin') return null;
+  const service = keychainServiceForConfigDir(dir);
+  try {
+    const out = execSync(
+      `security find-generic-password -s ${JSON.stringify(service)} -w`,
+      { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }
+    ).trim();
+    const creds = JSON.parse(out) as KeychainCredentials;
+    return creds.claudeAiOauth?.accessToken ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function getClaudeCodeVersion(): string {
@@ -242,11 +276,17 @@ export async function getUsageForToken(
   return getUsageKeyed(key, () => token, opts);
 }
 
-/** Fetch usage for a browser login stored in its own config dir. */
+/** Fetch usage for a browser login stored in its own config dir. Token
+ *  source: the config-dir `.credentials.json` (Linux/Windows), falling
+ *  back to the macOS Keychain (where Claude actually stores it on Mac). */
 export async function getUsageForConfigDir(
   key: string,
   dir: string,
   opts: { force?: boolean } = {}
 ): Promise<UsageResponse> {
-  return getUsageKeyed(key, () => getAccessTokenFromDir(dir), opts);
+  return getUsageKeyed(
+    key,
+    () => getAccessTokenFromDir(dir) ?? getAccessTokenFromKeychainForDir(dir),
+    opts
+  );
 }
