@@ -713,9 +713,12 @@ export class SessionManager {
       }
       if (!jiraTaskId) jiraTaskId = extractJiraKey(branch);
 
-      // Resolve the login session for this spawn: explicit override →
-      // persisted choice (resume/respawn) → the project's per-agent
-      // default → the built-in global (handled inside buildLoginEnv).
+      // The session's *explicit* login choice, which is what we persist:
+      // caller override → the value persisted on the row (resume/respawn
+      // don't re-pass it). null = "follow the project default" — we do NOT
+      // fold the default into this, otherwise a session could never be
+      // switched back to follow-default and the info dialog's "Project
+      // default" option would be unreachable.
       let loginSessionId: string | null = opts.loginSessionId ?? null;
       if (!loginSessionId && opts.reuseSessionId) {
         const prev = getDatabase()
@@ -723,13 +726,14 @@ export class SessionManager {
           .get(opts.reuseSessionId) as { login_session_id: string | null } | undefined;
         loginSessionId = prev?.login_session_id ?? null;
       }
-      if (!loginSessionId && (opts.backendId === 'claude-code' || opts.backendId === 'codex')) {
-        const proj = getProject(opts.projectId);
-        loginSessionId =
-          opts.backendId === 'claude-code'
-            ? proj?.claudeLoginSessionId ?? null
-            : proj?.codexLoginSessionId ?? null;
-      }
+      // The *effective* login used to actually authenticate this spawn:
+      // explicit choice → project per-agent default → built-in global
+      // (null, handled inside buildLoginEnv). Ephemeral — never persisted —
+      // so a follow-default session tracks a later default change instead
+      // of being frozen to whatever the default was at first spawn.
+      const effectiveLoginId = this.resolveEffectiveLogin(
+        loginSessionId, opts.projectId, opts.backendId,
+      );
 
       const spawnOpts: {
         sessionId: string;
@@ -760,7 +764,7 @@ export class SessionManager {
       // Shells/mock have neither, so skip them.
       if (opts.backendId === 'claude-code' || opts.backendId === 'codex') {
         const agentEnv: Record<string, string> = {
-          ...buildLoginEnv(loginSessionId, opts.backendId),
+          ...buildLoginEnv(effectiveLoginId, opts.backendId),
           ...buildOtelEnv({
             settings: getOtelSettings(),
             jiraTicket: jiraTaskId,
@@ -769,7 +773,7 @@ export class SessionManager {
         };
         if (Object.keys(agentEnv).length > 0) spawnOpts.env = agentEnv;
         if (opts.backendId === 'codex') {
-          const codexArgs = buildCodexLoginArgs(loginSessionId);
+          const codexArgs = buildCodexLoginArgs(effectiveLoginId);
           if (codexArgs.length > 0) spawnOpts.extraArgs = codexArgs;
         }
       }
@@ -1500,6 +1504,25 @@ export class SessionManager {
     });
   }
 
+  /** Resolve the login a spawn/summariser call should actually
+   *  authenticate with: the session's explicit choice, else the project's
+   *  per-agent default, else null (→ built-in global, handled downstream).
+   *  Kept separate from the *persisted* choice so "follow the project
+   *  default" stays a real, switchable state rather than being frozen to a
+   *  concrete id at spawn time. */
+  private resolveEffectiveLogin(
+    explicitId: string | null,
+    projectId: string,
+    backendId: Session['backendId'],
+  ): string | null {
+    if (explicitId) return explicitId;
+    if (backendId !== 'claude-code' && backendId !== 'codex') return null;
+    const proj = getProject(projectId);
+    return backendId === 'claude-code'
+      ? proj?.claudeLoginSessionId ?? null
+      : proj?.codexLoginSessionId ?? null;
+  }
+
   /**
    * Persist a new login session for an agent session and restart it under
    * that login (using `--resume` so the conversation history survives).
@@ -1957,11 +1980,12 @@ export class SessionManager {
     const live = this.live.get(sessionId);
     const dbRow = getDatabase()
       .prepare(
-        'SELECT claude_session_id, worktree_path, last_summary, title, backend_id, login_session_id ' +
+        'SELECT project_id, claude_session_id, worktree_path, last_summary, title, backend_id, login_session_id ' +
         'FROM sessions WHERE id = ?'
       )
       .get(sessionId) as
       | {
+          project_id: string;
           claude_session_id: string | null;
           worktree_path: string;
           last_summary: string | null;
@@ -2014,9 +2038,19 @@ export class SessionManager {
     // not be logged in when the session runs under an isolated/browser
     // login. A Codex login can't authenticate a `claude` call, so we only
     // resolve it for claude-code backends.
-    const loginSessionId = live?.meta.loginSessionId ?? dbRow?.login_session_id ?? null;
+    // The stored login may be null ("follow project default"), so resolve
+    // the *effective* login the same way spawn does — otherwise the
+    // summariser falls back to global while the session actually runs
+    // under the project default.
+    const projectId = live?.meta.projectId ?? dbRow?.project_id;
+    const explicitLogin = live?.meta.loginSessionId ?? dbRow?.login_session_id ?? null;
     const loginEnv =
-      backendId === 'claude-code' ? buildLoginEnv(loginSessionId, 'claude-code') : {};
+      backendId === 'claude-code' && projectId
+        ? buildLoginEnv(
+            this.resolveEffectiveLogin(explicitLogin, projectId, 'claude-code'),
+            'claude-code',
+          )
+        : {};
     const summary = await summarizeSession({
       sessionId,
       backendId,

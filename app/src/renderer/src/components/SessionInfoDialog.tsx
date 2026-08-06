@@ -119,13 +119,15 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
     setSavingJira(true);
     setJiraError(null);
     try {
-      await window.baton.call('session.setJiraTaskId', {
+      const { session: updated } = await window.baton.call('session.setJiraTaskId', {
         sessionId: session.id,
         jiraTaskId: normalisedJira,
       });
-      // The store updates from the session.refreshed event; our draft
-      // re-seeds via the open effect. Normalise the visible value now.
-      setJira(normalisedJira);
+      // Mirror the resolved value: clearing the ticket persists null, but a
+      // respawn may back-fill it from the branch (extractJiraKey), so the
+      // stored jiraTaskId can differ from what we sent. Seeding from the
+      // returned session keeps jiraDirty from sticking true.
+      setJira(updated.jiraTaskId ?? '');
     } catch (err) {
       setJiraError(String(err instanceof Error ? err.message : err));
     } finally {
@@ -138,12 +140,19 @@ export function SessionInfoDialog({ session, onClose, onCloned }: Props): JSX.El
     setSwitchingLogin(true);
     setLoginError(null);
     try {
-      await window.baton.call('session.setLoginSessionId', {
+      const { session: updated } = await window.baton.call('session.setLoginSessionId', {
         sessionId: session.id,
         loginSessionId: loginDraft || null,
       });
-      // The session.refreshed event updates the store; our draft re-seeds
-      // via the open effect once the new loginSessionId lands.
+      // Re-seed the draft from what the backend actually resolved. Picking
+      // "Project default" persists null, but a respawn resolves + persists
+      // the concrete default login — so session.loginSessionId may not
+      // change (or land on a different id than we sent). Without mirroring
+      // the resolved value here, loginDraft ('') and the stored id never
+      // reconcile and the unsaved-changes prompt sticks forever. The open
+      // effect's re-seed only fires when loginSessionId *changes*, so it
+      // can't cover the no-op case.
+      setLoginDraft(updated.loginSessionId ?? '');
     } catch (err) {
       setLoginError(String(err instanceof Error ? err.message : err));
     } finally {
