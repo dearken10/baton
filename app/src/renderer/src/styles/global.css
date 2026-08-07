@@ -4365,3 +4365,108 @@ button.terminal-tab,
   padding: 28px 16px; text-align: center;
   color: var(--text-faint); font-size: 12px; font-style: italic;
 }
+
+/* ── Maestro inline suggestion card (variant A) ──────────────────
+ * Rendered by MaestroSuggestionCard at the bottom of the terminal
+ * slot, above the xterm host. Only shows when the per-session
+ * proposer produced a suggestion for the active session.
+ * Mockup: design/mockup-maestro-inline-suggestion.html
+ */
+.mae-card {
+  flex: 0 0 auto;
+  margin: 0 12px 10px;
+  padding: 10px 12px 8px;
+  background: linear-gradient(180deg, var(--maestro-2), #17131f);
+  border: 1px solid rgba(167, 139, 250, 0.45);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mae-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.mae-card-head .mae-glyph { color: var(--maestro); font-size: 13px; }
+.mae-card-head .mae-title {
+  color: var(--maestro);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.mae-card-head .mae-conf {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.mae-card-spacer { flex: 1; }
+
+.mae-editor {
+  width: 100%;
+  min-height: 56px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: var(--text);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: none;
+}
+.mae-editor:focus { border-color: var(--maestro); }
+.mae-editor:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.mae-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.mae-rationale {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+  line-height: 1.4;
+  max-width: 65%;
+}
+.mae-error {
+  font-size: 11px;
+  color: var(--danger, #ef5454);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+}
+.mae-btn {
+  padding: 4px 12px;
+  border-radius: 5px;
+  font-size: 11.5px;
+  font-family: inherit;
+  font-weight: 500;
+  background: var(--bg-3);
+  color: var(--text);
+  border: 1px solid var(--border-2);
+  cursor: pointer;
+}
+.mae-btn:hover:not(:disabled) {
+  background: var(--bg-2);
+  border-color: var(--border-2);
+}
+.mae-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.mae-btn.primary {
+  background: var(--maestro);
+  color: var(--maestro-fg);
+  border-color: var(--maestro);
+}
+.mae-btn.primary:hover:not(:disabled) { background: #b599ff; }
+.mae-btn.ghost {
+  background: transparent;
+  color: var(--text-dim);
+  border-color: transparent;
+}
+.mae-btn.ghost:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-2);
+}

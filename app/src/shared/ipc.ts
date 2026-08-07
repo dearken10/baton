@@ -538,6 +538,65 @@ const MaestroSetPromptsRequest = z.object({
 });
 const MaestroSetPromptsResponse = MaestroPromptBundle;
 
+/** Per-session Maestro suggestion (variant A: inline card).
+ *  A `resume`-kind proposal produced by option4's proposer after the
+ *  target session stopped processing (running → idle/needs-input/done).
+ *  Held in main memory only — a restart drops in-flight suggestions;
+ *  the next status transition regenerates. */
+export const MaestroSuggestion = z.object({
+  sessionId: SessionId,
+  /** The user-voice prompt the proposer thinks should go next. The
+   *  renderer prefills its editor with this and lets the user edit
+   *  before Send. */
+  prompt: z.string(),
+  /** Human-readable "why this?" pulled from the proposer's rationale.
+   *  Rendered as small italic text on the card so the user can
+   *  sanity-check before hitting Send. */
+  rationale: z.string().nullable(),
+  /** Assumption the proposer stated it made. Null when omitted. */
+  assumption: z.string().nullable(),
+  /** What the proposer said would break if the assumption is wrong. */
+  ifWrong: z.string().nullable(),
+  /** 0..1 confidence — high (0.85+), medium (0.6), low (0.35), or
+   *  a numeric value if the proposer sent one directly. */
+  confidence: z.number(),
+  /** Wall-clock ms when the proposer finished. */
+  proposedAt: z.number().int().positive(),
+});
+export type MaestroSuggestion = z.infer<typeof MaestroSuggestion>;
+
+const MaestroGetSuggestionRequest = z.object({
+  sessionId: SessionId,
+});
+const MaestroGetSuggestionResponse = z.object({
+  suggestion: MaestroSuggestion.nullable(),
+});
+
+const MaestroAcceptSuggestionRequest = z.object({
+  sessionId: SessionId,
+  /** Whatever the user actually wants to send — may be verbatim from
+   *  the proposer or a hand-edited version. Trimmed on main. */
+  prompt: z.string(),
+});
+const MaestroAcceptSuggestionResponse = z.object({
+  ok: z.boolean(),
+  /** Human-readable reason on failure (pty gone, empty prompt, etc.). */
+  reason: z.string().nullable(),
+});
+
+const MaestroDismissSuggestionRequest = z.object({
+  sessionId: SessionId,
+});
+const MaestroDismissSuggestionResponse = z.object({ ok: z.literal(true) });
+
+const MaestroRegenerateSuggestionRequest = z.object({
+  sessionId: SessionId,
+});
+const MaestroRegenerateSuggestionResponse = z.object({
+  ok: z.boolean(),
+  reason: z.string().nullable(),
+});
+
 /** Renderer heartbeat. Called on every mousemove/click/keydown,
  *  throttled in the renderer to ~5 s. Main writes the timestamp to
  *  ~/.baton/maestro/last-activity; the daemon stats that file each
@@ -1548,6 +1607,10 @@ export const ControlVerbs = {
   'maestro.setMode':     { request: MaestroSetModeRequest,   response: MaestroSetModeResponse },
   'maestro.getPrompts':  { request: MaestroGetPromptsRequest, response: MaestroGetPromptsResponse },
   'maestro.setPrompts':  { request: MaestroSetPromptsRequest, response: MaestroSetPromptsResponse },
+  'maestro.getSuggestion':      { request: MaestroGetSuggestionRequest,      response: MaestroGetSuggestionResponse },
+  'maestro.acceptSuggestion':   { request: MaestroAcceptSuggestionRequest,   response: MaestroAcceptSuggestionResponse },
+  'maestro.dismissSuggestion':  { request: MaestroDismissSuggestionRequest,  response: MaestroDismissSuggestionResponse },
+  'maestro.regenerateSuggestion': { request: MaestroRegenerateSuggestionRequest, response: MaestroRegenerateSuggestionResponse },
   'maestro.reportActivity': { request: MaestroReportActivityRequest, response: MaestroReportActivityResponse },
   'maestro.runNow':         { request: MaestroRunNowRequest,         response: MaestroRunNowResponse },
   'maestro.getSession':     { request: MaestroGetSessionRequest,     response: MaestroGetSessionResponse },
@@ -1758,6 +1821,18 @@ const ConnectionRemovedEvent = EventEnvelope.extend({
   id: z.string().min(1),
 });
 
+/** Per-session Maestro suggestion changed — pushed whenever main
+ *  writes or clears the stored suggestion for a session. Renderer
+ *  keys off `sessionId` to update its per-session slice and re-render
+ *  the suggestion card in the middle column. `suggestion: null` means
+ *  the current suggestion (if any) was cleared — user dismissed, sent,
+ *  or a new proposer took over. */
+const MaestroSuggestionUpdatedEvent = EventEnvelope.extend({
+  type: z.literal('maestro.suggestion.updated'),
+  sessionId: SessionId,
+  suggestion: MaestroSuggestion.nullable(),
+});
+
 /** Progress of an in-flight browser login (see AccountsLoginStart).
  *  Phases: `browser_opened` (auth URL opened) → optionally `awaiting_code`
  *  (Claude's paste-the-code prompt) → `success` | `error`. */
@@ -1806,6 +1881,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ConnectionRemovedEvent,
   AccountLoginProgressEvent,
   LoginSessionReorderedEvent,
+  MaestroSuggestionUpdatedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 

@@ -66,6 +66,12 @@ import {
 } from '../services/maestroState.js';
 import { getMaestroSession } from '../services/maestroSession.js';
 import { getMaestroPrompts, setMaestroPrompts } from '../services/maestroPrompts.js';
+import {
+  getMaestroSuggestion,
+  acceptMaestroSuggestion,
+  dismissMaestroSuggestion,
+  regenerateMaestroSuggestion,
+} from '../services/maestroSuggestion.js';
 import { approveAction, revertAction, listActions } from '../services/maestroAction.js';
 import { getDatabase } from '../database/index.js';
 import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
@@ -305,6 +311,10 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'maestro.getState': () => getMaestroState(),
   'maestro.setPaused': (req) => setMaestroPaused(req.paused),
   'maestro.setMode':   (req) => setMaestroMode(req.mode),
+  'maestro.getSuggestion':      (req) => ({ suggestion: getMaestroSuggestion(req.sessionId) }),
+  'maestro.acceptSuggestion':   (req) => acceptMaestroSuggestion(req.sessionId, req.prompt),
+  'maestro.dismissSuggestion':  (req) => dismissMaestroSuggestion(req.sessionId),
+  'maestro.regenerateSuggestion': (req) => regenerateMaestroSuggestion(req.sessionId),
   'maestro.getPrompts':     () => getMaestroPrompts(),
   'maestro.setPrompts':     (req) => setMaestroPrompts({
     nextAction:       req.nextAction,

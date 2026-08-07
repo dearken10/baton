@@ -18,6 +18,7 @@ enableMapSet();
 import type {
   AppEvent,
   ConnectionProfile,
+  MaestroSuggestion,
   Project,
   Session,
   SessionStatus,
@@ -88,6 +89,11 @@ export interface AppState {
   pendingSessionIds: Set<string>;
   /** Per-session editor state. Keyed by session id. */
   editorBySession: Record<string, EditorState>;
+  /** Per-session Maestro suggestion — main pushes updates via
+   *  `maestro.suggestion.updated` events. Missing key = no suggestion.
+   *  Explicitly null = suggestion was dismissed or sent. Rendered by
+   *  MaestroSuggestionCard in the middle-column terminal slot. */
+  maestroSuggestions: Record<string, MaestroSuggestion | null>;
   /** One-shot "after the next openFile finishes loading, reveal line N
    *  in the editor." Consumed (and cleared) by EditorPane once the
    *  matching tab's model is ready. Nonce ensures repeat clicks on the
@@ -131,6 +137,7 @@ export const useAppStore = create<AppState>()(
     pendingSessionIds: new Set<string>(),
     editorBySession: loadPersisted(),
     pendingGoto: null,
+    maestroSuggestions: {},
 
     loadProjects: (projects) =>
       set((s) => {
@@ -207,6 +214,14 @@ export const useAppStore = create<AppState>()(
           }
           case 'project.maestroEnabledChanged': {
             s.projects[event.project.id] = event.project;
+            break;
+          }
+          case 'maestro.suggestion.updated': {
+            // Main pushes the current suggestion (may be null when
+            // cleared). Keying by sessionId keeps every session's
+            // card independent — flipping tabs never loses another
+            // session's in-flight proposal.
+            s.maestroSuggestions[event.sessionId] = event.suggestion;
             break;
           }
           case 'session.reordered': {
