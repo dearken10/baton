@@ -40,6 +40,7 @@ import { promisify } from 'node:util';
 
 import { batonHome } from '../paths.js';
 import { emit, subscribe } from './eventBus.js';
+import { buildLoginEnv } from './loginSessions.js';
 import { resolveMaestroPromptPath } from './maestroPrompts.js';
 import { getSessionManager } from './sessionManager.js';
 import { getProject } from './projectStore.js';
@@ -156,15 +157,39 @@ async function runProposer(sessionId: string): Promise<void> {
     ? [script, claudeSessionId, '--prompt', promptPath]
     : [script, claudeSessionId];
 
+  // Match the target session's login for the PM's claude -p call so
+  // the proposer authenticates against (and bills to) the same
+  // account as the engineer. Fallback chain matches sessionManager
+  // .resolveEffectiveLogin:
+  //   session.loginSessionId → project.claudeLoginSessionId → global.
+  // buildLoginEnv handles the null case → returns the empty env → the
+  // spawn just inherits the parent's machine-global login.
+  const project = getProject(session.projectId);
+  const effectiveLoginId =
+    session.loginSessionId
+    ?? project?.claudeLoginSessionId
+    ?? null;
+  const loginEnv = buildLoginEnv(effectiveLoginId, 'claude-code');
+
+  // Merge login env into the child's env. A '' value from
+  // buildLoginEnv is the "unset the inherited var" sentinel — don't
+  // pass an empty string through, which some CLIs treat as "set but
+  // blank" and use to shadow the login's own auth.
+  const spawnEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    BATON_HOME: batonHome(),
+  };
+  for (const [k, v] of Object.entries(loginEnv)) {
+    if (v === '') delete spawnEnv[k];
+    else spawnEnv[k] = v;
+  }
+
   let parsed: unknown;
   try {
     const { stdout } = await execFileAsync('node', args, {
       timeout: PROPOSER_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
-      env: {
-        ...process.env,
-        BATON_HOME: batonHome(),
-      },
+      env: spawnEnv,
     });
     parsed = JSON.parse(stdout);
   } catch (e) {
