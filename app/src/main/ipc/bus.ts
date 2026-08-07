@@ -65,6 +65,7 @@ import {
   runMaestroNow,
 } from '../services/maestroState.js';
 import { getMaestroSession } from '../services/maestroSession.js';
+import { getMaestroPrompts, setMaestroPrompts } from '../services/maestroPrompts.js';
 import { approveAction, revertAction, listActions } from '../services/maestroAction.js';
 import { getDatabase } from '../database/index.js';
 import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
@@ -297,6 +298,12 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'maestro.getState': () => getMaestroState(),
   'maestro.setPaused': (req) => setMaestroPaused(req.paused),
   'maestro.setMode':   (req) => setMaestroMode(req.mode),
+  'maestro.getPrompts':     () => getMaestroPrompts(),
+  'maestro.setPrompts':     (req) => setMaestroPrompts({
+    nextAction:       req.nextAction,
+    outstandingTasks: req.outstandingTasks,
+    phase3FromDocs:   req.phase3FromDocs,
+  }),
   'maestro.reportActivity': (req) => reportMaestroActivity(req.at),
   'maestro.runNow':         () => runMaestroNow(),
   'maestro.getSession':     (req) => getMaestroSession(req.tickLimit),

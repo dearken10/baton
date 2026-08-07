@@ -56,9 +56,18 @@ const PLANS_DIR = join(STATE_DIR, 'plans');
 const TICK_COUNT_FILE = join(STATE_DIR, 'tick-count');
 const LAST_PLAN_PATH = join(STATE_DIR, 'last-plan.json');
 const PROPOSE_SCRIPT = join(HERE, 'propose-for-session.mjs');
-const PHASE1_PROMPT = join(HERE, 'prompts', 'next-action.md');
-const PHASE2_PROMPT = join(HERE, 'prompts', 'outstanding-tasks.md');
-const PHASE3_PROMPT = join(HERE, 'prompts', 'phase3-from-docs.md');
+// Prompt resolution: prefer the per-instance override (edited via
+// Settings → Maestro, persisted at <BATON_HOME>/maestro/prompts/) so a
+// customized prompt takes effect immediately on the next tick without a
+// restart. Falls back to the checked-in default when no override exists.
+const PROMPT_OVERRIDE_DIR = join(BATON_DIR, 'maestro', 'prompts');
+function resolvePrompt(slug) {
+  const override = join(PROMPT_OVERRIDE_DIR, `${slug}.md`);
+  return existsSync(override) ? override : join(HERE, 'prompts', `${slug}.md`);
+}
+const PHASE1_PROMPT = resolvePrompt('next-action');
+const PHASE2_PROMPT = resolvePrompt('outstanding-tasks');
+const PHASE3_PROMPT = resolvePrompt('phase3-from-docs');
 
 const CONCURRENCY = Number.parseInt(process.env.MAESTRO_OPT4_CONCURRENCY ?? '4', 10);
 const PER_SESSION_TIMEOUT_MS = Number.parseInt(process.env.MAESTRO_OPT4_TIMEOUT_MS ?? '240000', 10);

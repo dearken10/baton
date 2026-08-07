@@ -499,6 +499,36 @@ const MaestroSetModeResponse = z.object({
   mode: z.enum(['propose-first', 'act-first']),
 });
 
+/** Editable prompt bodies for the option4 orchestrator's three phases.
+ *  `defaults` echoes what ships in the repo so the settings UI can
+ *  render a per-prompt "Reset to default" without a second round-trip.
+ *  `overridden` is true iff the user has saved a non-empty override
+ *  to <BATON_HOME>/maestro/prompts/<slug>.md. See main/services/
+ *  maestroPrompts.ts. */
+const MaestroPromptBundle = z.object({
+  nextAction:       z.string(),
+  outstandingTasks: z.string(),
+  phase3FromDocs:   z.string(),
+  defaults: z.object({
+    nextAction:       z.string(),
+    outstandingTasks: z.string(),
+    phase3FromDocs:   z.string(),
+  }),
+  overridden: z.object({
+    nextAction:       z.boolean(),
+    outstandingTasks: z.boolean(),
+    phase3FromDocs:   z.boolean(),
+  }),
+});
+const MaestroGetPromptsRequest = z.object({});
+const MaestroGetPromptsResponse = MaestroPromptBundle;
+const MaestroSetPromptsRequest = z.object({
+  nextAction:       z.string(),
+  outstandingTasks: z.string(),
+  phase3FromDocs:   z.string(),
+});
+const MaestroSetPromptsResponse = MaestroPromptBundle;
+
 /** Renderer heartbeat. Called on every mousemove/click/keydown,
  *  throttled in the renderer to ~5 s. Main writes the timestamp to
  *  ~/.baton/maestro/last-activity; the daemon stats that file each
@@ -1496,6 +1526,8 @@ export const ControlVerbs = {
   'maestro.getState':    { request: MaestroGetStateRequest, response: MaestroGetStateResponse },
   'maestro.setPaused':   { request: MaestroSetPausedRequest, response: MaestroSetPausedResponse },
   'maestro.setMode':     { request: MaestroSetModeRequest,   response: MaestroSetModeResponse },
+  'maestro.getPrompts':  { request: MaestroGetPromptsRequest, response: MaestroGetPromptsResponse },
+  'maestro.setPrompts':  { request: MaestroSetPromptsRequest, response: MaestroSetPromptsResponse },
   'maestro.reportActivity': { request: MaestroReportActivityRequest, response: MaestroReportActivityResponse },
   'maestro.runNow':         { request: MaestroRunNowRequest,         response: MaestroRunNowResponse },
   'maestro.getSession':     { request: MaestroGetSessionRequest,     response: MaestroGetSessionResponse },
