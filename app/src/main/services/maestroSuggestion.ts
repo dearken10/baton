@@ -3,23 +3,30 @@
  *
  * A different orchestration mode from the periodic tick daemon: rather
  * than scanning every candidate on a 15-minute cadence, we fire the
- * option4 proposer for ONE session immediately after that session
- * stops processing (running → idle/needs-input/done). The result is
- * held in-memory keyed by sessionId and surfaced to the renderer as
- * an editable card above the terminal input.
+ * option5 PM-as-outsider proposer for ONE session immediately after
+ * that session stops processing (running → idle/needs-input/done).
+ * The result is held in-memory keyed by sessionId and surfaced to the
+ * renderer as an editable card above the terminal input.
+ *
+ * Where option4 clones the target's JSONL and asks IT to reflect on
+ * itself, option5 spins up a FRESH claude -p with a Product Manager
+ * persona (from goal.md — editable in Settings → Maestro), feeds it
+ * the goal + a plain-text summary of the target's recent turns, and
+ * asks what the engineer should be told to do next. Same JSON reply
+ * shape either way, so downstream renderer + normalizer don't care.
  *
  * Lifecycle:
  *   1. subscribe to session.status_changed
  *   2. filter to running → (idle|needs-input|done) transitions
  *   3. gate: F15.1 (session Maestro-enabled? claude-code? has jsonl?)
- *   4. spawn poc/maestro/option4-per-session-clone/propose-for-session.mjs
+ *   4. spawn poc/maestro/option5-product-manager/pm-propose.mjs with the
+ *      target's Claude session id
  *   5. stash result in this.suggestions
  *   6. emit maestro.suggestion.updated so the renderer re-renders
  *
  * Non-goals for MVP:
  *   - persistence (a restart drops in-flight suggestions; the next
  *     transition regenerates)
- *   - full 3-phase fallback (per-session proposer is phase 1 only)
  *   - concurrent proposers per session (a second transition while a
  *     proposer is still running is coalesced — we discard the old
  *     inflight result once the new one starts)
@@ -65,7 +72,7 @@ let unsubscribe: (() => void) | null = null;
 const state = new Map<string, SuggestionState>();
 let runIdSeq = 0;
 
-/** Repo-relative path to the option4 proposer. Node child; inherits
+/** Repo-relative path to the option5 PM proposer. Node child; inherits
  *  BATON_HOME from the current env so it targets the right db. */
 function proposerScriptPath(): string {
   const repoRoot = join(app.getAppPath(), '..');
@@ -73,8 +80,8 @@ function proposerScriptPath(): string {
     repoRoot,
     'poc',
     'maestro',
-    'option4-per-session-clone',
-    'propose-for-session.mjs',
+    'option5-product-manager',
+    'pm-propose.mjs',
   );
 }
 
@@ -121,14 +128,33 @@ async function runProposer(sessionId: string): Promise<void> {
     return;
   }
 
-  // Variant A uses the dedicated `goal` prompt (see prompts/goal.md;
-  // editable in Settings → Maestro). The proposer's `--prompt` flag
-  // takes an absolute path; falls back to the proposer's own default
-  // (which is `next-action.md`) when the goal file was deleted.
+  // Look up the target session's claude_session_id. The option5 script
+  // finds the JSONL by <claude-session-id>.jsonl under ~/.claude/
+  // projects/, so we need the CLAUDE id here, not the baton id (which
+  // is what our own sessionId param is). ineligibleReason already
+  // guarded on this above but we re-check to keep runProposer
+  // self-contained.
+  const session = getSessionManager().listAll().find((s) => s.id === sessionId);
+  if (!session || !session.claudeSessionId) {
+    const cur = state.get(sessionId);
+    if (cur && cur.runId === runId) {
+      cur.runId = null;
+      state.set(sessionId, cur);
+    }
+    return;
+  }
+  const claudeSessionId = session.claudeSessionId;
+
+  // Variant A uses the dedicated `goal` prompt (see poc/maestro/
+  // option5-product-manager/prompts/goal.md; editable in Settings →
+  // Maestro; the Settings editor writes to <BATON_HOME>/maestro/
+  // prompts/goal.md which resolveMaestroPromptPath picks up first).
+  // Falls back to the script's own default when the goal file was
+  // deleted entirely.
   const promptPath = resolveMaestroPromptPath('goal');
   const args = promptPath
-    ? [script, sessionId, '--prompt', promptPath]
-    : [script, sessionId];
+    ? [script, claudeSessionId, '--prompt', promptPath]
+    : [script, claudeSessionId];
 
   let parsed: unknown;
   try {
