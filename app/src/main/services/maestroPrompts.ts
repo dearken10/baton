@@ -29,9 +29,18 @@ import { join } from 'node:path';
 
 import { batonHome } from '../paths.js';
 
-/** The three prompts the orchestrator can fire. Keys are stable strings
- *  used both as filenames (<slug>.md) and as the API shape's keys. */
-const PROMPT_SLUGS = ['next-action', 'outstanding-tasks', 'phase3-from-docs'] as const;
+/** The prompts the orchestrator can fire. Keys are stable strings used
+ *  both as filenames (<slug>.md) and as the API shape's keys.
+ *
+ *  Consumers today:
+ *    next-action       → option4 per-session-tick.mjs phase 1 (periodic tick)
+ *    outstanding-tasks → phase 2 fallback
+ *    phase3-from-docs  → phase 3 fallback (initiate)
+ *    goal              → maestroSuggestion.ts on-idle inline card (variant A)
+ *
+ *  Adding a new slug: append here + add fields to MaestroPromptBundle
+ *  + wire the read/write in getMaestroPrompts/setMaestroPrompts. */
+const PROMPT_SLUGS = ['next-action', 'outstanding-tasks', 'phase3-from-docs', 'goal'] as const;
 type PromptSlug = (typeof PROMPT_SLUGS)[number];
 
 /** Repo-default prompt files (checked in). Resolved via the Electron
@@ -63,12 +72,17 @@ export interface MaestroPromptBundle {
   nextAction: string;
   outstandingTasks: string;
   phase3FromDocs: string;
+  /** The prompt used by maestroSuggestion.ts to produce the on-idle
+   *  inline suggestion card (variant A). Independent from the tick
+   *  prompts so the user can tune the two flows separately. */
+  goal: string;
   /** The repo-shipped defaults, so the UI can show a "Reset to
    *  default" affordance without a second round-trip. */
   defaults: {
     nextAction: string;
     outstandingTasks: string;
     phase3FromDocs: string;
+    goal: string;
   };
   /** Per-prompt override flags — true iff the user has saved a
    *  non-default body. Drives a "custom" badge in the UI. */
@@ -76,6 +90,7 @@ export interface MaestroPromptBundle {
     nextAction: boolean;
     outstandingTasks: boolean;
     phase3FromDocs: boolean;
+    goal: boolean;
   };
 }
 
@@ -93,21 +108,40 @@ export function getMaestroPrompts(): MaestroPromptBundle {
   const p1 = readOne('next-action');
   const p2 = readOne('outstanding-tasks');
   const p3 = readOne('phase3-from-docs');
+  const pg = readOne('goal');
   return {
     nextAction:       p1.effective,
     outstandingTasks: p2.effective,
     phase3FromDocs:   p3.effective,
+    goal:             pg.effective,
     defaults: {
       nextAction:       p1.default_,
       outstandingTasks: p2.default_,
       phase3FromDocs:   p3.default_,
+      goal:             pg.default_,
     },
     overridden: {
       nextAction:       p1.overridden,
       outstandingTasks: p2.overridden,
       phase3FromDocs:   p3.overridden,
+      goal:             pg.overridden,
     },
   };
+}
+
+/** Absolute file path the tick / suggestion services should pass to
+ *  `propose-for-session.mjs --prompt <path>`. Returns the override
+ *  file when the user has saved one, else the repo default — same
+ *  resolution `getMaestroPrompts` uses for the effective body.
+ *
+ *  Returns null when neither exists (should only happen if the repo
+ *  default file was deleted). */
+export function resolveMaestroPromptPath(slug: 'next-action' | 'outstanding-tasks' | 'phase3-from-docs' | 'goal'): string | null {
+  const override = overridePath(slug);
+  if (existsSync(override)) return override;
+  const dflt = defaultPromptPath(slug);
+  if (existsSync(dflt)) return dflt;
+  return null;
 }
 
 /** Write a single prompt. Empty body deletes the override (reverts to
@@ -127,11 +161,13 @@ export interface MaestroPromptWrite {
   nextAction: string;
   outstandingTasks: string;
   phase3FromDocs: string;
+  goal: string;
 }
 
 export function setMaestroPrompts(next: MaestroPromptWrite): MaestroPromptBundle {
   writeOne('next-action',       next.nextAction);
   writeOne('outstanding-tasks', next.outstandingTasks);
   writeOne('phase3-from-docs',  next.phase3FromDocs);
+  writeOne('goal',              next.goal);
   return getMaestroPrompts();
 }

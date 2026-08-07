@@ -33,6 +33,7 @@ import { promisify } from 'node:util';
 
 import { batonHome } from '../paths.js';
 import { emit, subscribe } from './eventBus.js';
+import { resolveMaestroPromptPath } from './maestroPrompts.js';
 import { getSessionManager } from './sessionManager.js';
 import { getProject } from './projectStore.js';
 import type { MaestroSuggestion, Session, SessionStatus } from '../../shared/ipc.js';
@@ -120,9 +121,18 @@ async function runProposer(sessionId: string): Promise<void> {
     return;
   }
 
+  // Variant A uses the dedicated `goal` prompt (see prompts/goal.md;
+  // editable in Settings → Maestro). The proposer's `--prompt` flag
+  // takes an absolute path; falls back to the proposer's own default
+  // (which is `next-action.md`) when the goal file was deleted.
+  const promptPath = resolveMaestroPromptPath('goal');
+  const args = promptPath
+    ? [script, sessionId, '--prompt', promptPath]
+    : [script, sessionId];
+
   let parsed: unknown;
   try {
-    const { stdout } = await execFileAsync('node', [script, sessionId], {
+    const { stdout } = await execFileAsync('node', args, {
       timeout: PROPOSER_TIMEOUT_MS,
       maxBuffer: 8 * 1024 * 1024,
       env: {

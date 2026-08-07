@@ -508,7 +508,14 @@ const MaestroSetModeResponse = z.object({
   mode: z.enum(['propose-first', 'act-first']),
 });
 
-/** Editable prompt bodies for the option4 orchestrator's three phases.
+/** Editable prompt bodies for Maestro's prompted flows.
+ *
+ *  `nextAction` / `outstandingTasks` / `phase3FromDocs` drive the
+ *  option4 tick daemon's three phases (see per-session-tick.mjs).
+ *  `goal` drives the variant-A on-idle inline suggestion card (see
+ *  maestroSuggestion.ts) — a separate prompt so the two flows can be
+ *  tuned independently.
+ *
  *  `defaults` echoes what ships in the repo so the settings UI can
  *  render a per-prompt "Reset to default" without a second round-trip.
  *  `overridden` is true iff the user has saved a non-empty override
@@ -518,15 +525,18 @@ const MaestroPromptBundle = z.object({
   nextAction:       z.string(),
   outstandingTasks: z.string(),
   phase3FromDocs:   z.string(),
+  goal:             z.string(),
   defaults: z.object({
     nextAction:       z.string(),
     outstandingTasks: z.string(),
     phase3FromDocs:   z.string(),
+    goal:             z.string(),
   }),
   overridden: z.object({
     nextAction:       z.boolean(),
     outstandingTasks: z.boolean(),
     phase3FromDocs:   z.boolean(),
+    goal:             z.boolean(),
   }),
 });
 const MaestroGetPromptsRequest = z.object({});
@@ -535,6 +545,7 @@ const MaestroSetPromptsRequest = z.object({
   nextAction:       z.string(),
   outstandingTasks: z.string(),
   phase3FromDocs:   z.string(),
+  goal:             z.string(),
 });
 const MaestroSetPromptsResponse = MaestroPromptBundle;
 

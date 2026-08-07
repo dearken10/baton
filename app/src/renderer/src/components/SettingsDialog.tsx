@@ -51,6 +51,7 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
     nextAction: string;
     outstandingTasks: string;
     phase3FromDocs: string;
+    goal: string;
   } | null>(null);
   const theme = useTheme();
   const firstFieldRef = useRef<HTMLButtonElement | null>(null);
@@ -74,6 +75,7 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
           nextAction:       p.nextAction,
           outstandingTasks: p.outstandingTasks,
           phase3FromDocs:   p.phase3FromDocs,
+          goal:             p.goal,
         });
         setLoaded(true);
       })
@@ -128,12 +130,14 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
         nextAction:       promptDraft.nextAction,
         outstandingTasks: promptDraft.outstandingTasks,
         phase3FromDocs:   promptDraft.phase3FromDocs,
+        goal:             promptDraft.goal,
       });
       setPromptBundle(bundle);
       setPromptDraft({
         nextAction:       bundle.nextAction,
         outstandingTasks: bundle.outstandingTasks,
         phase3FromDocs:   bundle.phase3FromDocs,
+        goal:             bundle.goal,
       });
       onClose();
     } catch (e) {
@@ -365,9 +369,10 @@ function TelemetrySection({
   );
 }
 
-/** Editable Maestro orchestrator prompts. Each of the three phases has
- *  a default shipped in the repo; edits are persisted per BATON_HOME
- *  instance and picked up on the next tick without a restart. */
+/** Editable Maestro orchestrator prompts. The Goal prompt drives the
+ *  on-idle inline suggestion card (variant A); the three phase prompts
+ *  drive the periodic tick daemon. All are per-BATON_HOME overrides,
+ *  picked up on the next tick / next status transition without a restart. */
 function MaestroSection({
   bundle,
   draft,
@@ -375,11 +380,12 @@ function MaestroSection({
   disabled,
 }: {
   bundle: MaestroPromptBundle | null;
-  draft: { nextAction: string; outstandingTasks: string; phase3FromDocs: string } | null;
+  draft: { nextAction: string; outstandingTasks: string; phase3FromDocs: string; goal: string } | null;
   setDraft: React.Dispatch<React.SetStateAction<{
     nextAction: string;
     outstandingTasks: string;
     phase3FromDocs: string;
+    goal: string;
   } | null>>;
   disabled: boolean;
 }): JSX.Element {
@@ -393,29 +399,40 @@ function MaestroSection({
   }
 
   const fields: Array<{
-    key: 'nextAction' | 'outstandingTasks' | 'phase3FromDocs';
+    key: 'nextAction' | 'outstandingTasks' | 'phase3FromDocs' | 'goal';
     label: string;
     hint: string;
     default_: string;
     overridden: boolean;
   }> = [
+    // Goal comes first — it drives the on-idle inline card the user
+    // interacts with directly, so it's the most immediately useful to
+    // tune. The three phase prompts are further down as tick-daemon
+    // internals.
+    {
+      key: 'goal',
+      label: 'Goal — on-idle inline suggestion (variant A)',
+      hint: 'Fires when a claude-code session transitions running → idle/needs-input/done. The response prefills the editable card that appears above the terminal input.',
+      default_: bundle.defaults.goal,
+      overridden: bundle.overridden.goal,
+    },
     {
       key: 'nextAction',
-      label: 'Phase 1 — Next action',
+      label: 'Phase 1 — Next action (tick daemon)',
       hint: 'Fires against each candidate’s cloned JSONL. The clone answers with a resume/wait/defer proposal.',
       default_: bundle.defaults.nextAction,
       overridden: bundle.overridden.nextAction,
     },
     {
       key: 'outstandingTasks',
-      label: 'Phase 2 — Outstanding tasks',
+      label: 'Phase 2 — Outstanding tasks (tick daemon)',
       hint: 'Fallback when phase 1 yields no resumes. Asks each non-resume candidate whether there’s implicit work to pick up.',
       default_: bundle.defaults.outstandingTasks,
       overridden: bundle.overridden.outstandingTasks,
     },
     {
       key: 'phase3FromDocs',
-      label: 'Phase 3 — Docs-driven initiate',
+      label: 'Phase 3 — Docs-driven initiate (tick daemon)',
       hint: 'Fallback when phase 2 also yields nothing. Reads project docs (backlog / TODO / PRD / README) and suggests one new session to initiate.',
       default_: bundle.defaults.phase3FromDocs,
       overridden: bundle.overridden.phase3FromDocs,
@@ -426,10 +443,12 @@ function MaestroSection({
     <>
       <h4 className="settings-section-title">Maestro prompts</h4>
       <p className="dialog-hint" style={{ marginBottom: 12 }}>
-        Prompt bodies the orchestrator sends each tick. Overrides are saved to
+        Prompt bodies Maestro sends. Overrides are saved to
         <code className="mono"> &lt;BATON_HOME&gt;/maestro/prompts/</code> and
-        take effect on the next tick without a restart. Clear a field and Save
-        to revert that prompt to its shipped default.
+        take effect on the next fire without a restart — the Goal prompt fires
+        when a session goes idle; the three phase prompts fire from the tick
+        daemon. Clear a field and Save to revert that prompt to its shipped
+        default.
       </p>
 
       {fields.map((f) => (

@@ -320,6 +320,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     nextAction:       req.nextAction,
     outstandingTasks: req.outstandingTasks,
     phase3FromDocs:   req.phase3FromDocs,
+    goal:             req.goal,
   }),
   'maestro.reportActivity': (req) => reportMaestroActivity(req.at),
   'maestro.runNow':         () => runMaestroNow(),
