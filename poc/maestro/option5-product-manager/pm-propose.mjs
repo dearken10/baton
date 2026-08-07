@@ -214,16 +214,50 @@ function formatConversation(turns) {
   return [lines.join('\n'), keep.join('\n\n---\n\n')].filter(Boolean).join('');
 }
 
-/** Substitute {{CONVERSATION}} in the template. The goal lives
- *  directly in goal.md — the user edits it there and saves; we don't
- *  substitute anything for it. Warn if the CONVERSATION placeholder
- *  is missing since that would break the "PM sees engineer's tail"
- *  behavior silently. */
-function composePrompt(template, conversation) {
+/** Render "how long since the last conversation turn" in a form the
+ *  PM can reason about — "18m ago (ISO)". Handles rows with no
+ *  timestamp (older JSONL formats) and unparseable strings. Used by
+ *  the {{LAST_UPDATE}} placeholder so a prompt that gates on idle
+ *  time ("follow up after 15 min") has the data it needs. */
+function formatLastUpdate(turns) {
+  if (turns.length === 0) return 'unknown (no turns read)';
+  const last = turns[turns.length - 1];
+  if (!last.ts) return 'unknown (last turn has no timestamp)';
+  const t = Date.parse(last.ts);
+  if (!Number.isFinite(t)) return `unknown (unparseable: ${last.ts})`;
+  return `${fmtElapsed(Date.now() - t)} (${new Date(t).toISOString()})`;
+}
+
+function fmtElapsed(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  const mm = m % 60;
+  if (h < 24) return `${h}h ${mm}m ago`;
+  const d = Math.floor(h / 24);
+  const hh = h % 24;
+  return `${d}d ${hh}h ago`;
+}
+
+/** Substitute {{CONVERSATION}} + {{LAST_UPDATE}} in the template. The
+ *  goal itself lives directly in goal.md — the user edits it there
+ *  and saves; we don't substitute anything for it. Warn if the
+ *  CONVERSATION placeholder is missing since that would silently
+ *  break the "PM sees engineer's tail" behavior; a missing
+ *  LAST_UPDATE is only a warning too, since the timing check is
+ *  optional. */
+function composePrompt(template, conversation, lastUpdate) {
   if (!template.includes('{{CONVERSATION}}')) {
     console.error('[pm] warning: prompt template has no {{CONVERSATION}} placeholder — the engineer\'s conversation will not be included');
   }
-  return template.split('{{CONVERSATION}}').join(conversation);
+  if (!template.includes('{{LAST_UPDATE}}')) {
+    console.error('[pm] note: prompt template has no {{LAST_UPDATE}} placeholder — PM will not know the idle time');
+  }
+  return template
+    .split('{{CONVERSATION}}').join(conversation)
+    .split('{{LAST_UPDATE}}').join(lastUpdate);
 }
 
 /** Fire claude -p with the composed prompt. cwd = HOME so claude
@@ -286,7 +320,8 @@ function main() {
 
   const template = readFileSync(args.promptPath, 'utf8');
   const conversation = formatConversation(turns);
-  const prompt = composePrompt(template, conversation);
+  const lastUpdate = formatLastUpdate(turns);
+  const prompt = composePrompt(template, conversation, lastUpdate);
 
   if (args.dryRun) {
     process.stdout.write(prompt);
