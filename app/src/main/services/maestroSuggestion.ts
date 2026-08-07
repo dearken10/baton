@@ -161,8 +161,11 @@ async function runProposer(sessionId: string): Promise<void> {
 }
 
 /** Shape the proposer's JSON output into the renderer-friendly
- *  MaestroSuggestion. Returns null when the proposal isn't actionable
- *  (the proposer said wait/defer, or no prompt in a resume). */
+ *  MaestroSuggestion. Returns null only when the proposal shape is
+ *  malformed OR when it's a `resume` with an empty prompt (the card
+ *  can't render anything actionable). `wait`/`defer` are surfaced as
+ *  passive-state suggestions so the user can see Maestro ran + why
+ *  it chose to defer, and hit Regenerate if the state changed. */
 function normalizeProposal(raw: unknown, sessionId: string): MaestroSuggestion | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as { proposal?: unknown; baton_session_id?: unknown; target_project_id?: unknown };
@@ -176,9 +179,17 @@ function normalizeProposal(raw: unknown, sessionId: string): MaestroSuggestion |
     assumption?: unknown;
     if_wrong?: unknown;
   };
-  if (proposal.action !== 'resume') return null;   // wait/defer → nothing to show
+  const kind: MaestroSuggestion['kind'] =
+    proposal.action === 'resume'
+      ? 'resume'
+      : proposal.action === 'defer'
+        ? 'defer'
+        : 'wait';   // anything else (wait / unknown) is a passive card
+
   const prompt = typeof proposal.prompt === 'string' ? proposal.prompt.trim() : '';
-  if (prompt.length === 0) return null;
+  // A `resume` without a prompt is a proposer bug — nothing to inject
+  // and no rationale-only card would make sense — drop it.
+  if (kind === 'resume' && prompt.length === 0) return null;
 
   const confidenceBucket: Record<string, number> = { high: 0.85, medium: 0.60, low: 0.35 };
   const confidence =
@@ -190,7 +201,8 @@ function normalizeProposal(raw: unknown, sessionId: string): MaestroSuggestion |
 
   return {
     sessionId,
-    prompt,
+    kind,
+    prompt: kind === 'resume' ? prompt : '',
     rationale: typeof proposal.rationale === 'string' ? proposal.rationale : null,
     assumption: typeof proposal.assumption === 'string' ? proposal.assumption : null,
     ifWrong: typeof proposal.if_wrong === 'string' ? proposal.if_wrong : null,

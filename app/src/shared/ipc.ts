@@ -539,15 +539,24 @@ const MaestroSetPromptsRequest = z.object({
 const MaestroSetPromptsResponse = MaestroPromptBundle;
 
 /** Per-session Maestro suggestion (variant A: inline card).
- *  A `resume`-kind proposal produced by option4's proposer after the
- *  target session stopped processing (running → idle/needs-input/done).
- *  Held in main memory only — a restart drops in-flight suggestions;
- *  the next status transition regenerates. */
+ *  A proposal produced by option4's proposer after the target session
+ *  stopped processing (running → idle/needs-input/done). Held in main
+ *  memory only — a restart drops in-flight suggestions; the next
+ *  status transition regenerates. */
 export const MaestroSuggestion = z.object({
   sessionId: SessionId,
+  /** Discriminator matching the proposer's action:
+   *    resume → concrete next prompt; card shows an editor + Send.
+   *    wait   → proposer sees a genuine user choice (e.g. an open
+   *             question at the end of the last turn); card shows the
+   *             rationale + Regenerate but no editor, so the user
+   *             knows Maestro ran and chose to defer to them.
+   *    defer  → proposer sees a HITL / paused / snoozed shape; same
+   *             passive treatment as wait. */
+  kind: z.enum(['resume', 'wait', 'defer']),
   /** The user-voice prompt the proposer thinks should go next. The
    *  renderer prefills its editor with this and lets the user edit
-   *  before Send. */
+   *  before Send. Empty string for `wait`/`defer` (no editor rendered). */
   prompt: z.string(),
   /** Human-readable "why this?" pulled from the proposer's rationale.
    *  Rendered as small italic text on the card so the user can

@@ -4385,6 +4385,23 @@ button.terminal-tab,
   flex-direction: column;
   gap: 8px;
 }
+
+/* Passive variant — wait/defer proposals. Same shape as the active
+ * card but muted (dimmer background, softer border) so a "Maestro
+ * ran and is waiting" state doesn't compete visually with an
+ * actionable suggestion. Rationale text is the primary content;
+ * there's no editor or Send. */
+.mae-card-passive {
+  background: linear-gradient(180deg, rgba(28, 23, 48, 0.6), rgba(20, 16, 32, 0.6));
+  border-color: rgba(167, 139, 250, 0.22);
+}
+.mae-card-passive .mae-title { opacity: 0.85; }
+.mae-card-passive .mae-rationale {
+  max-width: none;
+  font-style: normal;
+  color: var(--text);
+  opacity: 0.85;
+}
 .mae-card-head {
   display: flex;
   align-items: center;

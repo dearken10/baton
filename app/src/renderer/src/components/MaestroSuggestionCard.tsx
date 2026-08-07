@@ -120,6 +120,49 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
 
   if (!suggestion) return null;
 
+  // `wait` / `defer` proposals render a passive card — Maestro ran and
+  // has an opinion (the rationale) but chose not to propose a concrete
+  // prompt (usually because the last agent turn ended with an open
+  // question the user genuinely has to answer). No editor, no Send;
+  // just the reasoning plus Regenerate (in case the state changed) +
+  // Dismiss.
+  if (suggestion.kind !== 'resume') {
+    return (
+      <div className="mae-card mae-card-passive" role="region" aria-label="Maestro waiting">
+        <div className="mae-card-head">
+          <span className="mae-glyph" aria-hidden>🎼</span>
+          <span className="mae-title">
+            Maestro is {suggestion.kind === 'defer' ? 'deferring' : 'waiting for you'}
+          </span>
+          <span className="mae-conf" title={`Confidence: ${suggestion.confidence.toFixed(2)}`}>
+            {fmtConfidence(suggestion.confidence)}
+          </span>
+          <span className="mae-card-spacer" />
+          <button
+            type="button"
+            className="mae-btn ghost"
+            onClick={() => void regenerate()}
+            disabled={busy}
+            title="Ask Maestro to re-evaluate — useful if the transcript has changed"
+          >
+            ↻ Regenerate
+          </button>
+          <button
+            type="button"
+            className="mae-btn ghost"
+            onClick={() => void dismiss()}
+            disabled={busy}
+            title="Dismiss the suggestion"
+          >
+            ✕ Dismiss
+          </button>
+        </div>
+        <SuggestionRationale suggestion={suggestion} />
+        {error ? <div className="mae-error" style={{ marginTop: 6 }}>{error}</div> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="mae-card" role="region" aria-label="Maestro suggestion">
       <div className="mae-card-head">
