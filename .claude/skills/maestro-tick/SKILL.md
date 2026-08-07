@@ -95,9 +95,14 @@ exercise different signal-extraction (e.g., richer JSONL slicing,
   `running` shells are dev servers, not user presence).
 - Sessions where `snoozed = true` (either the session itself or its
   parent project is snoozed).
-- Sessions where `maestro_enabled = false` on the parent project
-  (the user explicitly turned Maestro off for that project — leave
-  it alone, even if it's idle and otherwise actionable).
+- Sessions where the effective `maestro_enabled` resolves to `false`.
+  Resolution: a per-session override (0/1) always wins; otherwise
+  fall back to the parent project's flag; otherwise default to
+  enabled. inventory.mjs already applies this and hands you a single
+  `maestro_enabled: true|false` — respect it. The companion field
+  `maestro_enabled_source` is either `"session"` (user overrode this
+  specific session) or `"project"` (inherited from the project); it's
+  informational only, the gate is the same either way.
 
 Running shells in the inventory are **NOT** evidence the user is at
 the keyboard — they're background processes.

@@ -279,6 +279,27 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
+  /** Set the per-session Maestro override.
+   *    null  → follow project default
+   *    true  → force on (even if project is off)
+   *    false → force off (even if project is on) */
+  async function setSessionMaestroOverride(
+    s: Session,
+    enabled: boolean | null,
+  ): Promise<void> {
+    setBusy(true);
+    try {
+      await window.baton.call('session.setMaestroEnabled', {
+        sessionId: s.id,
+        enabled,
+      });
+    } catch (err) {
+      alert(`Set session Maestro failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeProjectFromList(p: Project): Promise<void> {
     const sCount = (sessionsByProject[p.id] ?? []).length;
     const ok = window.confirm(
@@ -848,6 +869,7 @@ export function LeftColumn(): JSX.Element {
             onClone={cloneSession}
             onCloneToWorktree={openCloneWorktreeDialog}
             onToggleSessionSnooze={toggleSnoozeSession}
+            onSetSessionMaestro={(s, enabled) => void setSessionMaestroOverride(s, enabled)}
             busy={busy}
           />
         ) : projects.length === 0 ? (
@@ -887,6 +909,7 @@ export function LeftColumn(): JSX.Element {
               onClone={cloneSession}
               onCloneToWorktree={openCloneWorktreeDialog}
               onToggleSessionSnooze={toggleSnoozeSession}
+              onSetSessionMaestro={(s, enabled) => void setSessionMaestroOverride(s, enabled)}
               onGetInfo={() => {
                 const conn = connections[p.connectionId];
                 const isRem = !!conn && conn.kind !== 'local';
@@ -1007,6 +1030,8 @@ interface TimelineViewProps {
   onClone: (s: Session) => void;
   onCloneToWorktree: (s: Session) => void;
   onToggleSessionSnooze: (s: Session) => void;
+  /** Per-session Maestro override setter. null = follow project. */
+  onSetSessionMaestro: (s: Session, enabled: boolean | null) => void;
   busy: boolean;
 }
 
@@ -1017,7 +1042,8 @@ interface TimelineViewProps {
 function TimelineView(props: TimelineViewProps): JSX.Element {
   const {
     sessions, projects, selectedId, pendingSessionIds,
-    onSelect, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze, busy,
+    onSelect, onResume, onRename, onDelete, onClone, onCloneToWorktree,
+    onToggleSessionSnooze, onSetSessionMaestro, busy,
   } = props;
 
   // Re-render once a minute so the "started Nm ago" stamps stay honest
@@ -1120,11 +1146,16 @@ function TimelineView(props: TimelineViewProps): JSX.Element {
               canRename={canRename}
               canClone={canClone}
               isSnoozed={isSnoozed}
+              sessionMaestroOverride={s.maestroEnabled}
+              projectMaestroEnabled={
+                projects[s.projectId]?.maestroEnabled ?? true
+              }
               onRename={() => onRename(s)}
               onDelete={() => onDelete(s)}
               onClone={() => onClone(s)}
               onCloneToWorktree={() => onCloneToWorktree(s)}
               onToggleSnooze={() => onToggleSessionSnooze(s)}
+              onSetMaestro={(enabled) => onSetSessionMaestro(s, enabled)}
               busy={busy}
             />
           </div>
@@ -1148,6 +1179,7 @@ interface ProjectBlockProps {
   onClone: (s: Session) => void;
   onCloneToWorktree: (s: Session) => void;
   onToggleSessionSnooze: (s: Session) => void;
+  onSetSessionMaestro: (s: Session, enabled: boolean | null) => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRenameProject: () => void;
@@ -1172,7 +1204,7 @@ const DRAG_SESSION = 'application/x-baton-session';
 function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, connection, sessions, selectedId,
-    onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze,
+    onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze, onSetSessionMaestro,
     onGetInfo, onNewTerminal, onRenameProject, onEditLogins, onRemoveProject, onToggleSnooze, onToggleMaestro, maestroEnabled, onReorderProjects, onReorderSessions,
     busy, pendingSessionIds,
   } = props;
@@ -1423,11 +1455,14 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                   canRename={canRename}
                   canClone={canClone}
                   isSnoozed={isSnoozed}
+                  sessionMaestroOverride={s.maestroEnabled}
+                  projectMaestroEnabled={maestroEnabled}
                   onRename={() => onRename(s)}
                   onDelete={() => onDelete(s)}
                   onClone={() => onClone(s)}
                   onCloneToWorktree={() => onCloneToWorktree(s)}
                   onToggleSnooze={() => onToggleSessionSnooze(s)}
+                  onSetMaestro={(enabled) => onSetSessionMaestro(s, enabled)}
                   busy={busy}
                 />
               </div>
@@ -1443,11 +1478,17 @@ function SessionRowMenu(props: {
   canRename: boolean;
   canClone: boolean;
   isSnoozed: boolean;
+  /** null = follow project default, true/false = explicit override. */
+  sessionMaestroOverride: boolean | null;
+  /** Parent project's Maestro flag — used to preview what "follow
+   *  project" resolves to in the "follow project (on/off)" label. */
+  projectMaestroEnabled: boolean;
   onRename: () => void;
   onDelete: () => void;
   onClone: () => void;
   onCloneToWorktree: () => void;
   onToggleSnooze: () => void;
+  onSetMaestro: (enabled: boolean | null) => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -1524,6 +1565,11 @@ function SessionRowMenu(props: {
           >
             {props.isSnoozed ? 'Unsnooze' : 'Snooze'}
           </button>
+          <MaestroSubmenu
+            override={props.sessionMaestroOverride}
+            projectEnabled={props.projectMaestroEnabled}
+            onSet={(enabled) => { setOpen(false); props.onSetMaestro(enabled); }}
+          />
           <button
             className="row-menu-item danger"
             role="menuitem"
@@ -1534,6 +1580,58 @@ function SessionRowMenu(props: {
         </div>
       )}
     </div>
+  );
+}
+
+/** Three-way Maestro override for a single session, rendered as a
+ *  labeled group inside SessionRowMenu:
+ *    Follow project (default) — clears the session override
+ *    On                       — force-enable, overrides project=off
+ *    Off                      — force-disable, overrides project=on
+ *  The active choice is marked with •; the "Follow" row also shows
+ *  what the project would resolve to so the user can predict what
+ *  clearing the override actually does. */
+function MaestroSubmenu({
+  override,
+  projectEnabled,
+  onSet,
+}: {
+  override: boolean | null;
+  projectEnabled: boolean;
+  onSet: (enabled: boolean | null) => void;
+}): JSX.Element {
+  const followLabel = `Maestro: follow project (${projectEnabled ? 'on' : 'off'})`;
+  return (
+    <>
+      <div
+        className="row-menu-item"
+        style={{ fontSize: 10.5, color: 'var(--text-faint)', cursor: 'default', padding: '4px 10px 2px' }}
+      >
+        Maestro override
+      </div>
+      <button
+        className="row-menu-item"
+        role="menuitem"
+        onClick={() => onSet(null)}
+        title={followLabel}
+      >
+        {override == null ? '• ' : '  '}Follow project ({projectEnabled ? 'on' : 'off'})
+      </button>
+      <button
+        className="row-menu-item"
+        role="menuitem"
+        onClick={() => onSet(true)}
+      >
+        {override === true ? '• ' : '  '}On (force enable)
+      </button>
+      <button
+        className="row-menu-item"
+        role="menuitem"
+        onClick={() => onSet(false)}
+      >
+        {override === false ? '• ' : '  '}Off (force disable)
+      </button>
+    </>
   );
 }
 

@@ -219,6 +219,15 @@ export const Session = z.object({
    *  the project's default for this backend (which itself falls back to
    *  the built-in global login). Persisted so it survives resume/respawn. */
   loginSessionId: z.string().nullable(),
+  /** Per-session Maestro override. Three states:
+   *    null (default) → follow the parent project's `maestroEnabled`
+   *    true           → force-enable, even if the project is off
+   *    false          → force-disable, even if the project is on
+   *  The planner's F15.1 candidate gate reads
+   *  `session.maestroEnabled ?? project.maestroEnabled` — a session
+   *  override always wins. Persisted per row so the choice survives
+   *  resume/respawn. */
+  maestroEnabled: z.boolean().nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -1033,6 +1042,17 @@ const SessionSetSnoozedRequest = z.object({
 });
 const SessionSetSnoozedResponse = z.object({ session: Session });
 
+/** Set (or clear) the per-session Maestro override.
+ *    enabled = null  → follow the parent project's `maestroEnabled`
+ *    enabled = true  → force-enable, even if the project is off
+ *    enabled = false → force-disable, even if the project is on
+ *  Fired from the session row menu's Maestro submenu. */
+const SessionSetMaestroEnabledRequest = z.object({
+  sessionId: SessionId,
+  enabled: z.boolean().nullable(),
+});
+const SessionSetMaestroEnabledResponse = z.object({ session: Session });
+
 /** Set (or clear) a session's title. An empty/whitespace-only string
  *  clears the title, reverting the row to its branch-name label. */
 const SessionSetTitleRequest = z.object({
@@ -1546,6 +1566,10 @@ export const ControlVerbs = {
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
+  'session.setMaestroEnabled': {
+    request: SessionSetMaestroEnabledRequest,
+    response: SessionSetMaestroEnabledResponse,
+  },
   'session.setTitle': { request: SessionSetTitleRequest, response: SessionSetTitleResponse },
   'session.setJiraTaskId': { request: SessionSetJiraTaskIdRequest, response: SessionSetJiraTaskIdResponse },
 

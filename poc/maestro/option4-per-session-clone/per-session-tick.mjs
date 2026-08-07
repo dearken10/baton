@@ -136,9 +136,18 @@ function filterCandidates(sessions, projectsById) {
     const project = projectsById.get(s.project_id);
     const projectSnoozed = project?.snoozed_at != null;
     if (s.snoozed_at != null || projectSnoozed) return false;
-    // Per-project Maestro opt-out. Defaults true for projects whose
-    // row pre-dates the column.
-    if (project && (project.maestro_enabled ?? 1) === 0) return false;
+    // Maestro enable resolution: a per-session override (0/1) always
+    // wins; otherwise fall back to the project's flag; otherwise
+    // default to enabled (for rows created before the column existed).
+    // sqlite gives us 0/1/null — coerce with != null to preserve the
+    // three-state semantic.
+    const effectiveEnabled =
+      s.maestro_enabled != null
+        ? s.maestro_enabled !== 0
+        : project && project.maestro_enabled != null
+          ? project.maestro_enabled !== 0
+          : true;
+    if (!effectiveEnabled) return false;
     // Drop the master-mind itself
     if (s.session_kind === 'maestro') return false;
     // Drop shells — never resume/initiate targets
@@ -365,12 +374,14 @@ async function main() {
 
   // session_kind is option3's master-mind marker. Optional — fresh
   // BATON_HOME databases (option4-only) don't have the column, and the
-  // SELECT would crash otherwise.
+  // SELECT would crash otherwise. Same defensive probe for the
+  // per-session Maestro override column (added after the base schema).
   const kindCol = sessionsHasColumn('session_kind') ? ', session_kind' : '';
+  const maestroCol = sessionsHasColumn('maestro_enabled') ? ', maestro_enabled' : '';
   const sessions = sqliteJson(
     `SELECT id, project_id, backend_id, branch, worktree_path, status,
             tokens_in, tokens_out, last_summary, started_at, snoozed_at,
-            claude_session_id${kindCol}
+            claude_session_id${kindCol}${maestroCol}
        FROM sessions WHERE ended_at IS NULL`
   );
   const candidates = filterCandidates(sessions, projectsById);

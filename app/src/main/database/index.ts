@@ -369,6 +369,15 @@ function runMigrations(d: Database.Database): void {
       `ALTER TABLE projects ADD COLUMN maestro_enabled INTEGER NOT NULL DEFAULT 1`
     );
   } catch { /* already migrated */ }
+
+  // Per-session Maestro override. NULL = follow the parent project's
+  // maestro_enabled (default behaviour); 1 = force-enable even if the
+  // project is off; 0 = force-disable even if the project is on. Kept
+  // nullable so the "follow project" default has a distinct third
+  // state from an explicit choice — the UI shows Follow / On / Off.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN maestro_enabled INTEGER');
+  } catch { /* already migrated */ }
 }
 
 export function getDatabase(): Database.Database {

@@ -214,7 +214,8 @@ function main() {
   const sessions = sqliteJson(
     `SELECT id, project_id, backend_id, branch, worktree_path, status,
             intent_label, tokens_in, tokens_out, last_summary,
-            started_at, snoozed_at, claude_session_id, session_kind
+            started_at, snoozed_at, claude_session_id, session_kind,
+            maestro_enabled AS session_maestro_enabled
      FROM sessions
      WHERE ended_at IS NULL`
   );
@@ -261,11 +262,22 @@ function main() {
       minutes_since_started: Math.round((now - s.started_at) / 60000),
       last_summary: s.last_summary,
       snoozed: s.snoozed_at != null || project?.snoozed_at != null,
-      // Per-project Maestro opt-out. Defaults true (column default
-      // is 1) so projects that pre-date this column behave exactly
-      // as before. The candidate gate drops everything where this
-      // is false BEFORE the planner sees it.
-      maestro_enabled: project ? (project.maestro_enabled ?? 1) !== 0 : true,
+      // Effective Maestro flag. A per-session override (0/1) always
+      // wins; otherwise fall back to the project's flag (defaults 1);
+      // otherwise default to enabled for rows that pre-date the
+      // column. The candidate gate drops false BEFORE the planner sees it.
+      maestro_enabled: (
+        s.session_maestro_enabled != null
+          ? s.session_maestro_enabled !== 0
+          : project
+            ? (project.maestro_enabled ?? 1) !== 0
+            : true
+      ),
+      // Whether the effective value came from the session override
+      // (true) or was inherited from the project (false). The planner
+      // uses this to distinguish "user explicitly ran this session
+      // through Maestro" from "project default".
+      maestro_enabled_source: s.session_maestro_enabled != null ? 'session' : 'project',
       session_kind: s.session_kind ?? 'agent',
       last_activity_at: lastActivityAt,
       conversation

@@ -204,6 +204,13 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const session = getSessionManager().setSnoozed(req.sessionId, req.snoozed);
     return { session };
   },
+  'session.setMaestroEnabled': (req) => {
+    const session = getSessionManager().setMaestroEnabled(
+      req.sessionId,
+      req.enabled,
+    );
+    return { session };
+  },
   'session.setTitle': (req) => {
     const session = getSessionManager().setTitle(req.sessionId, req.title);
     return { session };

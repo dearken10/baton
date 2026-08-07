@@ -572,7 +572,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
-                claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id
+                claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id, maestro_enabled
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
@@ -589,6 +589,7 @@ export class SessionManager {
         parent_session_id: string | null;
         jira_task_id: string | null;
         login_session_id: string | null;
+        maestro_enabled: number | null;
       }[];
 
     return rows.map((r) => {
@@ -615,6 +616,7 @@ export class SessionManager {
         parentSessionId: r.parent_session_id,
         jiraTaskId: r.jira_task_id,
         loginSessionId: r.login_session_id,
+        maestroEnabled: r.maestro_enabled == null ? null : r.maestro_enabled !== 0,
       };
     });
   }
@@ -829,6 +831,7 @@ export class SessionManager {
       let savedTokensIn = 0;
       let savedTokensOut = 0;
       let savedSnoozedAt: number | null = null;
+      let savedMaestroEnabled: number | null = null;
       // Preserve the prior last-activity time across resume/respawn.
       // Reconnecting a session on app launch is NOT user/agent activity
       // — if we re-stamped it to now (like startedAt does), the boot-time
@@ -839,9 +842,9 @@ export class SessionManager {
       if (opts.reuseSessionId) {
         try {
           const prev = getDatabase()
-            .prepare('SELECT last_summary, title, tokens_in, tokens_out, snoozed_at, last_active_at FROM sessions WHERE id = ?')
+            .prepare('SELECT last_summary, title, tokens_in, tokens_out, snoozed_at, last_active_at, maestro_enabled FROM sessions WHERE id = ?')
             .get(opts.reuseSessionId) as
-            | { last_summary: string | null; title: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null; last_active_at: number | null }
+            | { last_summary: string | null; title: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null; last_active_at: number | null; maestro_enabled: number | null }
             | undefined;
           if (prev) {
             savedSummary = prev.last_summary;
@@ -850,6 +853,7 @@ export class SessionManager {
             savedTokensOut = prev.tokens_out ?? 0;
             savedSnoozedAt = prev.snoozed_at;
             savedLastActiveAt = prev.last_active_at;
+            savedMaestroEnabled = prev.maestro_enabled;
           }
         } catch { /* best-effort */ }
       }
@@ -875,6 +879,8 @@ export class SessionManager {
         parentSessionId: opts.parentSessionId ?? null,
         jiraTaskId,
         loginSessionId,
+        maestroEnabled:
+          savedMaestroEnabled == null ? null : savedMaestroEnabled !== 0,
       };
 
       // Make the session visible to the hook handler IMMEDIATELY,
@@ -1706,7 +1712,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
-                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id
+                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id, maestro_enabled
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -1722,6 +1728,7 @@ export class SessionManager {
             parent_session_id: string | null;
             jira_task_id: string | null;
             login_session_id: string | null;
+            maestro_enabled: number | null;
           }
         | undefined;
       if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -1772,6 +1779,7 @@ export class SessionManager {
         parentSessionId: row.parent_session_id,
         jiraTaskId: row.jira_task_id,
         loginSessionId: row.login_session_id,
+        maestroEnabled: row.maestro_enabled == null ? null : row.maestro_enabled !== 0,
       };
       emit({
         type: 'session.renamed',
@@ -1875,6 +1883,27 @@ export class SessionManager {
     if (live) live.meta = { ...live.meta, snoozedAt: value };
     const session = this.listAll().find((s) => s.id === sessionId);
     if (!session) throw new Error(`Session disappeared after snooze toggle: ${sessionId}`);
+    emit({ type: 'session.refreshed', session });
+    return session;
+  }
+
+  /** Set (or clear) the per-session Maestro override.
+   *  Persistent, read at planner tick time — the F15.1 gate resolves
+   *  `session.maestroEnabled ?? project.maestroEnabled`, so this always
+   *  wins over the project's setting. No runtime restart needed.
+   *
+   *  Values: null → follow project, true → force on, false → force off. */
+  setMaestroEnabled(sessionId: string, enabled: boolean | null): Session {
+    // SQLite has no native boolean — persist as 0/1/NULL.
+    const value = enabled == null ? null : (enabled ? 1 : 0);
+    const res = getDatabase()
+      .prepare('UPDATE sessions SET maestro_enabled = ? WHERE id = ?')
+      .run(value, sessionId);
+    if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, maestroEnabled: enabled };
+    const session = this.listAll().find((s) => s.id === sessionId);
+    if (!session) throw new Error(`Session disappeared after Maestro toggle: ${sessionId}`);
     emit({ type: 'session.refreshed', session });
     return session;
   }
