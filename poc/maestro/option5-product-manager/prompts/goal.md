@@ -4,7 +4,15 @@ Your reply will be surfaced to a human reviewer as an **editable suggestion**; t
 
 ## Your goal
 
-{{GOAL}}
+<!--
+  Edit the block below directly. Whatever you write here IS your goal;
+  the script feeds this whole file to a fresh claude -p call on every
+  run, so a save takes effect on the next invocation. Keep it terse
+  and outcome-shaped ("ship X"; "verify Y works end-to-end"), not a
+  plan of tasks — the PM will decide the plan.
+-->
+
+TODO: write the goal here.
 
 ## The engineer's recent conversation
 

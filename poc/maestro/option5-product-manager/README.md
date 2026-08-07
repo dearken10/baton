@@ -35,27 +35,29 @@ questionable for deep debugging.
 
 ## Files
 
-- `prompts/goal.md` — the PM persona + instruction template with two
-  placeholders the script substitutes:
-  - `{{GOAL}}` — the free-form goal text passed as `--goal "<text>"`
-  - `{{CONVERSATION}}` — the formatted last-N turns from the target's
-    JSONL
+- `prompts/goal.md` — the PM persona + your goal, all in one editable
+  file. Edit the "Your goal" section directly; whatever is there IS
+  the goal the PM optimizes for on the next run. The script also
+  substitutes `{{CONVERSATION}}` with the target agent's recent turns
+  before sending.
 - `pm-propose.mjs` — the standalone script. Node, no dependencies.
 - `README.md` — this file.
 
 ## Usage
 
-Standalone (from the repo root):
+Set the goal first: open `prompts/goal.md` and edit the block under
+"Your goal" — replace the TODO with what you want the engineer to
+accomplish. Save.
+
+Then run against a target session (from the repo root):
 
 ```bash
 node poc/maestro/option5-product-manager/pm-propose.mjs \
-  09fd320c-c2d7-4bb2-b0dc-55eff1609af3 \
-  --goal "Ship the F15.2 auto-executor. Wire the option4 backend, test on baton1."
+  09fd320c-c2d7-4bb2-b0dc-55eff1609af3
 ```
 
 Flags:
 
-- `--goal "<text>"`        — required; the free-form goal the PM is optimizing for.
 - `--turns N`              — number of tail turns to include (default 8).
 - `--jsonl-path <path>`    — explicit JSONL path, skips the `~/.claude/projects/` search.
 - `--dry-run`              — print the composed prompt to stdout, skip the claude call.
@@ -76,7 +78,7 @@ object:
 {
   "claude_session_id": "09fd320c-…",
   "jsonl_path": "/Users/…/09fd320c-….jsonl",
-  "goal": "Ship the F15.2 auto-executor …",
+  "prompt_path": "/Users/…/poc/maestro/option5-product-manager/prompts/goal.md",
   "turn_count_used": 8,
   "proposal": {
     "action": "resume",

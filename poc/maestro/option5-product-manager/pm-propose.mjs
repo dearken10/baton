@@ -17,11 +17,14 @@
 // Usage:
 //   node poc/maestro/option5-product-manager/pm-propose.mjs \
 //     <claude-session-id> \
-//     --goal "<free-form goal text the user set at kickoff>" \
 //     [--turns N]           # last N turns to include (default 8)
 //     [--jsonl-path PATH]   # explicit path instead of searching
 //     [--dry-run]           # print the composed prompt; skip claude call
 //     [--prompt PATH]       # use a different template (default: prompts/goal.md)
+//
+// The goal lives INSIDE prompts/goal.md — edit that file directly to
+// change what the PM optimizes for. The script feeds the whole file to
+// claude -p on every run, so a save takes effect on the next call.
 //
 // The <claude-session-id> is the UUID Claude Code assigned to the
 // target agent's session (visible in baton's session info dialog and
@@ -57,7 +60,6 @@ const CLAUDE_TIMEOUT_MS = 180_000;
 function parseArgs(argv) {
   const out = {
     claudeSessionId: null,
-    goal: null,
     turns: DEFAULT_TURNS,
     jsonlPath: null,
     dryRun: false,
@@ -66,7 +68,6 @@ function parseArgs(argv) {
   const rest = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === '--goal')       { out.goal = argv[++i]; continue; }
     if (a === '--turns')      { out.turns = Number.parseInt(argv[++i], 10); continue; }
     if (a === '--jsonl-path') { out.jsonlPath = argv[++i]; continue; }
     if (a === '--dry-run')    { out.dryRun = true; continue; }
@@ -74,9 +75,8 @@ function parseArgs(argv) {
     if (a.startsWith('--'))   { die(`unknown flag: ${a}`); }
     rest.push(a);
   }
-  if (rest.length !== 1) die('usage: pm-propose.mjs <claude-session-id> --goal "<text>" [flags]');
+  if (rest.length !== 1) die('usage: pm-propose.mjs <claude-session-id> [flags]');
   out.claudeSessionId = rest[0];
-  if (!out.goal) die('--goal is required');
   if (!Number.isFinite(out.turns) || out.turns <= 0) out.turns = DEFAULT_TURNS;
   return out;
 }
@@ -214,16 +214,16 @@ function formatConversation(turns) {
   return [lines.join('\n'), keep.join('\n\n---\n\n')].filter(Boolean).join('');
 }
 
-/** Substitute {{GOAL}} and {{CONVERSATION}} in the template. Emits a
- *  loud warning to stderr if a placeholder isn't found — that's a
- *  prompt-template bug we want to catch, not silently paper over. */
-function composePrompt(template, goal, conversation) {
-  let s = template;
-  if (!s.includes('{{GOAL}}')) console.error('[pm] warning: prompt template has no {{GOAL}} placeholder');
-  if (!s.includes('{{CONVERSATION}}')) console.error('[pm] warning: prompt template has no {{CONVERSATION}} placeholder');
-  s = s.split('{{GOAL}}').join(goal);
-  s = s.split('{{CONVERSATION}}').join(conversation);
-  return s;
+/** Substitute {{CONVERSATION}} in the template. The goal lives
+ *  directly in goal.md — the user edits it there and saves; we don't
+ *  substitute anything for it. Warn if the CONVERSATION placeholder
+ *  is missing since that would break the "PM sees engineer's tail"
+ *  behavior silently. */
+function composePrompt(template, conversation) {
+  if (!template.includes('{{CONVERSATION}}')) {
+    console.error('[pm] warning: prompt template has no {{CONVERSATION}} placeholder — the engineer\'s conversation will not be included');
+  }
+  return template.split('{{CONVERSATION}}').join(conversation);
 }
 
 /** Fire claude -p with the composed prompt. cwd = HOME so claude
@@ -286,7 +286,7 @@ function main() {
 
   const template = readFileSync(args.promptPath, 'utf8');
   const conversation = formatConversation(turns);
-  const prompt = composePrompt(template, args.goal, conversation);
+  const prompt = composePrompt(template, conversation);
 
   if (args.dryRun) {
     process.stdout.write(prompt);
@@ -301,7 +301,7 @@ function main() {
   const out = {
     claude_session_id: args.claudeSessionId,
     jsonl_path: jsonlPath,
-    goal: args.goal,
+    prompt_path: args.promptPath,
     turn_count_used: turns.length,
     proposal,
   };
