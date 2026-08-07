@@ -43,11 +43,22 @@ import { batonHome } from '../paths.js';
 const PROMPT_SLUGS = ['next-action', 'outstanding-tasks', 'phase3-from-docs', 'goal'] as const;
 type PromptSlug = (typeof PROMPT_SLUGS)[number];
 
+/** Slug → repo-relative directory for the checked-in default file.
+ *  Most prompts live under option 4 (the tick daemon), but `goal`
+ *  now lives under option 5 (PM-as-outsider) — see that dir's
+ *  README for the perspective shift. */
+const PROMPT_DIR_BY_SLUG: Record<PromptSlug, string> = {
+  'next-action':       'poc/maestro/option4-per-session-clone/prompts',
+  'outstanding-tasks': 'poc/maestro/option4-per-session-clone/prompts',
+  'phase3-from-docs':  'poc/maestro/option4-per-session-clone/prompts',
+  'goal':              'poc/maestro/option5-product-manager/prompts',
+};
+
 /** Repo-default prompt files (checked in). Resolved via the Electron
  *  app path — same trick maestroState.ts uses for the daemon scripts. */
 function defaultPromptPath(slug: PromptSlug): string {
   const repoRoot = join(app.getAppPath(), '..');
-  return join(repoRoot, 'poc', 'maestro', 'option4-per-session-clone', 'prompts', `${slug}.md`);
+  return join(repoRoot, PROMPT_DIR_BY_SLUG[slug], `${slug}.md`);
 }
 
 /** Per-instance override dir. Created lazily when the user saves.
