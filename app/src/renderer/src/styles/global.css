@@ -4366,16 +4366,16 @@ button.terminal-tab,
   color: var(--text-faint); font-size: 12px; font-style: italic;
 }
 
-/* ── Maestro inline suggestion card (variant A) ──────────────────
+/* ── Maestro dock (variant A, always-visible) ────────────────────
  * Rendered by MaestroSuggestionCard at the bottom of the terminal
- * slot, above the xterm host. Only shows when the per-session
- * proposer produced a suggestion for the active session.
+ * slot. Header is always visible; body collapses to save space.
+ * Body content depends on state: idle (hint + Suggest), thinking
+ * (spinner), resume (editor + Send), wait/defer (rationale-only).
  * Mockup: design/mockup-maestro-inline-suggestion.html
  */
-.mae-card {
+.mae-dock {
   flex: 0 0 auto;
   margin: 0 12px 10px;
-  padding: 10px 12px 8px;
   background: linear-gradient(180deg, var(--maestro-2), #17131f);
   border: 1px solid rgba(167, 139, 250, 0.45);
   border-radius: 8px;
@@ -4383,42 +4383,78 @@ button.terminal-tab,
   font-size: 12.5px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  overflow: hidden;
 }
-
-/* Passive variant — wait/defer proposals. Same shape as the active
- * card but muted (dimmer background, softer border) so a "Maestro
- * ran and is waiting" state doesn't compete visually with an
- * actionable suggestion. Rationale text is the primary content;
- * there's no editor or Send. */
-.mae-card-passive {
+/* Idle / thinking / wait / defer states get a muted look so they
+ * don't visually shout the way an actionable resume card does. */
+.mae-dock-idle,
+.mae-dock-thinking,
+.mae-dock-wait,
+.mae-dock-defer {
   background: linear-gradient(180deg, rgba(28, 23, 48, 0.6), rgba(20, 16, 32, 0.6));
   border-color: rgba(167, 139, 250, 0.22);
 }
-.mae-card-passive .mae-title { opacity: 0.85; }
-.mae-card-passive .mae-rationale {
-  max-width: none;
-  font-style: normal;
-  color: var(--text);
-  opacity: 0.85;
-}
-.mae-card-head {
+.mae-dock-idle .mae-title,
+.mae-dock-thinking .mae-title,
+.mae-dock-wait .mae-title,
+.mae-dock-defer .mae-title { opacity: 0.85; }
+/* Collapsed: only the header shows. No bottom padding since there's
+ * no body underneath. */
+.mae-dock.is-collapsed .mae-dock-head { padding-bottom: 8px; }
+
+.mae-dock-head {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 12px;
+  padding: 8px 12px 4px;
 }
-.mae-card-head .mae-glyph { color: var(--maestro); font-size: 13px; }
-.mae-card-head .mae-title {
+.mae-dock-head .mae-glyph { color: var(--maestro); font-size: 13px; }
+.mae-dock-head .mae-title {
   color: var(--maestro);
   font-weight: 600;
   font-size: 12.5px;
 }
-.mae-card-head .mae-conf {
+.mae-dock-head .mae-conf {
   font-size: 10.5px;
   color: var(--text-faint);
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
 }
+.mae-collapse-btn {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  min-width: 24px;
+}
+
+.mae-dock-body {
+  padding: 6px 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.mae-dock-body-idle,
+.mae-dock-body-thinking {
+  color: var(--text-dim);
+}
+.mae-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+.mae-hint strong { color: var(--text); }
+.mae-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid rgba(167, 139, 250, 0.35);
+  border-top-color: var(--maestro);
+  animation: mae-spin 0.8s linear infinite;
+  vertical-align: -1px;
+  margin-right: 6px;
+}
+@keyframes mae-spin { to { transform: rotate(360deg); } }
+
 .mae-card-spacer { flex: 1; }
 
 .mae-editor {

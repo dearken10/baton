@@ -1,25 +1,42 @@
 /**
  * MaestroSuggestionCard — variant A from
- * design/mockup-maestro-inline-suggestion.html. Mounted at the bottom
- * of the middle-column terminal slot, above the xterm host. Renders
- * only when the current session has a pending Maestro suggestion.
+ * design/mockup-maestro-inline-suggestion.html, evolved into an
+ * always-visible collapsible dock at the bottom of the middle-column
+ * terminal slot.
+ *
+ * States (single component, one dock, four content modes):
+ *   idle       — no suggestion yet; body shows a hint + "Suggest"
+ *                button so the user can generate one on demand
+ *                (doesn't need the session to have hit any event)
+ *   thinking   — the user just hit Suggest and we're waiting for the
+ *                proposer to land; body shows a shimmer + a note
+ *   resume     — proposer produced a concrete next prompt; body shows
+ *                the editor + Send / Reset / Regenerate / Dismiss
+ *   wait/defer — proposer chose not to propose; body shows the
+ *                rationale + Regenerate / Dismiss
+ *
+ * Header is always visible. Collapsed hides the body but leaves the
+ * header + Suggest / expand button visible so the user can trigger
+ * regeneration from a minimal footprint. Collapsed state is persisted
+ * globally (one preference, not per-session).
  *
  * Data flow:
- *   1. Main fires option4's per-session proposer when the session
- *      transitions to idle/needs-input/done (see maestroSuggestion.ts).
- *   2. Main pushes `maestro.suggestion.updated` — the store slice
- *      `maestroSuggestions[sessionId]` gets the new proposal (or null).
- *   3. This component reads the slice for its session id and shows an
- *      editable card. Send → `maestro.acceptSuggestion` writes the
- *      final prompt into the PTY. Dismiss → `maestro.dismissSuggestion`.
- *      Regenerate → `maestro.regenerateSuggestion`.
+ *   1. Main fires option5's PM proposer either on a session status
+ *      transition (running → idle/…) OR when the user clicks Suggest
+ *      (via maestro.regenerateSuggestion). See maestroSuggestion.ts.
+ *   2. Main pushes maestro.suggestion.updated — the store slice
+ *      maestroSuggestions[sessionId] gets the new proposal or null.
+ *   3. This component reads the slice for its session id and renders.
+ *      Send → maestro.acceptSuggestion writes the final prompt into
+ *      the PTY. Dismiss → maestro.dismissSuggestion. Regenerate /
+ *      Suggest → maestro.regenerateSuggestion.
  *
- * Boot: on mount we also pull `maestro.getSuggestion` so a suggestion
+ * Boot: on mount we also pull maestro.getSuggestion so a suggestion
  * that landed while this session's tab was hidden shows up when the
  * user switches back.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
 import type { MaestroSuggestion } from '@shared/ipc.js';
 
@@ -27,7 +44,24 @@ interface Props {
   sessionId: string;
 }
 
-export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null {
+/** localStorage key for the global collapsed preference. */
+const LS_KEY_COLLAPSED = 'baton:maestro-card:collapsed';
+
+/** Backstop timeout for the "thinking" state — a proposer that's
+ *  stuck (or died silently) shouldn't leave the button disabled
+ *  forever. 3 min matches PROPOSER_TIMEOUT_MS on the main side. */
+const THINKING_TIMEOUT_MS = 180_000;
+
+function loadCollapsed(): boolean {
+  try { return localStorage.getItem(LS_KEY_COLLAPSED) === 'true'; }
+  catch { return false; }
+}
+function saveCollapsed(v: boolean): void {
+  try { localStorage.setItem(LS_KEY_COLLAPSED, v ? 'true' : 'false'); }
+  catch { /* best-effort */ }
+}
+
+export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element {
   const suggestion = useAppStore(
     (s) => s.maestroSuggestions[sessionId] ?? null,
   );
@@ -38,10 +72,50 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
   // same object don't reset the draft mid-typing).
   const [draft, setDraft] = useState('');
   const [lastAt, setLastAt] = useState<number | null>(null);
+
+  // Short-lived (send/dismiss IPC) vs. long-lived (waiting for the
+  // proposer to return). Split so the Send button can be re-enabled
+  // between long-running proposer calls, and vice versa.
   const [busy, setBusy] = useState(false);
+  const [proposing, setProposing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [collapsed, setCollapsed] = useState<boolean>(loadCollapsed);
+  const toggleCollapsed = useCallback((): void => {
+    setCollapsed((c) => {
+      const next = !c;
+      saveCollapsed(next);
+      return next;
+    });
+  }, []);
+
+  // Backstop for `proposing` — if the proposer never fires an update
+  // (silent failure), auto-clear so the user isn't stuck.
+  const thinkingTimerRef = useRef<number | null>(null);
   useEffect(() => {
+    if (!proposing) {
+      if (thinkingTimerRef.current != null) {
+        window.clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+      }
+      return;
+    }
+    thinkingTimerRef.current = window.setTimeout(() => {
+      setProposing(false);
+      setError((prev) => prev ?? 'Proposer timed out — try Suggest again.');
+    }, THINKING_TIMEOUT_MS);
+    return () => {
+      if (thinkingTimerRef.current != null) {
+        window.clearTimeout(thinkingTimerRef.current);
+        thinkingTimerRef.current = null;
+      }
+    };
+  }, [proposing]);
+
+  // Any store update for this session's suggestion clears the
+  // thinking flag — the proposer landed (or something else did).
+  useEffect(() => {
+    setProposing(false);
     if (suggestion && suggestion.proposedAt !== lastAt) {
       setDraft(suggestion.prompt);
       setLastAt(suggestion.proposedAt);
@@ -50,11 +124,13 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
     if (!suggestion) {
       setLastAt(null);
     }
-  }, [suggestion, lastAt]);
+    // Only track suggestion identity for the effect trigger — lastAt
+    // is stateful and updated inside, deliberately not a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestion]);
 
-  // Cold-start pull — if the session already had a suggestion when
-  // we mounted (main pushed the event before this component existed),
-  // fetch it explicitly so the card populates immediately.
+  // Cold-start pull — a suggestion may have landed for this session
+  // while its tab was hidden.
   useEffect(() => {
     let cancelled = false;
     void window.baton
@@ -79,11 +155,8 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
         sessionId,
         prompt,
       });
-      if (!r.ok) {
-        setError(r.reason ?? 'Send failed');
-      }
-      // On success main clears its state and emits an update — the
-      // subscription flips this component off, no local state work.
+      if (!r.ok) setError(r.reason ?? 'Send failed');
+      // On success main clears its state and emits an update.
     } catch (e) {
       setError(String(e));
     } finally {
@@ -103,111 +176,199 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
     }
   }, [sessionId]);
 
-  const regenerate = useCallback(async (): Promise<void> => {
-    setBusy(true);
+  const suggest = useCallback(async (): Promise<void> => {
     setError(null);
+    setProposing(true);
     try {
       const r = await window.baton.call('maestro.regenerateSuggestion', {
         sessionId,
       });
-      if (!r.ok) setError(r.reason ?? 'Regenerate failed');
+      if (!r.ok) {
+        setProposing(false);
+        setError(r.reason ?? 'Could not start the proposer.');
+      }
+      // On success we stay in `proposing` until the update event
+      // lands (or the timeout backstop fires).
     } catch (e) {
+      setProposing(false);
       setError(String(e));
-    } finally {
-      setBusy(false);
     }
   }, [sessionId]);
 
-  if (!suggestion) return null;
+  const state: DockState = proposing
+    ? 'thinking'
+    : suggestion?.kind === 'resume'
+      ? 'resume'
+      : suggestion?.kind === 'wait'
+        ? 'wait'
+        : suggestion?.kind === 'defer'
+          ? 'defer'
+          : 'idle';
 
-  // `wait` / `defer` proposals render a passive card — Maestro ran and
-  // has an opinion (the rationale) but chose not to propose a concrete
-  // prompt (usually because the last agent turn ended with an open
-  // question the user genuinely has to answer). No editor, no Send;
-  // just the reasoning plus Regenerate (in case the state changed) +
-  // Dismiss.
-  if (suggestion.kind !== 'resume') {
+  const canSuggest = !proposing && !busy;
+
+  return (
+    <div
+      className={`mae-dock mae-dock-${state}${collapsed ? ' is-collapsed' : ''}`}
+      role="region"
+      aria-label="Maestro suggestion dock"
+    >
+      <DockHeader
+        state={state}
+        suggestion={suggestion}
+        collapsed={collapsed}
+        canSuggest={canSuggest}
+        onSuggest={() => void suggest()}
+        onToggleCollapsed={toggleCollapsed}
+      />
+      {!collapsed && (
+        <DockBody
+          state={state}
+          suggestion={suggestion}
+          draft={draft}
+          setDraft={setDraft}
+          busy={busy}
+          error={error}
+          onSend={() => void send()}
+          onDismiss={() => void dismiss()}
+          onReset={() => setDraft(suggestion?.prompt ?? '')}
+        />
+      )}
+    </div>
+  );
+}
+
+type DockState = 'idle' | 'thinking' | 'resume' | 'wait' | 'defer';
+
+function DockHeader({
+  state,
+  suggestion,
+  collapsed,
+  canSuggest,
+  onSuggest,
+  onToggleCollapsed,
+}: {
+  state: DockState;
+  suggestion: MaestroSuggestion | null;
+  collapsed: boolean;
+  canSuggest: boolean;
+  onSuggest: () => void;
+  onToggleCollapsed: () => void;
+}): JSX.Element {
+  return (
+    <div className="mae-dock-head">
+      <span className="mae-glyph" aria-hidden>🎼</span>
+      <span className="mae-title">{titleFor(state)}</span>
+      {suggestion && state !== 'idle' && state !== 'thinking' ? (
+        <span
+          className="mae-conf"
+          title={`Confidence: ${suggestion.confidence.toFixed(2)}`}
+        >
+          {fmtConfidence(suggestion.confidence)}
+        </span>
+      ) : null}
+      <span className="mae-card-spacer" />
+      <button
+        type="button"
+        className="mae-btn"
+        onClick={onSuggest}
+        disabled={!canSuggest}
+        title="Ask the PM to propose a next instruction for this session"
+      >
+        {state === 'thinking' ? 'Thinking…' : suggestion ? '↻ Suggest' : '✨ Suggest prompt'}
+      </button>
+      <button
+        type="button"
+        className="mae-btn ghost mae-collapse-btn"
+        onClick={onToggleCollapsed}
+        title={collapsed ? 'Expand Maestro dock' : 'Collapse Maestro dock'}
+        aria-expanded={!collapsed}
+      >
+        {collapsed ? '▲' : '▼'}
+      </button>
+    </div>
+  );
+}
+
+function DockBody({
+  state,
+  suggestion,
+  draft,
+  setDraft,
+  busy,
+  error,
+  onSend,
+  onDismiss,
+  onReset,
+}: {
+  state: DockState;
+  suggestion: MaestroSuggestion | null;
+  draft: string;
+  setDraft: (v: string) => void;
+  busy: boolean;
+  error: string | null;
+  onSend: () => void;
+  onDismiss: () => void;
+  onReset: () => void;
+}): JSX.Element {
+  if (state === 'idle') {
     return (
-      <div className="mae-card mae-card-passive" role="region" aria-label="Maestro waiting">
-        <div className="mae-card-head">
-          <span className="mae-glyph" aria-hidden>🎼</span>
-          <span className="mae-title">
-            Maestro is {suggestion.kind === 'defer' ? 'deferring' : 'waiting for you'}
-          </span>
-          <span className="mae-conf" title={`Confidence: ${suggestion.confidence.toFixed(2)}`}>
-            {fmtConfidence(suggestion.confidence)}
-          </span>
+      <div className="mae-dock-body mae-dock-body-idle">
+        <p className="mae-hint">
+          Maestro will suggest a next instruction the moment this session goes
+          idle. You can also hit <strong>Suggest prompt</strong> above to ask now.
+        </p>
+        {error ? <div className="mae-error">{error}</div> : null}
+      </div>
+    );
+  }
+  if (state === 'thinking') {
+    return (
+      <div className="mae-dock-body mae-dock-body-thinking">
+        <p className="mae-hint">
+          <span className="mae-spinner" aria-hidden /> The PM is reading the session
+          and drafting a next instruction. This takes 20–60 s.
+        </p>
+        {error ? <div className="mae-error">{error}</div> : null}
+      </div>
+    );
+  }
+  if (state !== 'resume') {
+    // wait / defer — passive card
+    return (
+      <div className="mae-dock-body">
+        <SuggestionRationale suggestion={suggestion!} />
+        <div className="mae-card-actions">
           <span className="mae-card-spacer" />
           <button
             type="button"
             className="mae-btn ghost"
-            onClick={() => void regenerate()}
-            disabled={busy}
-            title="Ask Maestro to re-evaluate — useful if the transcript has changed"
-          >
-            ↻ Regenerate
-          </button>
-          <button
-            type="button"
-            className="mae-btn ghost"
-            onClick={() => void dismiss()}
+            onClick={onDismiss}
             disabled={busy}
             title="Dismiss the suggestion"
           >
             ✕ Dismiss
           </button>
         </div>
-        <SuggestionRationale suggestion={suggestion} />
-        {error ? <div className="mae-error" style={{ marginTop: 6 }}>{error}</div> : null}
+        {error ? <div className="mae-error">{error}</div> : null}
       </div>
     );
   }
-
+  // resume — editable card
   return (
-    <div className="mae-card" role="region" aria-label="Maestro suggestion">
-      <div className="mae-card-head">
-        <span className="mae-glyph" aria-hidden>🎼</span>
-        <span className="mae-title">Maestro suggests</span>
-        <span className="mae-conf" title={`Confidence: ${suggestion.confidence.toFixed(2)}`}>
-          {fmtConfidence(suggestion.confidence)}
-        </span>
-        <span className="mae-card-spacer" />
-        <button
-          type="button"
-          className="mae-btn ghost"
-          onClick={() => void regenerate()}
-          disabled={busy}
-          title="Ask Maestro for a different suggestion"
-        >
-          ↻ Regenerate
-        </button>
-        <button
-          type="button"
-          className="mae-btn ghost"
-          onClick={() => void dismiss()}
-          disabled={busy}
-          title="Dismiss the suggestion without sending"
-        >
-          ✕ Dismiss
-        </button>
-      </div>
+    <div className="mae-dock-body">
       <textarea
         className="mae-editor mono"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {
-          // ⌘/Ctrl+Enter sends — matches the terminal's own submit
-          // vocabulary and lets the user commit without reaching for
-          // the mouse.
           if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
             e.preventDefault();
-            void send();
+            onSend();
           }
-          // Esc dismisses when the editor is empty; otherwise it
-          // just blurs, matching how form controls usually behave.
           if (e.key === 'Escape' && draft.length === 0) {
             e.preventDefault();
-            void dismiss();
+            onDismiss();
           }
         }}
         rows={3}
@@ -218,22 +379,31 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
         aria-label="Edit the suggested prompt before sending"
       />
       <div className="mae-card-actions">
-        <SuggestionRationale suggestion={suggestion} />
+        <SuggestionRationale suggestion={suggestion!} />
         {error ? <span className="mae-error">{error}</span> : null}
         <span className="mae-card-spacer" />
         <button
           type="button"
           className="mae-btn"
-          onClick={() => setDraft(suggestion.prompt)}
-          disabled={busy || draft === suggestion.prompt}
+          onClick={onReset}
+          disabled={busy || draft === (suggestion?.prompt ?? '')}
           title="Revert to the original suggestion body"
         >
           Reset
         </button>
         <button
           type="button"
+          className="mae-btn ghost"
+          onClick={onDismiss}
+          disabled={busy}
+          title="Dismiss without sending"
+        >
+          ✕ Dismiss
+        </button>
+        <button
+          type="button"
           className="mae-btn primary"
-          onClick={() => void send()}
+          onClick={onSend}
           disabled={busy || draft.trim().length === 0}
           title="Send this prompt into the terminal (⌘↵)"
         >
@@ -244,8 +414,6 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
   );
 }
 
-/** Compact "why this?" text — the rationale is the main signal; the
- *  assumption + if-wrong are shown on hover via title. */
 function SuggestionRationale({
   suggestion,
 }: { suggestion: MaestroSuggestion }): JSX.Element | null {
@@ -258,6 +426,16 @@ function SuggestionRationale({
       {suggestion.rationale ?? 'Suggested from the last agent turn.'}
     </span>
   );
+}
+
+function titleFor(state: DockState): string {
+  switch (state) {
+    case 'idle':     return 'Maestro';
+    case 'thinking': return 'Maestro is thinking';
+    case 'resume':   return 'Maestro suggests';
+    case 'wait':     return 'Maestro is waiting for you';
+    case 'defer':    return 'Maestro is deferring';
+  }
 }
 
 /** Confidence buckets — matches the proposer's bucket→number mapping
