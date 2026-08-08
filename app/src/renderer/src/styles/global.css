@@ -750,6 +750,23 @@ button {
 .row-menu-item:hover { background: var(--bg-2); }
 .row-menu-item.danger { color: var(--errored); }
 .row-menu-item.danger:hover { background: rgba(239, 84, 84, 0.10); }
+/* Static rows that host an embedded control (a <select>, chip, etc.)
+ * rather than being clickable themselves. Neutralises the hover so
+ * the label + control don't visually shout on mouseover. */
+.row-menu-item-static { cursor: default; }
+.row-menu-item-static:hover { background: transparent; }
+.row-menu-select {
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.row-menu-select:focus { border-color: var(--accent); }
 .session-row:hover { background: var(--bg-2); }
 .session-row .dim { color: var(--text-faint); font-weight: 400; }
 .session-row .session-row-main {

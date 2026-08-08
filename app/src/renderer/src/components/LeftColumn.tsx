@@ -1591,6 +1591,13 @@ function SessionRowMenu(props: {
  *  The active choice is marked with •; the "Follow" row also shows
  *  what the project would resolve to so the user can predict what
  *  clearing the override actually does. */
+/** Single-row Maestro override control. Replaces the previous
+ *  3-menu-item block with a compact <select> — the current state
+ *  reads as the visible option, and the popup lets the user pick
+ *  one of the three without eating three menu slots. Native select
+ *  keeps keyboard + screen-reader nav for free. Clicking the select
+ *  opens the OS picker in its own window; the outer row-menu-pop
+ *  ignores that as an outside click and stays open until choice. */
 function MaestroSubmenu({
   override,
   projectEnabled,
@@ -1600,38 +1607,42 @@ function MaestroSubmenu({
   projectEnabled: boolean;
   onSet: (enabled: boolean | null) => void;
 }): JSX.Element {
-  const followLabel = `Maestro: follow project (${projectEnabled ? 'on' : 'off'})`;
+  const value = override == null ? 'follow' : override ? 'on' : 'off';
   return (
-    <>
-      <div
-        className="row-menu-item"
-        style={{ fontSize: 10.5, color: 'var(--text-faint)', cursor: 'default', padding: '4px 10px 2px' }}
+    <div
+      className="row-menu-item row-menu-item-static"
+      role="none"
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 8,
+        cursor: 'default',
+      }}
+    >
+      <span style={{ flex: 1 }}>Maestro</span>
+      <select
+        className="row-menu-select"
+        value={value}
+        aria-label="Maestro override"
+        title={
+          value === 'follow'
+            ? `Follow project (currently ${projectEnabled ? 'on' : 'off'})`
+            : value === 'on'
+              ? 'Force enable for this session, even if the project is off'
+              : 'Force disable for this session, even if the project is on'
+        }
+        onChange={(e) => {
+          const v = e.target.value;
+          onSet(v === 'follow' ? null : v === 'on');
+        }}
+        onClick={(e) => e.stopPropagation()}
       >
-        Maestro override
-      </div>
-      <button
-        className="row-menu-item"
-        role="menuitem"
-        onClick={() => onSet(null)}
-        title={followLabel}
-      >
-        {override == null ? '• ' : '  '}Follow project ({projectEnabled ? 'on' : 'off'})
-      </button>
-      <button
-        className="row-menu-item"
-        role="menuitem"
-        onClick={() => onSet(true)}
-      >
-        {override === true ? '• ' : '  '}On (force enable)
-      </button>
-      <button
-        className="row-menu-item"
-        role="menuitem"
-        onClick={() => onSet(false)}
-      >
-        {override === false ? '• ' : '  '}Off (force disable)
-      </button>
-    </>
+        <option value="follow">Follow project ({projectEnabled ? 'on' : 'off'})</option>
+        <option value="on">On</option>
+        <option value="off">Off</option>
+      </select>
+    </div>
   );
 }
 
