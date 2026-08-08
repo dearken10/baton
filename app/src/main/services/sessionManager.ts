@@ -152,6 +152,39 @@ function claudeTranscriptExists(cwd: string, claudeSessionId: string): boolean {
   }
 }
 
+/**
+ * Mirror a session's title into Claude's own transcript so `claude --resume`
+ * (and anything else reading Claude's session list) shows the same name the
+ * app does — otherwise the CLI keeps whatever title Claude auto-generated.
+ *
+ * Claude records the conversation name as a self-contained JSONL line:
+ *   {"type":"ai-title","aiTitle":"…","sessionId":"…"}
+ * It's append-only — Claude re-appends rather than rewriting, and the last
+ * record wins — so we append too rather than rewriting the transcript. That
+ * keeps this safe against a live `claude` process writing concurrently.
+ *
+ * Claude-only (Codex stores no equivalent) and best-effort: a failure here
+ * must never break titling. Verified empirically against a 2.1.x transcript.
+ */
+function writeClaudeAiTitle(
+  cwd: string, claudeSessionId: string, title: string,
+): void {
+  const trimmed = title.trim();
+  if (!trimmed) return;
+  try {
+    const p = claudeTranscriptPath(cwd, claudeSessionId);
+    // Only append to a transcript that already exists — creating one would
+    // fabricate a conversation Claude never wrote.
+    if (!fs.existsSync(p)) return;
+    const line = JSON.stringify({
+      type: 'ai-title',
+      aiTitle: trimmed,
+      sessionId: claudeSessionId,
+    });
+    fs.appendFileSync(p, line + '\n');
+  } catch { /* best-effort */ }
+}
+
 /** Where to land a freshly-minted Codex transcript when cloning.
  *  Mirrors Codex's own `rollout-<isoTs>-<sessionId>.jsonl` shape inside
  *  today's `~/.codex/sessions/YYYY/MM/DD` bucket so `findCodexTranscript`
@@ -1843,7 +1876,8 @@ export class SessionManager {
 
   /** Set (or clear) a session's title. An empty/whitespace-only string
    *  clears it, reverting the row to its branch-name label. Persists to
-   *  the DB, updates in-memory meta, and emits `session.titled`. Once the
+   *  the DB, updates in-memory meta, emits `session.titled`, and mirrors the
+   *  name into Claude's transcript so `claude --resume` matches. Once the
    *  user sets a title, the auto-summariser stops overwriting it (see the
    *  `!currentTitle` guard in updateIntentSummary). */
   setTitle(sessionId: string, title: string): Session {
@@ -1855,6 +1889,23 @@ export class SessionManager {
     if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
     const live = this.live.get(sessionId);
     if (live) live.meta = { ...live.meta, title: value };
+    // Mirror a rename into Claude's own session name. Skipped when clearing
+    // (value === null) — there's no "unset" record, and re-appending an empty
+    // title would just blank the CLI's label rather than restore its own.
+    if (value) {
+      const row = getDatabase()
+        .prepare(
+          'SELECT backend_id, worktree_path, claude_session_id FROM sessions WHERE id = ?'
+        )
+        .get(sessionId) as
+        | { backend_id: string; worktree_path: string; claude_session_id: string | null }
+        | undefined;
+      const agentSid = live?.meta.claudeSessionId ?? row?.claude_session_id;
+      const cwd = live?.meta.worktreePath ?? row?.worktree_path;
+      if (row?.backend_id === 'claude-code' && agentSid && cwd) {
+        writeClaudeAiTitle(cwd, agentSid, value);
+      }
+    }
     emit({ type: 'session.titled', sessionId, title: value });
     const session = this.listAll().find((s) => s.id === sessionId);
     if (!session) throw new Error(`Session disappeared after title set: ${sessionId}`);
@@ -2088,6 +2139,11 @@ export class SessionManager {
           .run(summary, sessionId);
       } catch { /* best-effort */ }
       if (live) live.meta = { ...live.meta, title: summary };
+      // Mirror into Claude's transcript so `claude --resume` shows the same
+      // name. Claude-only; Codex has no equivalent record.
+      if (backendId === 'claude-code') {
+        writeClaudeAiTitle(cwd, agentSid, summary);
+      }
       emit({ type: 'session.titled', sessionId, title: summary });
     }
 

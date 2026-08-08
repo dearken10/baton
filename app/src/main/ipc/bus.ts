@@ -44,6 +44,7 @@ import {
   createLoginSession,
   updateLoginSession,
   deleteLoginSession,
+  reorderLoginSessions,
   probeLoginSession,
   startLogin,
   submitLoginCode,
@@ -107,6 +108,7 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     deleteLoginSession(req.id);
     return { ok: true as const };
   },
+  'loginSession.reorder': (req) => ({ sessions: reorderLoginSessions(req.orderedIds) }),
   'loginSession.probe': (req) => probeLoginSession(req.id),
   'loginSession.loginStart': (req) => startLogin(req.id),
   'loginSession.submitCode': (req) => {

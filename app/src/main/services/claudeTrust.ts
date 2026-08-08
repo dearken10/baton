@@ -30,6 +30,8 @@ function claudeJsonPath(configDir?: string): string {
 
 interface ClaudeConfig {
   projects?: Record<string, ProjectEntry>;
+  hasCompletedOnboarding?: boolean;
+  theme?: string;
 }
 interface ProjectEntry {
   hasTrustDialogAccepted?: boolean;
@@ -51,10 +53,17 @@ const STUB: ProjectEntry = {
 };
 
 /**
- * Idempotent. Adds `cwd` to Claude's trusted projects if it isn't
- * already. Resolves symlinks first because that's the form Claude
- * stores. Silent on any error — the app must keep working even if
- * the user's Claude config is locked / unreadable.
+ * Idempotent. Trusts `cwd` in Claude's config, and — for a baton-managed
+ * login's relocated config dir — also marks first-run onboarding complete.
+ * Resolves symlinks first because that's the form Claude stores. Silent on
+ * any error — the app must keep working even if the config is locked.
+ *
+ * Onboarding: a browser login's isolated config dir has never run Claude's
+ * setup wizard (theme picker etc.). Interactive `claude` there shows the
+ * wizard and ignores `--resume`, so a login switch starts a fresh
+ * conversation instead of resuming. Seeding `hasCompletedOnboarding` (the
+ * same flag the machine's own ~/.claude carries) skips the wizard. Only
+ * done when `configDir` is set — we never touch the user's real ~/.claude.
  */
 export function trustDirectoryForClaude(cwd: string, configDir?: string): void {
   let real = cwd;
@@ -71,11 +80,25 @@ export function trustDirectoryForClaude(cwd: string, configDir?: string): void {
     return;
   }
 
+  let changed = false;
+
+  // Trust the cwd.
   cfg.projects = cfg.projects ?? {};
   const existing = cfg.projects[real];
-  if (existing?.hasTrustDialogAccepted === true) return;
+  if (existing?.hasTrustDialogAccepted !== true) {
+    cfg.projects[real] = { ...STUB, ...(existing ?? {}), hasTrustDialogAccepted: true };
+    changed = true;
+  }
 
-  cfg.projects[real] = { ...STUB, ...(existing ?? {}), hasTrustDialogAccepted: true };
+  // Skip the first-run onboarding wizard in a login's config dir so
+  // interactive `claude` honours --resume instead of starting fresh.
+  if (configDir && cfg.hasCompletedOnboarding !== true) {
+    cfg.hasCompletedOnboarding = true;
+    if (cfg.theme === undefined) cfg.theme = 'dark';
+    changed = true;
+  }
+
+  if (!changed) return;
 
   try {
     // Atomic-ish write via a temp file in the same dir.

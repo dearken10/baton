@@ -62,6 +62,7 @@ describe('control verb registry', () => {
         "loginSession.list",
         "loginSession.loginStart",
         "loginSession.probe",
+        "loginSession.reorder",
         "loginSession.submitCode",
         "loginSession.update",
         "onboarding.complete",

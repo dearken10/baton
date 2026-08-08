@@ -275,6 +275,13 @@ function runMigrations(d: Database.Database): void {
     )`);
   } catch { /* already migrated */ }
 
+  // User-controlled display order for the settings list + titlebar usage
+  // meters. Existing rows default to 0 and fall back to built_in/name until
+  // the user reorders (which assigns distinct positions).
+  try {
+    d.exec('ALTER TABLE login_sessions ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+  } catch { /* already migrated */ }
+
   // Per-project default login session ids (NULL → the built-in global
   // for that agent). Per-session override lives on sessions.login_session_id.
   try {

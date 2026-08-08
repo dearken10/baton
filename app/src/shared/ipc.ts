@@ -554,6 +554,11 @@ const LoginSessionUpdateResponse = z.object({ session: LoginSession });
 const LoginSessionDeleteRequest = z.object({ id: z.string() });
 const LoginSessionDeleteResponse = z.object({ ok: z.literal(true) });
 
+/** Persist a user-chosen order for the login list + usage meters. `orderedIds`
+ *  is every login id in the desired order. Returns the reordered list. */
+const LoginSessionReorderRequest = z.object({ orderedIds: z.array(z.string()) });
+const LoginSessionReorderResponse = LoginSessionListResponse;
+
 /** Live status probe (runs the CLI's `auth status` in the session's env). */
 const LoginSessionProbeRequest = z.object({ id: z.string() });
 const LoginSessionProbeResponse = LoginSessionStatus;
@@ -1170,6 +1175,7 @@ export const ControlVerbs = {
   'loginSession.create':      { request: LoginSessionCreateRequest,     response: LoginSessionCreateResponse },
   'loginSession.update':      { request: LoginSessionUpdateRequest,     response: LoginSessionUpdateResponse },
   'loginSession.delete':      { request: LoginSessionDeleteRequest,     response: LoginSessionDeleteResponse },
+  'loginSession.reorder':     { request: LoginSessionReorderRequest,    response: LoginSessionReorderResponse },
   'loginSession.probe':       { request: LoginSessionProbeRequest,      response: LoginSessionProbeResponse },
   'loginSession.loginStart':  { request: LoginSessionLoginStartRequest, response: LoginSessionLoginStartResponse },
   'loginSession.submitCode':  { request: LoginSessionSubmitCodeRequest, response: LoginSessionSubmitCodeResponse },
@@ -1415,6 +1421,12 @@ const AccountLoginProgressEvent = EventEnvelope.extend({
   message: z.string().nullable().optional(),
 });
 
+/** Login sessions were reordered — the titlebar usage meters re-fetch so
+ *  their order matches the settings list. */
+const LoginSessionReorderedEvent = EventEnvelope.extend({
+  type: z.literal('loginSession.reordered'),
+});
+
 export const AppEvent = z.discriminatedUnion('type', [
   ProjectAddedEvent,
   ProjectRemovedEvent,
@@ -1437,6 +1449,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ConnectionUpdatedEvent,
   ConnectionRemovedEvent,
   AccountLoginProgressEvent,
+  LoginSessionReorderedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 

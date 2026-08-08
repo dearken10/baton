@@ -6,6 +6,7 @@ import { TurnsPane } from './TurnsPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
 import { EditorErrorBoundary } from './EditorErrorBoundary.js';
 import { SessionInfoDialog } from './SessionInfoDialog.js';
+import { JiraTag } from './JiraTag.js';
 import type { PermissionMode, Session } from '@shared/ipc.js';
 
 /** Claude's "Default (recommended)" model (adaptive Opus→Sonnet), passed
@@ -342,6 +343,7 @@ export function MiddleColumn(): JSX.Element {
         {selected ? (
           <>
             <span className="title">
+              <JiraTag id={selected.jiraTaskId} />
               {selectedProject?.name ?? 'project'} · {sessionLabel(selected)}
             </span>
             <button
