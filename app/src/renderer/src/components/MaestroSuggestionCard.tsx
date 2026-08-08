@@ -38,7 +38,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store.js';
-import type { MaestroSuggestion } from '@shared/ipc.js';
+import type { MaestroMode, MaestroSuggestion } from '@shared/ipc.js';
 
 interface Props {
   sessionId: string;
@@ -66,22 +66,28 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element {
     (s) => s.maestroSuggestions[sessionId] ?? null,
   );
 
-  // Read the per-session override + the project default so the
-  // header can render an "Auto" dropdown with three states:
-  //   Project default (null) — inherits project.maestroEnabled
-  //   On               (true) — force enable for this session
-  //   Off              (false) — force disable for this session
-  // Effective flag = session override ?? project default. When
-  // effective is false the auto (running → idle) trigger is silent,
-  // but the dock stays visible + Suggest still works — matches the
-  // "manual click bypasses soft gates" split in maestroSuggestion.ts.
-  const override = useAppStore(
-    (s) => s.sessions[sessionId]?.maestroEnabled ?? null,
+  // Two independent flags, both tri-state (session override → project
+  // default → hard default):
+  //   show  — dock visibility. When effective show is false we return
+  //           null below and the dock renders nothing.
+  //   mode  — auto-fire mode. Header exposes a picker; the actual
+  //           gating lives in main/services/maestroSuggestion.ts.
+  const showOverride = useAppStore(
+    (s) => s.sessions[sessionId]?.maestroShow ?? null,
   );
-  const projectDefault = useAppStore((s) => {
+  const projectShow = useAppStore((s) => {
     const sess = s.sessions[sessionId];
     if (!sess) return true;
-    return s.projects[sess.projectId]?.maestroEnabled ?? true;
+    return s.projects[sess.projectId]?.maestroShow ?? true;
+  });
+  const effectiveShow = showOverride ?? projectShow;
+  const modeOverride = useAppStore(
+    (s) => s.sessions[sessionId]?.maestroMode ?? null,
+  );
+  const projectMode = useAppStore((s) => {
+    const sess = s.sessions[sessionId];
+    if (!sess) return 'suggest' as MaestroMode;
+    return s.projects[sess.projectId]?.maestroMode ?? ('suggest' as MaestroMode);
   });
 
   // Draft — starts from the proposer's prompt, decouples from the
@@ -225,16 +231,21 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element {
 
   const canSuggest = !proposing && !busy;
 
-  const setAuto = useCallback(async (value: boolean | null): Promise<void> => {
+  const setMode = useCallback(async (value: MaestroMode | null): Promise<void> => {
     try {
-      await window.baton.call('session.setMaestroEnabled', {
+      await window.baton.call('session.setMaestroMode', {
         sessionId,
-        enabled: value,
+        mode: value,
       });
     } catch (e) {
       setError(String(e));
     }
   }, [sessionId]);
+
+  // show=false → render nothing. Un-hiding lives in the sidebar's
+  // session row menu (or the project ⋮ menu for the project-wide
+  // default) so a hidden dock still has a discoverable way back.
+  if (!effectiveShow) return <></>;
 
   return (
     <div
@@ -247,9 +258,9 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element {
         suggestion={suggestion}
         collapsed={collapsed}
         canSuggest={canSuggest}
-        autoOverride={override}
-        projectDefault={projectDefault}
-        onSetAuto={(v) => void setAuto(v)}
+        modeOverride={modeOverride}
+        projectMode={projectMode}
+        onSetMode={(v) => void setMode(v)}
         onSuggest={() => void suggest()}
         onToggleCollapsed={toggleCollapsed}
       />
@@ -277,9 +288,9 @@ function DockHeader({
   suggestion,
   collapsed,
   canSuggest,
-  autoOverride,
-  projectDefault,
-  onSetAuto,
+  modeOverride,
+  projectMode,
+  onSetMode,
   onSuggest,
   onToggleCollapsed,
 }: {
@@ -287,13 +298,13 @@ function DockHeader({
   suggestion: MaestroSuggestion | null;
   collapsed: boolean;
   canSuggest: boolean;
-  autoOverride: boolean | null;
-  projectDefault: boolean;
-  onSetAuto: (v: boolean | null) => void;
+  modeOverride: MaestroMode | null;
+  projectMode: MaestroMode;
+  onSetMode: (v: MaestroMode | null) => void;
   onSuggest: () => void;
   onToggleCollapsed: () => void;
 }): JSX.Element {
-  const autoValue = autoOverride == null ? 'project' : autoOverride ? 'on' : 'off';
+  const modeValue: 'project' | MaestroMode = modeOverride ?? 'project';
   return (
     <div className="mae-dock-head">
       <span className="mae-glyph" aria-hidden>🎼</span>
@@ -310,26 +321,29 @@ function DockHeader({
       <label
         className="mae-auto-toggle"
         title={
-          autoValue === 'project'
-            ? `Auto — follow project (currently ${projectDefault ? 'on' : 'off'})`
-            : autoValue === 'on'
-              ? 'Auto — force ON for this session (Maestro fires when this session goes idle)'
-              : 'Auto — force OFF for this session (only manual Suggest fires the PM)'
+          modeValue === 'project'
+            ? `Mode — follow project (currently ${projectMode})`
+            : modeValue === 'suggest'
+              ? 'Mode — auto-fire on idle, then wait for you to review + Send'
+              : modeValue === 'execute'
+                ? 'Mode — auto-fire on idle AND auto-send the prompt (no review)'
+                : 'Mode — never auto-fire; only the Suggest button fires the PM'
         }
       >
-        <span className="mae-auto-label">Auto</span>
+        <span className="mae-auto-label">Mode</span>
         <select
           className="mae-auto-select"
-          value={autoValue}
-          aria-label="Auto-suggest mode for this session"
+          value={modeValue}
+          aria-label="Maestro auto-fire mode for this session"
           onChange={(e) => {
-            const v = e.target.value;
-            onSetAuto(v === 'project' ? null : v === 'on');
+            const v = e.target.value as 'project' | MaestroMode;
+            onSetMode(v === 'project' ? null : v);
           }}
         >
-          <option value="project">Project default ({projectDefault ? 'on' : 'off'})</option>
-          <option value="on">On</option>
-          <option value="off">Off</option>
+          <option value="project">Project default ({projectMode})</option>
+          <option value="suggest">Suggest</option>
+          <option value="execute">Execute</option>
+          <option value="manual">Manual</option>
         </select>
       </label>
       <button

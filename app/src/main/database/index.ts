@@ -378,6 +378,34 @@ function runMigrations(d: Database.Database): void {
   try {
     d.exec('ALTER TABLE sessions ADD COLUMN maestro_enabled INTEGER');
   } catch { /* already migrated */ }
+
+  // Split the single Maestro toggle into two independent flags:
+  //   show  — dock visibility (renamed from maestro_enabled)
+  //   mode  — auto-fire mode: 'suggest' | 'execute' | 'manual'
+  // A row that previously had enabled=0 semantically meant "no
+  // auto-fire, dock still visible" — that maps to (show=1, mode='manual')
+  // in the new model, so preserve intent rather than accidentally
+  // hiding the dock on upgrade.
+  try {
+    d.exec('ALTER TABLE projects RENAME COLUMN maestro_enabled TO maestro_show');
+  } catch { /* already renamed */ }
+  try {
+    d.exec('ALTER TABLE sessions RENAME COLUMN maestro_enabled TO maestro_show');
+  } catch { /* already renamed */ }
+  try {
+    d.exec(
+      `ALTER TABLE projects ADD COLUMN maestro_mode TEXT NOT NULL DEFAULT 'suggest'`
+    );
+    d.exec(
+      `UPDATE projects SET maestro_mode = 'manual', maestro_show = 1 WHERE maestro_show = 0`
+    );
+  } catch { /* already migrated */ }
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN maestro_mode TEXT');
+    d.exec(
+      `UPDATE sessions SET maestro_mode = 'manual', maestro_show = NULL WHERE maestro_show = 0`
+    );
+  } catch { /* already migrated */ }
 }
 
 export function getDatabase(): Database.Database {

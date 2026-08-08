@@ -44,7 +44,7 @@ import { buildLoginEnv } from './loginSessions.js';
 import { resolveMaestroPromptPath } from './maestroPrompts.js';
 import { getSessionManager } from './sessionManager.js';
 import { getProject } from './projectStore.js';
-import type { MaestroSuggestion, Session, SessionStatus } from '../../shared/ipc.js';
+import type { MaestroMode, MaestroSuggestion, Session, SessionStatus } from '../../shared/ipc.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -97,20 +97,31 @@ function hardIneligibleReason(session: Session): string | null {
   return null;
 }
 
-/** SOFT gates — the user opted out for auto mode (project or session
- *  Maestro toggle, snooze). A manual Suggest click SHOULD still work,
- *  so we only apply these on the auto path. F15.1 (the tick daemon's
- *  gate) applies both, matching this pair together. */
+/** Resolve the effective dock visibility for a session. Session
+ *  override wins; else project default; else true. */
+export function effectiveMaestroShow(session: Session): boolean {
+  if (session.maestroShow != null) return session.maestroShow;
+  const project = getProject(session.projectId);
+  return project?.maestroShow ?? true;
+}
+
+/** Resolve the effective auto-fire mode for a session. Session
+ *  override wins; else project default; else 'suggest'. */
+export function effectiveMaestroMode(session: Session): MaestroMode {
+  if (session.maestroMode != null) return session.maestroMode;
+  const project = getProject(session.projectId);
+  return project?.maestroMode ?? 'suggest';
+}
+
+/** SOFT gates — the user opted out for auto mode (dock hidden, mode
+ *  set to manual, snooze). A manual Suggest click SHOULD still work
+ *  when the dock is visible, so we only apply these on the auto path. */
 function softIneligibleReason(session: Session): string | null {
   if (session.snoozedAt != null) return 'session-snoozed';
   const project = getProject(session.projectId);
   if (project?.snoozedAt != null) return 'project-snoozed';
-  // Three-tier resolution: session override wins, then project.
-  const effective =
-    session.maestroEnabled != null
-      ? session.maestroEnabled
-      : project?.maestroEnabled ?? true;
-  if (!effective) return 'maestro-disabled';
+  if (!effectiveMaestroShow(session)) return 'maestro-hidden';
+  if (effectiveMaestroMode(session) === 'manual') return 'maestro-manual';
   return null;
 }
 
@@ -231,6 +242,27 @@ async function runProposer(sessionId: string): Promise<void> {
     sessionId,
     suggestion,
   });
+
+  // Auto-execute path — when the user has set mode='execute' (per
+  // session or per project), a `resume` proposal is auto-sent to the
+  // target session's PTY without waiting for a manual Send click.
+  // `wait`/`defer` proposals are left as passive cards (no prompt to
+  // send). Manual Suggest clicks reuse the same path, so a click in
+  // execute mode still auto-runs — that matches user expectation:
+  // execute means execute, regardless of how the run was triggered.
+  if (suggestion?.kind === 'resume' && suggestion.prompt.length > 0) {
+    const session = getSessionManager().listAll().find((s) => s.id === sessionId);
+    if (session && effectiveMaestroMode(session) === 'execute') {
+      try {
+        const r = await acceptMaestroSuggestion(sessionId, suggestion.prompt);
+        if (!r.ok) {
+          console.warn(`[maestro.suggestion] auto-execute failed for ${sessionId.slice(0, 8)}: ${r.reason}`);
+        }
+      } catch (e) {
+        console.warn(`[maestro.suggestion] auto-execute threw for ${sessionId.slice(0, 8)}:`, e);
+      }
+    }
+  }
 }
 
 /** Shape the proposer's JSON output into the renderer-friendly

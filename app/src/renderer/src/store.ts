@@ -212,7 +212,7 @@ export const useAppStore = create<AppState>()(
             s.projects[event.project.id] = event.project;
             break;
           }
-          case 'project.maestroEnabledChanged': {
+          case 'project.maestroChanged': {
             s.projects[event.project.id] = event.project;
             break;
           }

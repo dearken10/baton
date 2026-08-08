@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { getDatabase } from '../database/index.js';
-import type { Project } from '../../shared/ipc.js';
+import type { MaestroMode, Project } from '../../shared/ipc.js';
 import { emit } from './eventBus.js';
 
 interface ProjectRow {
@@ -24,8 +24,12 @@ interface ProjectRow {
   snoozed_at: number | null;
   claude_login_session_id: string | null;
   codex_login_session_id: string | null;
-  maestro_enabled: number;
+  maestro_show: number;
+  maestro_mode: string;
 }
+
+const MAESTRO_COLS =
+  'id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id, maestro_show, maestro_mode';
 
 function rowToProject(r: ProjectRow): Project {
   return {
@@ -37,7 +41,8 @@ function rowToProject(r: ProjectRow): Project {
     snoozedAt: r.snoozed_at,
     claudeLoginSessionId: r.claude_login_session_id,
     codexLoginSessionId: r.codex_login_session_id,
-    maestroEnabled: (r.maestro_enabled ?? 1) !== 0,
+    maestroShow: (r.maestro_show ?? 1) !== 0,
+    maestroMode: (r.maestro_mode ?? 'suggest') as MaestroMode,
   };
 }
 
@@ -80,7 +85,7 @@ export function addProject(
 
   const row = getDatabase()
     .prepare(
-      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id, maestro_enabled FROM projects WHERE id = ?'
+      `SELECT ${MAESTRO_COLS} FROM projects WHERE id = ?`
     )
     .get(id) as ProjectRow;
 
@@ -92,7 +97,7 @@ export function addProject(
 export function listProjects(): Project[] {
   const rows = getDatabase()
     .prepare(
-      `SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id, maestro_enabled
+      `SELECT ${MAESTRO_COLS}
          FROM projects
         ORDER BY display_order ASC, added_at ASC`
     )
@@ -291,7 +296,7 @@ export function reorderProjects(orderedIds: string[]): void {
 export function getProject(id: string): Project | undefined {
   const row = getDatabase()
     .prepare(
-      'SELECT id, path, name, added_at, connection_id, snoozed_at, claude_login_session_id, codex_login_session_id, maestro_enabled FROM projects WHERE id = ?'
+      `SELECT ${MAESTRO_COLS} FROM projects WHERE id = ?`
     )
     .get(id) as ProjectRow | undefined;
   if (!row) return undefined;
@@ -312,16 +317,30 @@ export function setProjectSnoozed(id: string, snoozed: boolean): Project {
   return project;
 }
 
-/** Toggle the per-project Maestro on/off flag. Independent of snooze:
- *  the user can keep a project visible in the active list while still
- *  telling Maestro to leave it alone. */
-export function setProjectMaestroEnabled(id: string, enabled: boolean): Project {
+/** Toggle the per-project Maestro dock visibility. When show=false,
+ *  the MaestroSuggestionCard is hidden and the auto-fire trigger is
+ *  silent for every session in this project (session overrides still
+ *  win on either flag). Independent of snooze. */
+export function setProjectMaestroShow(id: string, show: boolean): Project {
   const res = getDatabase()
-    .prepare('UPDATE projects SET maestro_enabled = ? WHERE id = ?')
-    .run(enabled ? 1 : 0, id);
+    .prepare('UPDATE projects SET maestro_show = ? WHERE id = ?')
+    .run(show ? 1 : 0, id);
   if (res.changes === 0) throw new Error(`Unknown project: ${id}`);
   const project = getProject(id);
   if (!project) throw new Error(`Project disappeared after maestro toggle: ${id}`);
-  emit({ type: 'project.maestroEnabledChanged', project });
+  emit({ type: 'project.maestroChanged', project });
+  return project;
+}
+
+/** Set the per-project Maestro auto-fire mode. See MaestroMode for
+ *  semantics. Session overrides win at run time. */
+export function setProjectMaestroMode(id: string, mode: MaestroMode): Project {
+  const res = getDatabase()
+    .prepare('UPDATE projects SET maestro_mode = ? WHERE id = ?')
+    .run(mode, id);
+  if (res.changes === 0) throw new Error(`Unknown project: ${id}`);
+  const project = getProject(id);
+  if (!project) throw new Error(`Project disappeared after mode change: ${id}`);
+  emit({ type: 'project.maestroChanged', project });
   return project;
 }

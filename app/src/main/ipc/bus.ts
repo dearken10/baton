@@ -27,7 +27,7 @@ import {
   type RequestOf,
   type ResponseOf,
 } from '../../shared/ipc.js';
-import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed, setProjectLoginDefaults, setProjectMaestroEnabled } from '../services/projectStore.js';
+import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed, setProjectLoginDefaults, setProjectMaestroShow, setProjectMaestroMode } from '../services/projectStore.js';
 import { batonHome } from '../paths.js';
 import {
   listConnections,
@@ -189,8 +189,12 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const project = setProjectSnoozed(req.projectId, req.snoozed);
     return { project };
   },
-  'project.setMaestroEnabled': (req) => {
-    const project = setProjectMaestroEnabled(req.projectId, req.enabled);
+  'project.setMaestroShow': (req) => {
+    const project = setProjectMaestroShow(req.projectId, req.show);
+    return { project };
+  },
+  'project.setMaestroMode': (req) => {
+    const project = setProjectMaestroMode(req.projectId, req.mode);
     return { project };
   },
   'session.reorder': (req) => {
@@ -201,10 +205,17 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const session = getSessionManager().setSnoozed(req.sessionId, req.snoozed);
     return { session };
   },
-  'session.setMaestroEnabled': (req) => {
-    const session = getSessionManager().setMaestroEnabled(
+  'session.setMaestroShow': (req) => {
+    const session = getSessionManager().setMaestroShow(
       req.sessionId,
-      req.enabled,
+      req.show,
+    );
+    return { session };
+  },
+  'session.setMaestroMode': (req) => {
+    const session = getSessionManager().setMaestroMode(
+      req.sessionId,
+      req.mode,
     );
     return { session };
   },

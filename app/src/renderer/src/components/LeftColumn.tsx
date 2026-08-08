@@ -264,37 +264,52 @@ export function LeftColumn(): JSX.Element {
     }
   }
 
-  async function toggleMaestroForProject(p: Project): Promise<void> {
-    const enabled = !p.maestroEnabled; // flipping
+  async function toggleMaestroShowForProject(p: Project): Promise<void> {
+    const show = !p.maestroShow; // flipping
     setBusy(true);
     try {
-      await window.baton.call('project.setMaestroEnabled', {
+      await window.baton.call('project.setMaestroShow', {
         projectId: p.id,
-        enabled,
+        show,
       });
     } catch (err) {
-      alert(`${enabled ? 'Enable' : 'Disable'} Maestro failed: ${String(err)}`);
+      alert(`${show ? 'Show' : 'Hide'} Maestro failed: ${String(err)}`);
     } finally {
       setBusy(false);
     }
   }
 
-  /** Set the per-session Maestro override.
-   *    null  → follow project default
-   *    true  → force on (even if project is off)
-   *    false → force off (even if project is on) */
-  async function setSessionMaestroOverride(
+  /** Set the per-session dock visibility override. null → follow project. */
+  async function setSessionMaestroShow(
     s: Session,
-    enabled: boolean | null,
+    show: boolean | null,
   ): Promise<void> {
     setBusy(true);
     try {
-      await window.baton.call('session.setMaestroEnabled', {
+      await window.baton.call('session.setMaestroShow', {
         sessionId: s.id,
-        enabled,
+        show,
       });
     } catch (err) {
-      alert(`Set session Maestro failed: ${String(err)}`);
+      alert(`Set session Maestro show failed: ${String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Set the per-session auto-fire mode override. null → follow project. */
+  async function setSessionMaestroMode(
+    s: Session,
+    mode: import('@shared/ipc.js').MaestroMode | null,
+  ): Promise<void> {
+    setBusy(true);
+    try {
+      await window.baton.call('session.setMaestroMode', {
+        sessionId: s.id,
+        mode,
+      });
+    } catch (err) {
+      alert(`Set session Maestro mode failed: ${String(err)}`);
     } finally {
       setBusy(false);
     }
@@ -869,7 +884,8 @@ export function LeftColumn(): JSX.Element {
             onClone={cloneSession}
             onCloneToWorktree={openCloneWorktreeDialog}
             onToggleSessionSnooze={toggleSnoozeSession}
-            onSetSessionMaestro={(s, enabled) => void setSessionMaestroOverride(s, enabled)}
+            onSetSessionMaestroShow={(s, show) => void setSessionMaestroShow(s, show)}
+            onSetSessionMaestroMode={(s, mode) => void setSessionMaestroMode(s, mode)}
             busy={busy}
           />
         ) : projects.length === 0 ? (
@@ -909,7 +925,8 @@ export function LeftColumn(): JSX.Element {
               onClone={cloneSession}
               onCloneToWorktree={openCloneWorktreeDialog}
               onToggleSessionSnooze={toggleSnoozeSession}
-              onSetSessionMaestro={(s, enabled) => void setSessionMaestroOverride(s, enabled)}
+              onSetSessionMaestroShow={(s, show) => void setSessionMaestroShow(s, show)}
+              onSetSessionMaestroMode={(s, mode) => void setSessionMaestroMode(s, mode)}
               onGetInfo={() => {
                 const conn = connections[p.connectionId];
                 const isRem = !!conn && conn.kind !== 'local';
@@ -928,8 +945,8 @@ export function LeftColumn(): JSX.Element {
               onEditLogins={() => { refreshLoginSessions(); setEditingLoginsProject(p); }}
               onRemoveProject={() => void removeProjectFromList(p)}
               onToggleSnooze={() => void toggleSnoozeProject(p)}
-              onToggleMaestro={() => void toggleMaestroForProject(p)}
-              maestroEnabled={p.maestroEnabled}
+              onToggleMaestroShow={() => void toggleMaestroShowForProject(p)}
+              maestroShow={p.maestroShow}
               onReorderProjects={reorderProjects}
               onReorderSessions={(fromId, beforeId) =>
                 reorderSessionsForProject(p.id, fromId, beforeId)
@@ -1030,8 +1047,10 @@ interface TimelineViewProps {
   onClone: (s: Session) => void;
   onCloneToWorktree: (s: Session) => void;
   onToggleSessionSnooze: (s: Session) => void;
-  /** Per-session Maestro override setter. null = follow project. */
-  onSetSessionMaestro: (s: Session, enabled: boolean | null) => void;
+  /** Per-session dock-visibility override setter. null = follow project. */
+  onSetSessionMaestroShow: (s: Session, show: boolean | null) => void;
+  /** Per-session auto-fire mode setter. null = follow project. */
+  onSetSessionMaestroMode: (s: Session, mode: import('@shared/ipc.js').MaestroMode | null) => void;
   busy: boolean;
 }
 
@@ -1043,7 +1062,7 @@ function TimelineView(props: TimelineViewProps): JSX.Element {
   const {
     sessions, projects, selectedId, pendingSessionIds,
     onSelect, onResume, onRename, onDelete, onClone, onCloneToWorktree,
-    onToggleSessionSnooze, onSetSessionMaestro, busy,
+    onToggleSessionSnooze, onSetSessionMaestroShow, onSetSessionMaestroMode, busy,
   } = props;
 
   // Re-render once a minute so the "started Nm ago" stamps stay honest
@@ -1146,16 +1165,21 @@ function TimelineView(props: TimelineViewProps): JSX.Element {
               canRename={canRename}
               canClone={canClone}
               isSnoozed={isSnoozed}
-              sessionMaestroOverride={s.maestroEnabled}
-              projectMaestroEnabled={
-                projects[s.projectId]?.maestroEnabled ?? true
+              sessionShowOverride={s.maestroShow}
+              sessionModeOverride={s.maestroMode}
+              projectShow={
+                projects[s.projectId]?.maestroShow ?? true
+              }
+              projectMode={
+                projects[s.projectId]?.maestroMode ?? 'suggest'
               }
               onRename={() => onRename(s)}
               onDelete={() => onDelete(s)}
               onClone={() => onClone(s)}
               onCloneToWorktree={() => onCloneToWorktree(s)}
               onToggleSnooze={() => onToggleSessionSnooze(s)}
-              onSetMaestro={(enabled) => onSetSessionMaestro(s, enabled)}
+              onSetMaestroShow={(show) => onSetSessionMaestroShow(s, show)}
+              onSetMaestroMode={(mode) => onSetSessionMaestroMode(s, mode)}
               busy={busy}
             />
           </div>
@@ -1179,15 +1203,16 @@ interface ProjectBlockProps {
   onClone: (s: Session) => void;
   onCloneToWorktree: (s: Session) => void;
   onToggleSessionSnooze: (s: Session) => void;
-  onSetSessionMaestro: (s: Session, enabled: boolean | null) => void;
+  onSetSessionMaestroShow: (s: Session, show: boolean | null) => void;
+  onSetSessionMaestroMode: (s: Session, mode: import('@shared/ipc.js').MaestroMode | null) => void;
   onGetInfo: () => void;
   onNewTerminal: () => void;
   onRenameProject: () => void;
   onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
-  onToggleMaestro: () => void;
-  maestroEnabled: boolean;
+  onToggleMaestroShow: () => void;
+  maestroShow: boolean;
   onReorderProjects: (fromId: string, beforeId: string) => void;
   onReorderSessions: (fromId: string, beforeId: string) => void;
   busy: boolean;
@@ -1204,8 +1229,8 @@ const DRAG_SESSION = 'application/x-baton-session';
 function ProjectBlock(props: ProjectBlockProps): JSX.Element {
   const {
     project, connection, sessions, selectedId,
-    onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze, onSetSessionMaestro,
-    onGetInfo, onNewTerminal, onRenameProject, onEditLogins, onRemoveProject, onToggleSnooze, onToggleMaestro, maestroEnabled, onReorderProjects, onReorderSessions,
+    onSelect, onSpawnSession, onSpawnNewWorktree, onResume, onRename, onDelete, onClone, onCloneToWorktree, onToggleSessionSnooze, onSetSessionMaestroShow, onSetSessionMaestroMode,
+    onGetInfo, onNewTerminal, onRenameProject, onEditLogins, onRemoveProject, onToggleSnooze, onToggleMaestroShow, maestroShow, onReorderProjects, onReorderSessions,
     busy, pendingSessionIds,
   } = props;
   const [isDragOver, setDragOver] = useState(false);
@@ -1297,10 +1322,10 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
               · {sessions.length}
             </span>
           ) : null}
-          {!maestroEnabled ? (
+          {!maestroShow ? (
             <span
               className="maestro-disabled-meta"
-              title="Maestro is disabled for this project"
+              title="Maestro dock is hidden for this project"
             >
               🎼 off
             </span>
@@ -1318,7 +1343,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
         ) : null}
         <SpawnMenu
           isSnoozed={isSnoozed}
-          maestroEnabled={maestroEnabled}
+          maestroShow={maestroShow}
           onSpawnSession={onSpawnSession}
           onSpawnNewWorktree={onSpawnNewWorktree}
           onGetInfo={onGetInfo}
@@ -1327,7 +1352,7 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
           onEditLogins={onEditLogins}
           onRemoveProject={onRemoveProject}
           onToggleSnooze={onToggleSnooze}
-          onToggleMaestro={onToggleMaestro}
+          onToggleMaestroShow={onToggleMaestroShow}
           busy={busy}
         />
       </div>
@@ -1455,14 +1480,17 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                   canRename={canRename}
                   canClone={canClone}
                   isSnoozed={isSnoozed}
-                  sessionMaestroOverride={s.maestroEnabled}
-                  projectMaestroEnabled={maestroEnabled}
+                  sessionShowOverride={s.maestroShow}
+                  sessionModeOverride={s.maestroMode}
+                  projectShow={maestroShow}
+                  projectMode={project.maestroMode}
                   onRename={() => onRename(s)}
                   onDelete={() => onDelete(s)}
                   onClone={() => onClone(s)}
                   onCloneToWorktree={() => onCloneToWorktree(s)}
                   onToggleSnooze={() => onToggleSessionSnooze(s)}
-                  onSetMaestro={(enabled) => onSetSessionMaestro(s, enabled)}
+                  onSetMaestroShow={(show) => onSetSessionMaestroShow(s, show)}
+                  onSetMaestroMode={(mode) => onSetSessionMaestroMode(s, mode)}
                   busy={busy}
                 />
               </div>
@@ -1478,17 +1506,21 @@ function SessionRowMenu(props: {
   canRename: boolean;
   canClone: boolean;
   isSnoozed: boolean;
-  /** null = follow project default, true/false = explicit override. */
-  sessionMaestroOverride: boolean | null;
-  /** Parent project's Maestro flag — used to preview what "follow
-   *  project" resolves to in the "follow project (on/off)" label. */
-  projectMaestroEnabled: boolean;
+  /** null = follow project default, true/false = explicit show/hide. */
+  sessionShowOverride: boolean | null;
+  /** null = follow project mode, else pin this session's mode. */
+  sessionModeOverride: import('@shared/ipc.js').MaestroMode | null;
+  /** Parent project's flags — used to preview what "follow project"
+   *  resolves to in each dropdown's label. */
+  projectShow: boolean;
+  projectMode: import('@shared/ipc.js').MaestroMode;
   onRename: () => void;
   onDelete: () => void;
   onClone: () => void;
   onCloneToWorktree: () => void;
   onToggleSnooze: () => void;
-  onSetMaestro: (enabled: boolean | null) => void;
+  onSetMaestroShow: (show: boolean | null) => void;
+  onSetMaestroMode: (mode: import('@shared/ipc.js').MaestroMode | null) => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -1566,9 +1598,12 @@ function SessionRowMenu(props: {
             {props.isSnoozed ? 'Unsnooze' : 'Snooze'}
           </button>
           <MaestroSubmenu
-            override={props.sessionMaestroOverride}
-            projectEnabled={props.projectMaestroEnabled}
-            onSet={(enabled) => { setOpen(false); props.onSetMaestro(enabled); }}
+            showOverride={props.sessionShowOverride}
+            modeOverride={props.sessionModeOverride}
+            projectShow={props.projectShow}
+            projectMode={props.projectMode}
+            onSetShow={(show) => props.onSetMaestroShow(show)}
+            onSetMode={(mode) => props.onSetMaestroMode(mode)}
           />
           <button
             className="row-menu-item danger"
@@ -1583,66 +1618,83 @@ function SessionRowMenu(props: {
   );
 }
 
-/** Three-way Maestro override for a single session, rendered as a
- *  labeled group inside SessionRowMenu:
- *    Follow project (default) — clears the session override
- *    On                       — force-enable, overrides project=off
- *    Off                      — force-disable, overrides project=on
- *  The active choice is marked with •; the "Follow" row also shows
- *  what the project would resolve to so the user can predict what
- *  clearing the override actually does. */
-/** Single-row Maestro override control. Replaces the previous
- *  3-menu-item block with a compact <select> — the current state
- *  reads as the visible option, and the popup lets the user pick
- *  one of the three without eating three menu slots. Native select
- *  keeps keyboard + screen-reader nav for free. Clicking the select
- *  opens the OS picker in its own window; the outer row-menu-pop
- *  ignores that as an outside click and stays open until choice. */
+/** Two compact per-session Maestro overrides rendered inside
+ *  SessionRowMenu: one for dock visibility (show/hide), one for
+ *  auto-fire mode (suggest/execute/manual). Each defaults to "Follow
+ *  project" and shows what the project resolves to in that slot so
+ *  the user can predict what clearing the override actually does. */
 function MaestroSubmenu({
-  override,
-  projectEnabled,
-  onSet,
+  showOverride,
+  modeOverride,
+  projectShow,
+  projectMode,
+  onSetShow,
+  onSetMode,
 }: {
-  override: boolean | null;
-  projectEnabled: boolean;
-  onSet: (enabled: boolean | null) => void;
+  showOverride: boolean | null;
+  modeOverride: import('@shared/ipc.js').MaestroMode | null;
+  projectShow: boolean;
+  projectMode: import('@shared/ipc.js').MaestroMode;
+  onSetShow: (show: boolean | null) => void;
+  onSetMode: (mode: import('@shared/ipc.js').MaestroMode | null) => void;
 }): JSX.Element {
-  const value = override == null ? 'follow' : override ? 'on' : 'off';
+  const showValue = showOverride == null ? 'follow' : showOverride ? 'on' : 'off';
+  const modeValue: 'follow' | import('@shared/ipc.js').MaestroMode =
+    modeOverride == null ? 'follow' : modeOverride;
+  const rowStyle = {
+    display: 'flex' as const,
+    alignItems: 'center' as const,
+    gap: 8,
+    cursor: 'default' as const,
+  };
   return (
-    <div
-      className="row-menu-item row-menu-item-static"
-      role="none"
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 8,
-        cursor: 'default',
-      }}
-    >
-      <span style={{ flex: 1 }}>Maestro</span>
-      <select
-        className="row-menu-select"
-        value={value}
-        aria-label="Maestro override"
-        title={
-          value === 'follow'
-            ? `Follow project (currently ${projectEnabled ? 'on' : 'off'})`
-            : value === 'on'
-              ? 'Force enable for this session, even if the project is off'
-              : 'Force disable for this session, even if the project is on'
-        }
-        onChange={(e) => {
-          const v = e.target.value;
-          onSet(v === 'follow' ? null : v === 'on');
-        }}
+    <>
+      <div
+        className="row-menu-item row-menu-item-static"
+        role="none"
         onClick={(e) => e.stopPropagation()}
+        style={rowStyle}
       >
-        <option value="follow">Follow project ({projectEnabled ? 'on' : 'off'})</option>
-        <option value="on">On</option>
-        <option value="off">Off</option>
-      </select>
-    </div>
+        <span style={{ flex: 1 }}>Maestro show</span>
+        <select
+          className="row-menu-select"
+          value={showValue}
+          aria-label="Maestro dock visibility for this session"
+          onChange={(e) => {
+            const v = e.target.value;
+            onSetShow(v === 'follow' ? null : v === 'on');
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <option value="follow">Follow project ({projectShow ? 'on' : 'off'})</option>
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </div>
+      <div
+        className="row-menu-item row-menu-item-static"
+        role="none"
+        onClick={(e) => e.stopPropagation()}
+        style={rowStyle}
+      >
+        <span style={{ flex: 1 }}>Maestro mode</span>
+        <select
+          className="row-menu-select"
+          value={modeValue}
+          aria-label="Maestro auto-fire mode for this session"
+          onChange={(e) => {
+            const v = e.target.value as 'follow' | import('@shared/ipc.js').MaestroMode;
+            onSetMode(v === 'follow' ? null : v);
+          }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <option value="follow">Follow project ({projectMode})</option>
+          <option value="suggest">Suggest</option>
+          <option value="execute">Execute</option>
+          <option value="manual">Manual</option>
+        </select>
+      </div>
+    </>
   );
 }
 
@@ -1650,7 +1702,7 @@ type SpawnMenuView = 'main' | 'session' | 'worktree';
 
 function SpawnMenu(props: {
   isSnoozed: boolean;
-  maestroEnabled: boolean;
+  maestroShow: boolean;
   onSpawnSession: (backend: 'claude-code' | 'codex') => void;
   onSpawnNewWorktree: (backend: 'claude-code' | 'codex') => void;
   onGetInfo: () => void;
@@ -1659,7 +1711,7 @@ function SpawnMenu(props: {
   onEditLogins: () => void;
   onRemoveProject: () => void;
   onToggleSnooze: () => void;
-  onToggleMaestro: () => void;
+  onToggleMaestroShow: () => void;
   busy: boolean;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
@@ -1787,15 +1839,15 @@ function SpawnMenu(props: {
               <button
                 className="spawn-menu-item"
                 role="menuitem"
-                onClick={() => { close(); props.onToggleMaestro(); }}
+                onClick={() => { close(); props.onToggleMaestroShow(); }}
               >
                 <span className="spawn-menu-title">
-                  {props.maestroEnabled ? '🎼 Disable Maestro' : '🎼 Enable Maestro'}
+                  {props.maestroShow ? '🎼 Hide Maestro dock' : '🎼 Show Maestro dock'}
                 </span>
                 <span className="spawn-menu-sub">
-                  {props.maestroEnabled
-                    ? "Stop Maestro from proposing actions for this project's sessions. The project stays visible."
-                    : 'Maestro may propose actions for this project again on the next tick.'}
+                  {props.maestroShow
+                    ? "Hide the Maestro suggestion dock for this project's sessions. Sessions can override."
+                    : "Show the Maestro suggestion dock for this project's sessions again."}
                 </span>
               </button>
               <button

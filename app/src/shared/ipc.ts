@@ -136,6 +136,14 @@ export const ConnectionProfile = z.object({
 });
 export type ConnectionProfile = z.infer<typeof ConnectionProfile>;
 
+/** How the PM proposer fires when a session goes idle.
+ *    suggest — fire and show the proposal in the dock for review (default)
+ *    execute — fire and auto-send the resulting prompt to the terminal
+ *    manual  — never fire automatically; only the Suggest button fires
+ *  Set per-project and (optionally) overridden per-session. */
+export const MaestroMode = z.enum(['suggest', 'execute', 'manual']);
+export type MaestroMode = z.infer<typeof MaestroMode>;
+
 export const Project = z.object({
   id: ProjectId,
   path: z.string(),
@@ -155,12 +163,19 @@ export const Project = z.object({
   /** Default Codex login session id for sessions in this project. Null →
    *  the built-in global login. */
   codexLoginSessionId: z.string().nullable(),
-  /** Per-project Maestro opt-out. true (default) = Maestro may
-   *  propose actions for this project's sessions; false = inventory
-   *  drops the project before the planner sees it. Independent of
-   *  `snoozedAt` — you can keep a project visible in the left column
-   *  but stop Maestro from acting on it. */
-  maestroEnabled: z.boolean(),
+  /** Per-project Maestro dock visibility. true (default) = the
+   *  MaestroSuggestionCard renders above the terminal for sessions
+   *  in this project; false = the dock is hidden entirely (no card,
+   *  no auto-fire). Independent of `snoozedAt` — the project stays
+   *  in the sidebar either way. */
+  maestroShow: z.boolean(),
+  /** Per-project Maestro auto-fire mode. Applied when the session
+   *  transitions running → idle/needs-input/done:
+   *    suggest — fire the PM, show the proposed prompt for review (default)
+   *    execute — fire the PM and auto-send the prompt to the terminal
+   *    manual  — never fire automatically; only the Suggest button does
+   *  Sessions can override via `session.maestroMode`. */
+  maestroMode: MaestroMode,
 });
 export type Project = z.infer<typeof Project>;
 
@@ -219,15 +234,15 @@ export const Session = z.object({
    *  the project's default for this backend (which itself falls back to
    *  the built-in global login). Persisted so it survives resume/respawn. */
   loginSessionId: z.string().nullable(),
-  /** Per-session Maestro override. Three states:
-   *    null (default) → follow the parent project's `maestroEnabled`
-   *    true           → force-enable, even if the project is off
-   *    false          → force-disable, even if the project is on
-   *  The planner's F15.1 candidate gate reads
-   *  `session.maestroEnabled ?? project.maestroEnabled` — a session
-   *  override always wins. Persisted per row so the choice survives
-   *  resume/respawn. */
-  maestroEnabled: z.boolean().nullable(),
+  /** Per-session override for the dock visibility. null → follow the
+   *  parent project's `maestroShow`; true/false → force show/hide for
+   *  this session only. */
+  maestroShow: z.boolean().nullable(),
+  /** Per-session override for the auto-fire mode. null → follow the
+   *  parent project's `maestroMode`; otherwise pins this session's
+   *  behaviour to one of suggest/execute/manual regardless of the
+   *  project default. */
+  maestroMode: MaestroMode.nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -402,15 +417,22 @@ const ProjectRenameResponse = z.object({ project: Project });
 
 /** Toggle snoozed/active for a project. Snoozed projects stay in the
  *  DB with their sessions intact — only the left-column view changes. */
-/** Per-project Maestro on/off toggle. When `enabled=false`, Maestro
- *  inventory drops every session in this project before the planner
- *  runs; Approve / Revert continue to work on already-recorded
- *  actions. The renderer fires this from the project's ⋮ menu. */
-const ProjectSetMaestroEnabledRequest = z.object({
+/** Per-project Maestro dock visibility toggle. When show=false, the
+ *  MaestroSuggestionCard is hidden for every session in this project
+ *  and the auto-fire trigger is silent. Independent from mode — a
+ *  hidden project won't fire even if mode='execute'. */
+const ProjectSetMaestroShowRequest = z.object({
   projectId: ProjectId,
-  enabled: z.boolean(),
+  show: z.boolean(),
 });
-const ProjectSetMaestroEnabledResponse = z.object({ project: Project });
+const ProjectSetMaestroShowResponse = z.object({ project: Project });
+
+/** Per-project auto-fire mode. See MaestroMode for the semantics. */
+const ProjectSetMaestroModeRequest = z.object({
+  projectId: ProjectId,
+  mode: MaestroMode,
+});
+const ProjectSetMaestroModeResponse = z.object({ project: Project });
 
 const ProjectSetSnoozedRequest = z.object({
   projectId: ProjectId,
@@ -838,16 +860,23 @@ const SessionSetSnoozedRequest = z.object({
 });
 const SessionSetSnoozedResponse = z.object({ session: Session });
 
-/** Set (or clear) the per-session Maestro override.
- *    enabled = null  → follow the parent project's `maestroEnabled`
- *    enabled = true  → force-enable, even if the project is off
- *    enabled = false → force-disable, even if the project is on
- *  Fired from the session row menu's Maestro submenu. */
-const SessionSetMaestroEnabledRequest = z.object({
+/** Set (or clear) the per-session dock visibility override.
+ *    show = null  → follow the parent project's `maestroShow`
+ *    show = true  → force show, even if the project is hidden
+ *    show = false → force hide, even if the project is visible */
+const SessionSetMaestroShowRequest = z.object({
   sessionId: SessionId,
-  enabled: z.boolean().nullable(),
+  show: z.boolean().nullable(),
 });
-const SessionSetMaestroEnabledResponse = z.object({ session: Session });
+const SessionSetMaestroShowResponse = z.object({ session: Session });
+
+/** Set (or clear) the per-session auto-fire mode override.
+ *    mode = null → follow the parent project's `maestroMode` */
+const SessionSetMaestroModeRequest = z.object({
+  sessionId: SessionId,
+  mode: MaestroMode.nullable(),
+});
+const SessionSetMaestroModeResponse = z.object({ session: Session });
 
 /** Set (or clear) a session's title. An empty/whitespace-only string
  *  clears the title, reverting the row to its branch-name label. */
@@ -1323,7 +1352,8 @@ export const ControlVerbs = {
   'project.reorder':    { request: ProjectReorderRequest, response: ProjectReorderResponse },
   'project.rename':     { request: ProjectRenameRequest, response: ProjectRenameResponse },
   'project.setSnoozed': { request: ProjectSetSnoozedRequest, response: ProjectSetSnoozedResponse },
-  'project.setMaestroEnabled': { request: ProjectSetMaestroEnabledRequest, response: ProjectSetMaestroEnabledResponse },
+  'project.setMaestroShow': { request: ProjectSetMaestroShowRequest, response: ProjectSetMaestroShowResponse },
+  'project.setMaestroMode': { request: ProjectSetMaestroModeRequest, response: ProjectSetMaestroModeResponse },
   'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
   'connection.list':     { request: Empty,                     response: ConnectionListResponse },
@@ -1357,9 +1387,13 @@ export const ControlVerbs = {
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
-  'session.setMaestroEnabled': {
-    request: SessionSetMaestroEnabledRequest,
-    response: SessionSetMaestroEnabledResponse,
+  'session.setMaestroShow': {
+    request: SessionSetMaestroShowRequest,
+    response: SessionSetMaestroShowResponse,
+  },
+  'session.setMaestroMode': {
+    request: SessionSetMaestroModeRequest,
+    response: SessionSetMaestroModeResponse,
   },
   'session.setTitle': { request: SessionSetTitleRequest, response: SessionSetTitleResponse },
   'session.setJiraTaskId': { request: SessionSetJiraTaskIdRequest, response: SessionSetJiraTaskIdResponse },
@@ -1440,8 +1474,8 @@ const ProjectRenamedEvent = EventEnvelope.extend({
   project: Project,
 });
 
-const ProjectMaestroEnabledChangedEvent = EventEnvelope.extend({
-  type: z.literal('project.maestroEnabledChanged'),
+const ProjectMaestroChangedEvent = EventEnvelope.extend({
+  type: z.literal('project.maestroChanged'),
   project: Project,
 });
 
@@ -1591,7 +1625,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ProjectReorderedEvent,
   ProjectRenamedEvent,
   ProjectSnoozeChangedEvent,
-  ProjectMaestroEnabledChangedEvent,
+  ProjectMaestroChangedEvent,
   SessionReorderedEvent,
   SessionSpawnedEvent,
   SessionStartingEvent,
