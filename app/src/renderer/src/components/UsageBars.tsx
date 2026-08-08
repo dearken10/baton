@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AgentAccountId, ResponseOf, UsageListItem } from '@shared/ipc.js';
+import type { AgentAccountId, AppEvent, ResponseOf, UsageListItem } from '@shared/ipc.js';
 
 /**
  * Plan-usage chips + popup, modeled on Nimbalyst. Each chip is a small
@@ -68,7 +68,12 @@ export function UsageMeters(): JSX.Element | null {
   useEffect(() => {
     void refresh();
     const id = window.setInterval(() => { void refresh(); }, POLL_MS);
-    return () => window.clearInterval(id);
+    // Re-fetch immediately when the user reorders logins in settings so the
+    // chips' order matches without waiting for the next poll.
+    const off = window.baton.onEvent((e: AppEvent) => {
+      if (e.type === 'loginSession.reordered') void refresh();
+    });
+    return () => { window.clearInterval(id); off(); };
   }, [refresh]);
 
   if (!items) {

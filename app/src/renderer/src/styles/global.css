@@ -851,6 +851,20 @@ button {
   margin: 0 4px;
   color: var(--text-faint);
 }
+/* Jira ticket — leading segment on the session card's meta line and on the
+   conversation header. Accent-tinted so the ticket reads at a glance without
+   competing with the session title above it. */
+.jira-tag {
+  color: var(--accent);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.jira-sep {
+  margin: 0 4px;
+  color: var(--text-faint);
+  font-weight: 400;
+}
 /* Inline rename input — sized to blend into the row's primary line. */
 .session-row .session-title-input {
   flex: 1;
@@ -2600,7 +2614,16 @@ button.terminal-tab,
 .login-row-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .login-row-name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .login-row-status { margin-left: auto; white-space: nowrap; }
-.login-row-actions { display: flex; gap: 10px; white-space: nowrap; }
+.login-row-actions { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+/* Up/down reorder arrows — no underline, fixed width so they line up. */
+.login-reorder-btn {
+  text-decoration: none;
+  font-size: 13px;
+  line-height: 1;
+  width: 14px;
+  text-align: center;
+}
+.login-reorder-btn:not(:disabled):hover { color: var(--text); }
 .login-kind-badge {
   font-size: 11px;
   padding: 1px 6px;

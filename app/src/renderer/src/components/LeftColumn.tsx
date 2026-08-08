@@ -8,6 +8,7 @@ import { PromptDialog } from './PromptDialog.js';
 import { AddProjectDialog } from './AddProjectDialog.js';
 import { EditProjectLoginsDialog } from './EditProjectLoginsDialog.js';
 import { OrphansBadge } from './OrphansBadge.js';
+import { JiraTag } from './JiraTag.js';
 import { formatTokens, formatRelativeTime } from '../lib/format.js';
 
 function randomHex(n: number): string {
@@ -1035,6 +1036,7 @@ function TimelineView(props: TimelineViewProps): JSX.Element {
                 <span className="timeline-time">{formatRelativeTime(s.lastActiveAt, now)}</span>
               </span>
               <span className="branch branch-sub">
+                <JiraTag id={s.jiraTaskId} />
                 <span className="branch-project" title={project?.path}>
                   {project?.name ?? 'Unknown project'}
                 </span>
@@ -1328,7 +1330,10 @@ function ProjectBlock(props: ProjectBlockProps): JSX.Element {
                     <span className={`session-badge ${badge.cls}`} aria-hidden>{badge.glyph}</span>
                     <SessionTitleLabel session={s} />
                   </span>
-                  <span className="branch branch-sub">{s.branch}</span>
+                  <span className="branch branch-sub">
+                    <JiraTag id={s.jiraTaskId} />
+                    {s.branch}
+                  </span>
                   {s.lastSummary ? (
                     <span className="session-intent" title={s.lastSummary}>
                       {s.lastSummary}

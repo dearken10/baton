@@ -89,7 +89,10 @@ export function getLoginRow(id: string): LoginRow | null {
 
 function allRows(): LoginRow[] {
   const rows = getDatabase()
-    .prepare('SELECT id, name, agent, kind, config, built_in FROM login_sessions ORDER BY built_in DESC, name ASC')
+    .prepare(
+      'SELECT id, name, agent, kind, config, built_in FROM login_sessions ' +
+      'ORDER BY sort_order ASC, built_in DESC, name ASC'
+    )
     .all() as RawRow[];
   return rows.map(parseRow);
 }
@@ -152,13 +155,33 @@ function configFor(kind: LoginKind, input: UpsertInput, prev?: LoginConfig): Log
 export function createLoginSession(input: UpsertInput): LoginSession {
   const id = randomUUID();
   const config = configFor(input.kind, input);
-  getDatabase()
-    .prepare(
-      `INSERT INTO login_sessions (id, name, agent, kind, config, built_in, created_at)
-       VALUES (?, ?, ?, ?, ?, 0, ?)`
-    )
-    .run(id, input.name.trim(), input.agent, input.kind, JSON.stringify(config), Date.now());
+  const db = getDatabase();
+  // Append after the current last entry so a new login shows up at the
+  // bottom of the list / usage meters rather than jumping to the top.
+  const { next } = db
+    .prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM login_sessions')
+    .get() as { next: number };
+  db.prepare(
+    `INSERT INTO login_sessions (id, name, agent, kind, config, built_in, created_at, sort_order)
+     VALUES (?, ?, ?, ?, ?, 0, ?, ?)`
+  ).run(id, input.name.trim(), input.agent, input.kind, JSON.stringify(config), Date.now(), next);
   return toSession(getLoginRow(id)!);
+}
+
+/** Persist a new display order. `orderedIds` lists login ids in the desired
+ *  order; each gets `sort_order = its index`. Ids not present keep their old
+ *  values (so they sort ahead of / behind the listed set by index). Drives
+ *  both the settings list and the titlebar usage-meter order. */
+export function reorderLoginSessions(orderedIds: string[]): LoginSession[] {
+  const db = getDatabase();
+  const upd = db.prepare('UPDATE login_sessions SET sort_order = ? WHERE id = ?');
+  const tx = db.transaction((ids: string[]) => {
+    ids.forEach((id, i) => upd.run(i, id));
+  });
+  tx(orderedIds);
+  // Nudge the titlebar usage meters to re-fetch so their order matches.
+  emit({ type: 'loginSession.reordered' });
+  return listLoginSessions();
 }
 
 export interface UpdateInput {

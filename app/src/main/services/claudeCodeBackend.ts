@@ -18,6 +18,7 @@ import * as path from 'node:path';
 import * as pty from 'node-pty';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import type {
   AgentBackend,
   AgentHandle,
@@ -83,12 +84,20 @@ export class ClaudeCodeBackend implements AgentBackend {
     const hooks = getHookServer();
     const forwarder = hooks.forwarderPath();
 
-    // Per-session settings file. `--settings <file>` *adds* to the
-    // user's existing settings — does NOT replace them. So user auth,
-    // model, MCPs, plugins, etc. all still apply.
+    // Per-*spawn* settings file. `--settings <file>` *adds* to the user's
+    // existing settings — does NOT replace them. So user auth, model, MCPs,
+    // plugins, etc. all still apply.
+    //
+    // The filename must be unique per spawn, NOT just per session: a
+    // login/model switch kills the old process and respawns the SAME
+    // session id. If both shared `baton-claude-<sessionId>.json`, the dying
+    // process's exit cleanup (unlinkSync below) would delete the file the
+    // new process just wrote — and the new `claude` aborts with "Settings
+    // file not found". A per-spawn suffix isolates each process's file so
+    // its own cleanup only ever removes its own.
     const settingsPath = path.join(
       os.tmpdir(),
-      `baton-claude-${opts.sessionId}.settings.json`
+      `baton-claude-${opts.sessionId}-${randomUUID()}.settings.json`
     );
     const hookCmd = (event: string): string =>
       // `node` is guaranteed available because Claude itself is a Node app.
@@ -235,7 +244,10 @@ export class ClaudeCodeBackend implements AgentBackend {
     const remoteHome = homeRes.stdout.trim() || '/tmp';
     const remoteDir = `${remoteHome}/.baton`;
     const remoteForwarder = `${remoteDir}/hook-forwarder.js`;
-    const remoteSettings = `${remoteDir}/baton-claude-${opts.sessionId}.settings.json`;
+    // Per-spawn (not per-session) filename — a respawn under the same
+    // session id must not let the dying process's cleanup delete the new
+    // process's settings file. See the local spawn for the full rationale.
+    const remoteSettings = `${remoteDir}/baton-claude-${opts.sessionId}-${randomUUID()}.settings.json`;
 
     await remoteFs.mkdir(remoteDir, { recursive: true });
     // The forwarder script is the same on local + remote — read TCP

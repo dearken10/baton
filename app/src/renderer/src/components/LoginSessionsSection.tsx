@@ -140,6 +140,35 @@ export function LoginSessionsSection({
     onChanged?.();
   }
 
+  /** Move a login up/down within its agent group and persist the new order.
+   *  Reorder is within an agent (the list is grouped by agent); the swap is
+   *  applied to the flat list so the full order — which drives the titlebar
+   *  usage meters too — stays consistent. */
+  async function move(session: LoginSession, dir: 'up' | 'down'): Promise<void> {
+    if (!sessions) return;
+    const list = [...sessions];
+    const groupIdxs = list.reduce<number[]>((acc, s, i) => {
+      if (s.agent === session.agent) acc.push(i);
+      return acc;
+    }, []);
+    const pos = groupIdxs.findIndex((i) => list[i].id === session.id);
+    const target = dir === 'up' ? pos - 1 : pos + 1;
+    if (target < 0 || target >= groupIdxs.length) return;
+    const a = groupIdxs[pos];
+    const b = groupIdxs[target];
+    [list[a], list[b]] = [list[b], list[a]];
+    setSessions(list); // optimistic
+    try {
+      const { sessions: updated } = await window.baton.call('loginSession.reorder', {
+        orderedIds: list.map((s) => s.id),
+      });
+      setSessions(updated);
+      onChanged?.();
+    } catch {
+      void reload();
+    }
+  }
+
   return (
     <>
       <h4 className="settings-section-title">Login sessions</h4>
@@ -155,18 +184,23 @@ export function LoginSessionsSection({
         AGENTS.map(({ id, label }) => (
           <div key={id} className="dialog-field" style={{ gap: 6 }}>
             <span style={{ fontWeight: 600 }}>{label}</span>
-            {sessions
-              .filter((s) => s.agent === id)
-              .map((s) => (
+            {(() => {
+              const group = sessions.filter((s) => s.agent === id);
+              return group.map((s, idx) => (
                 <LoginRow
                   key={s.id}
                   session={s}
                   status={statuses[s.id]}
+                  canMoveUp={idx > 0}
+                  canMoveDown={idx < group.length - 1}
+                  onMoveUp={() => void move(s, 'up')}
+                  onMoveDown={() => void move(s, 'down')}
                   onSignIn={() => void startSignIn(s)}
                   onEdit={() => setEditor({ mode: 'edit', session: s })}
                   onDelete={() => void remove(s)}
                 />
-              ))}
+              ));
+            })()}
             <div>
               <button
                 type="button"
@@ -211,12 +245,20 @@ export function LoginSessionsSection({
 function LoginRow({
   session,
   status,
+  canMoveUp,
+  canMoveDown,
+  onMoveUp,
+  onMoveDown,
   onSignIn,
   onEdit,
   onDelete,
 }: {
   session: LoginSession;
   status: LoginSessionStatus | undefined;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
   onSignIn: () => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -242,6 +284,26 @@ function LoginRow({
       </div>
       <span className="dialog-hint login-row-status">{statusText}</span>
       <div className="login-row-actions">
+        <button
+          type="button"
+          className="linklike login-reorder-btn"
+          onClick={onMoveUp}
+          disabled={!canMoveUp}
+          title="Move up"
+          aria-label={`Move ${session.name} up`}
+        >
+          ↑
+        </button>
+        <button
+          type="button"
+          className="linklike login-reorder-btn"
+          onClick={onMoveDown}
+          disabled={!canMoveDown}
+          title="Move down"
+          aria-label={`Move ${session.name} down`}
+        >
+          ↓
+        </button>
         {session.kind === 'browser' && (
           <button type="button" className="linklike" onClick={onSignIn}>
             {status?.valid ? 'Re-sign in' : 'Sign in'}
