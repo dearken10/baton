@@ -1,5 +1,4 @@
 import { UsageMeters } from './UsageBars.js';
-import { MaestroChip } from './MaestroChip.js';
 
 interface Props {
   version: string;
@@ -15,7 +14,6 @@ export function Titlebar({ version, onOpenSettings }: Props): JSX.Element {
       <div className="brand">baton</div>
       <div className="meta">v{version}</div>
       <div className="spacer" />
-      <MaestroChip />
       <UsageMeters />
       <button
         type="button"

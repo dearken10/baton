@@ -7,8 +7,6 @@ import { LeftColumn } from './components/LeftColumn.js';
 import { MiddleColumn } from './components/MiddleColumn.js';
 import { RightColumn } from './components/RightColumn.js';
 import { SplitHandle } from './components/SplitHandle.js';
-import { MaestroFullScreen } from './components/MaestroFullScreen.js';
-import { useMaestroUI } from './components/maestroUI.js';
 
 // Column-width clamps. Middle column gets whatever's left over.
 const LEFT_MIN = 200;
@@ -124,60 +122,6 @@ export function App(): JSX.Element {
       .catch(() => { /* notifier failure must never break the UI */ });
   }, [selectedSessionId]);
 
-  // Esc returns from Maestro full-screen to the workspace.
-  const fullScreen = useMaestroUI((s) => s.fullScreen);
-  const setFullScreen = useMaestroUI((s) => s.setFullScreen);
-  const markActivity = useMaestroUI((s) => s.markActivity);
-  useEffect(() => {
-    if (!fullScreen) return;
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        setFullScreen(false);
-      }
-    };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [fullScreen, setFullScreen]);
-
-  // Maestro idle tracker (PRD F15.x). Every mousemove / click / keydown
-  // refreshes the in-renderer `lastActivityAt` and, throttled to once
-  // every 5 s, fires a maestro.reportActivity IPC so the daemon's
-  // idle gate sees a fresh mtime on ~/.baton/maestro/last-activity.
-  //
-  // Throttle (not debounce): we want activity reports to keep flowing
-  // while the user is actively working, capped at one per window. A
-  // debounce would only report after the user stops — exactly the
-  // opposite of what we need.
-  useEffect(() => {
-    let lastReportedAt = 0;
-    const REPORT_THROTTLE_MS = 5_000;
-    const onActivity = (): void => {
-      const now = Date.now();
-      markActivity(now);
-      if (now - lastReportedAt < REPORT_THROTTLE_MS) return;
-      lastReportedAt = now;
-      if (!window.baton) return;
-      void window.baton
-        .call('maestro.reportActivity', { at: now })
-        .catch(() => { /* heartbeat is best-effort */ });
-    };
-    // `passive: true` so the mousemove handler doesn't ever block
-    // scrolling. `capture: true` so we win the race against any child
-    // that calls stopPropagation (rare but possible inside Monaco).
-    const opts: AddEventListenerOptions = { passive: true, capture: true };
-    document.addEventListener('mousemove', onActivity, opts);
-    document.addEventListener('mousedown', onActivity, opts);
-    document.addEventListener('keydown',   onActivity, opts);
-    document.addEventListener('wheel',     onActivity, opts);
-    return () => {
-      document.removeEventListener('mousemove', onActivity, opts);
-      document.removeEventListener('mousedown', onActivity, opts);
-      document.removeEventListener('keydown',   onActivity, opts);
-      document.removeEventListener('wheel',     onActivity, opts);
-    };
-  }, [markActivity]);
-
   if (preloadError) {
     return (
       <div className="app">
@@ -190,7 +134,7 @@ export function App(): JSX.Element {
   }
 
   return (
-    <div className={`app ${fullScreen ? 'app-maestro-full' : ''}`}>
+    <div className="app">
       <Titlebar
         version={meta?.version ?? 'dev'}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -203,23 +147,19 @@ export function App(): JSX.Element {
           void window.baton.call('onboarding.complete', {}).catch(() => { /* best-effort */ });
         }}
       />
-      {fullScreen ? (
-        <MaestroFullScreen />
-      ) : (
-        <main
-          className="main"
-          style={{
-            ['--left-w' as never]: `${leftWidth}px`,
-            ['--right-w' as never]: `${rightWidth}px`,
-          }}
-        >
-          <LeftColumn />
-          <SplitHandle onResize={onLeftResize} ariaLabel="Resize projects column" />
-          <MiddleColumn />
-          <SplitHandle onResize={onRightResize} ariaLabel="Resize files column" />
-          <RightColumn />
-        </main>
-      )}
+      <main
+        className="main"
+        style={{
+          ['--left-w' as never]: `${leftWidth}px`,
+          ['--right-w' as never]: `${rightWidth}px`,
+        }}
+      >
+        <LeftColumn />
+        <SplitHandle onResize={onLeftResize} ariaLabel="Resize projects column" />
+        <MiddleColumn />
+        <SplitHandle onResize={onRightResize} ariaLabel="Resize files column" />
+        <RightColumn />
+      </main>
     </div>
   );
 }
