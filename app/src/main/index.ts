@@ -19,8 +19,6 @@ import { fileURLToPath } from 'node:url';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 
 import { registerControlBus } from './ipc/bus.js';
-import { reconcileMaestroOnStartup } from './services/maestroState.js';
-import { startMaestroAutoExecutor } from './services/maestroAutoExecutor.js';
 import { startMaestroSuggestion } from './services/maestroSuggestion.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { getSessionManager } from './services/sessionManager.js';
@@ -271,34 +269,10 @@ app.whenReady().then(() => {
   // real status the first time the user opens AddProjectDialog.
   warmAllConnections();
 
-  // Maestro (PRD F15 PoC): if the user's last state was "active"
-  // (no paused flag) but no daemon is running (crash, reboot, manual
-  // kill), spawn one. The reverse — paused flag with a live daemon —
-  // gets cleaned up the same way. Best-effort; logs but never throws.
-  try {
-    const r = reconcileMaestroOnStartup();
-    if (r.acted !== 'noop') {
-      console.log(`[maestro] startup reconcile: ${r.acted} (${r.reason ?? ''})`);
-    }
-  } catch (e) {
-    console.warn('[maestro] startup reconcile failed:', e);
-  }
-
-  // Auto-executor closes the loop on PRD F15.2 act-first: when the
-  // user has flipped the mode toggle to "run", new plans from the
-  // tick should fire on the user's behalf instead of sitting in the
-  // UI waiting for a click. Best-effort; never throws.
-  try {
-    startMaestroAutoExecutor();
-  } catch (e) {
-    console.warn('[maestro] auto-executor failed to start:', e);
-  }
-
-  // Per-session Maestro suggestion — fires the option4 proposer for
+  // Per-session Maestro suggestion — fires the option5 PM proposer for
   // one session immediately after it stops processing, so the
   // MaestroSuggestionCard above the terminal input has something to
-  // show without waiting for the periodic tick. See
-  // maestroSuggestion.ts + design/mockup-maestro-inline-suggestion.html.
+  // show. See maestroSuggestion.ts. Best-effort; never throws.
   try {
     startMaestroSuggestion();
   } catch (e) {

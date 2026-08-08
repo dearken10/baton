@@ -48,9 +48,6 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
   // "Reset to default" and a "custom" badge without a re-fetch.
   const [promptBundle, setPromptBundle] = useState<MaestroPromptBundle | null>(null);
   const [promptDraft, setPromptDraft] = useState<{
-    nextAction: string;
-    outstandingTasks: string;
-    phase3FromDocs: string;
     goal: string;
   } | null>(null);
   const theme = useTheme();
@@ -71,12 +68,7 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
       .then(([o, p]) => {
         setOtel(o.otel);
         setPromptBundle(p);
-        setPromptDraft({
-          nextAction:       p.nextAction,
-          outstandingTasks: p.outstandingTasks,
-          phase3FromDocs:   p.phase3FromDocs,
-          goal:             p.goal,
-        });
+        setPromptDraft({ goal: p.goal });
         setLoaded(true);
       })
       .catch((e) => setError(`Failed to load settings: ${String(e)}`));
@@ -127,18 +119,10 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
       // is intentional — the main service treats it as "delete override,
       // revert to default".
       const bundle = await window.baton.call('maestro.setPrompts', {
-        nextAction:       promptDraft.nextAction,
-        outstandingTasks: promptDraft.outstandingTasks,
-        phase3FromDocs:   promptDraft.phase3FromDocs,
-        goal:             promptDraft.goal,
+        goal: promptDraft.goal,
       });
       setPromptBundle(bundle);
-      setPromptDraft({
-        nextAction:       bundle.nextAction,
-        outstandingTasks: bundle.outstandingTasks,
-        phase3FromDocs:   bundle.phase3FromDocs,
-        goal:             bundle.goal,
-      });
+      setPromptDraft({ goal: bundle.goal });
       onClose();
     } catch (e) {
       setError(`Failed to save prompts: ${String(e)}`);
@@ -380,13 +364,8 @@ function MaestroSection({
   disabled,
 }: {
   bundle: MaestroPromptBundle | null;
-  draft: { nextAction: string; outstandingTasks: string; phase3FromDocs: string; goal: string } | null;
-  setDraft: React.Dispatch<React.SetStateAction<{
-    nextAction: string;
-    outstandingTasks: string;
-    phase3FromDocs: string;
-    goal: string;
-  } | null>>;
+  draft: { goal: string } | null;
+  setDraft: React.Dispatch<React.SetStateAction<{ goal: string } | null>>;
   disabled: boolean;
 }): JSX.Element {
   if (!bundle || !draft) {
@@ -399,43 +378,18 @@ function MaestroSection({
   }
 
   const fields: Array<{
-    key: 'nextAction' | 'outstandingTasks' | 'phase3FromDocs' | 'goal';
+    key: 'goal';
     label: string;
     hint: string;
     default_: string;
     overridden: boolean;
   }> = [
-    // Goal comes first — it drives the on-idle inline card the user
-    // interacts with directly, so it's the most immediately useful to
-    // tune. The three phase prompts are further down as tick-daemon
-    // internals.
     {
       key: 'goal',
-      label: 'Goal — on-idle inline suggestion (variant A)',
-      hint: 'Fires when a claude-code session transitions running → idle/needs-input/done. The response prefills the editable card that appears above the terminal input.',
+      label: 'Goal — on-idle inline suggestion',
+      hint: 'Fires when a claude-code session transitions running → idle/needs-input/done. The response prefills the editable card at the bottom of the terminal.',
       default_: bundle.defaults.goal,
       overridden: bundle.overridden.goal,
-    },
-    {
-      key: 'nextAction',
-      label: 'Phase 1 — Next action (tick daemon)',
-      hint: 'Fires against each candidate’s cloned JSONL. The clone answers with a resume/wait/defer proposal.',
-      default_: bundle.defaults.nextAction,
-      overridden: bundle.overridden.nextAction,
-    },
-    {
-      key: 'outstandingTasks',
-      label: 'Phase 2 — Outstanding tasks (tick daemon)',
-      hint: 'Fallback when phase 1 yields no resumes. Asks each non-resume candidate whether there’s implicit work to pick up.',
-      default_: bundle.defaults.outstandingTasks,
-      overridden: bundle.overridden.outstandingTasks,
-    },
-    {
-      key: 'phase3FromDocs',
-      label: 'Phase 3 — Docs-driven initiate (tick daemon)',
-      hint: 'Fallback when phase 2 also yields nothing. Reads project docs (backlog / TODO / PRD / README) and suggests one new session to initiate.',
-      default_: bundle.defaults.phase3FromDocs,
-      overridden: bundle.overridden.phase3FromDocs,
     },
   ];
 
@@ -443,12 +397,10 @@ function MaestroSection({
     <>
       <h4 className="settings-section-title">Maestro prompts</h4>
       <p className="dialog-hint" style={{ marginBottom: 12 }}>
-        Prompt bodies Maestro sends. Overrides are saved to
-        <code className="mono"> &lt;BATON_HOME&gt;/maestro/prompts/</code> and
-        take effect on the next fire without a restart — the Goal prompt fires
-        when a session goes idle; the three phase prompts fire from the tick
-        daemon. Clear a field and Save to revert that prompt to its shipped
-        default.
+        The prompt body the PM proposer sends. Overrides are saved to
+        <code className="mono"> &lt;BATON_HOME&gt;/maestro/prompts/goal.md</code>
+        {' '}and take effect on the next fire without a restart. Clear the
+        field and Save to revert to the shipped default.
       </p>
 
       {fields.map((f) => (

@@ -468,92 +468,31 @@ const UsageGetStatsResponse = z.object({
  *  manager + a proper Maestro service.
  * ──────────────────────────────────────────────────────────────── */
 
-const MaestroAssumption = z.object({
-  question:       z.string(),
-  assumedAnswer:  z.string(),
-  why:            z.string().optional(),
-  ifWrong:        z.string().optional(),
-});
-const MaestroActionKind = z.enum(['resume', 'initiate', 'defer']);
-const MaestroAction = z.object({
-  actionId:           z.string(),
-  kind:               MaestroActionKind,
-  targetSessionId:    z.string().nullable(),
-  targetProjectId:    z.string().nullable(),
-  /** Branch name for `initiate` actions — Maestro creates a fresh
-   *  worktree at this branch off the project root when Approve fires.
-   *  Null for `resume` / `defer`. */
-  targetBranch:       z.string().nullable().optional(),
-  prompt:             z.string().nullable(),
-  rationale:          z.string(),
-  confidence:         z.number(),
-  assumptionsMade:    z.array(MaestroAssumption).default([]),
-  reversibilityNote:  z.string().optional(),
-});
-
-const MaestroGetStateRequest = z.object({});
-
-const MaestroSetPausedRequest = z.object({
-  paused: z.boolean(),
-});
-const MaestroSetPausedResponse = z.object({
-  /** Echo back the resulting state so the renderer can confirm. */
-  paused: z.boolean(),
-});
-
-const MaestroSetModeRequest = z.object({
-  mode: z.enum(['propose-first', 'act-first']),
-});
-const MaestroSetModeResponse = z.object({
-  mode: z.enum(['propose-first', 'act-first']),
-});
-
-/** Editable prompt bodies for Maestro's prompted flows.
- *
- *  `nextAction` / `outstandingTasks` / `phase3FromDocs` drive the
- *  option4 tick daemon's three phases (see per-session-tick.mjs).
- *  `goal` drives the variant-A on-idle inline suggestion card (see
- *  maestroSuggestion.ts) — a separate prompt so the two flows can be
- *  tuned independently.
+/** Editable prompt body for the variant-A on-idle inline suggestion
+ *  card. The only user-editable Maestro prompt after the tick-daemon
+ *  removal. See main/services/maestroPrompts.ts.
  *
  *  `defaults` echoes what ships in the repo so the settings UI can
- *  render a per-prompt "Reset to default" without a second round-trip.
+ *  render a "Reset to default" without a second round-trip.
  *  `overridden` is true iff the user has saved a non-empty override
- *  to <BATON_HOME>/maestro/prompts/<slug>.md. See main/services/
- *  maestroPrompts.ts. */
+ *  to <BATON_HOME>/maestro/prompts/goal.md. */
 const MaestroPromptBundle = z.object({
-  nextAction:       z.string(),
-  outstandingTasks: z.string(),
-  phase3FromDocs:   z.string(),
-  goal:             z.string(),
-  defaults: z.object({
-    nextAction:       z.string(),
-    outstandingTasks: z.string(),
-    phase3FromDocs:   z.string(),
-    goal:             z.string(),
-  }),
-  overridden: z.object({
-    nextAction:       z.boolean(),
-    outstandingTasks: z.boolean(),
-    phase3FromDocs:   z.boolean(),
-    goal:             z.boolean(),
-  }),
+  goal:      z.string(),
+  defaults:  z.object({ goal: z.string() }),
+  overridden: z.object({ goal: z.boolean() }),
 });
 const MaestroGetPromptsRequest = z.object({});
 const MaestroGetPromptsResponse = MaestroPromptBundle;
 const MaestroSetPromptsRequest = z.object({
-  nextAction:       z.string(),
-  outstandingTasks: z.string(),
-  phase3FromDocs:   z.string(),
-  goal:             z.string(),
+  goal: z.string(),
 });
 const MaestroSetPromptsResponse = MaestroPromptBundle;
 
 /** Per-session Maestro suggestion (variant A: inline card).
- *  A proposal produced by option4's proposer after the target session
- *  stopped processing (running → idle/needs-input/done). Held in main
- *  memory only — a restart drops in-flight suggestions; the next
- *  status transition regenerates. */
+ *  A proposal produced by option5's PM proposer after the target
+ *  session stopped processing (running → idle/needs-input/done).
+ *  Held in main memory only — a restart drops in-flight suggestions;
+ *  the next status transition regenerates. */
 export const MaestroSuggestion = z.object({
   sessionId: SessionId,
   /** Discriminator matching the proposer's action:
@@ -615,223 +554,6 @@ const MaestroRegenerateSuggestionRequest = z.object({
 const MaestroRegenerateSuggestionResponse = z.object({
   ok: z.boolean(),
   reason: z.string().nullable(),
-});
-
-/** Renderer heartbeat. Called on every mousemove/click/keydown,
- *  throttled in the renderer to ~5 s. Main writes the timestamp to
- *  ~/.baton/maestro/last-activity; the daemon stats that file each
- *  poll and skips the tick when the user has been active recently. */
-const MaestroReportActivityRequest = z.object({
-  /** Wall-clock ms from the renderer's perspective. Main is free to
-   *  override with its own `Date.now()` — we use the renderer's value
-   *  only so client-side debouncing has a single source of truth. */
-  at: z.number().int().positive(),
-});
-const MaestroReportActivityResponse = z.object({ ok: z.literal(true) });
-
-/** Manual "Run now" trigger from the full-screen banner. Spawns
- *  bootstrap-or-tick.sh --force in the background; resolves
- *  immediately. The chip + full-screen view see the new plan land
- *  via the next maestro.getState poll. */
-const MaestroRunNowRequest = z.object({});
-const MaestroRunNowResponse = z.object({
-  /** True if the tick script was launched; false on hard errors
-   *  (e.g. PoC not checked out, paused). */
-  ok: z.boolean(),
-  /** Human-readable reason when ok=false. */
-  reason: z.string().nullable(),
-});
-
-/** Normalised content block of a turn in the master Claude Code
- *  session's JSONL transcript. We collapse Claude's on-disk format
- *  (mixed message records + bookkeeping noise like queue-operation,
- *  attachment, ai-title) into a small discriminated union the
- *  renderer can switch on. */
-const MaestroSessionBlock = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('text'),     text: z.string() }),
-  z.object({ kind: z.literal('thinking'), text: z.string() }),
-  z.object({
-    kind:  z.literal('tool_use'),
-    name:  z.string(),
-    /** One-line summary of the input: first ~200 chars of the JSON
-     *  with whitespace collapsed. Renderer may show as-is. */
-    inputPreview: z.string(),
-  }),
-  z.object({
-    kind:    z.literal('tool_result'),
-    /** Truncated to ~1 KB; tool outputs can be huge. */
-    preview: z.string(),
-    isError: z.boolean(),
-  }),
-]);
-
-const MaestroSessionTurn = z.object({
-  /** JSONL row uuid when present, else an index-based fallback. */
-  id:        z.string(),
-  role:      z.enum(['user', 'assistant']),
-  /** ISO 8601, when the JSONL record carried one. */
-  timestamp: z.string().nullable(),
-  blocks:    z.array(MaestroSessionBlock),
-  /** True when this user turn is the `/maestro-tick` slash command
-   *  that starts a new tick segment. Renderer can render this as a
-   *  divider rather than a real bubble. */
-  isTickStart: z.boolean(),
-});
-
-const MaestroSessionTick = z.object({
-  /** 1-based, every `/maestro-tick` boundary observed in the
-   *  transcript (incl. failed ones). */
-  index:     z.number().int().positive(),
-  /** ISO timestamp of the first turn in this segment. */
-  startedAt: z.string(),
-  /** ISO timestamp of the last turn in this segment. Null when this
-   *  is the latest tick and Maestro hasn't finished. */
-  endedAt:   z.string().nullable(),
-  status:    z.enum(['success', 'failed', 'in-progress']),
-  /** Human-readable detail for non-success states (e.g. "auth 403"). */
-  statusDetail: z.string().nullable(),
-  /** Turn count for the column-1 badge. */
-  turnCount: z.number().int().nonnegative(),
-  /** Full turns for column-2 conversation rendering. */
-  turns:     z.array(MaestroSessionTurn),
-  /** Plan JSON that this tick produced, when it succeeded. Reuses the
-   *  same shape as `maestro.getState`.plan. */
-  plan: z.object({
-    tickAt:    z.string(),
-    skipReason: z.string().nullable(),
-    reasoning: z.string(),
-    actions:   z.array(MaestroAction),
-  }).nullable(),
-});
-
-/** Approve a Maestro action: checkpoint + persist + inject prompt
- *  into the target session's live PTY (PRD F15.6). Main returns
- *  ok=true only after the prompt has been written. */
-const MaestroApproveActionRequest = z.object({
-  action: MaestroAction,
-});
-const MaestroApproveActionResponse = z.object({
-  ok:       z.boolean(),
-  actionId: z.string(),
-  /** Human-readable reason on ok=false (target busy, session gone,
-   *  ledger write failed, etc.). Null on success. */
-  reason:   z.string().nullable(),
-});
-
-/** Revert an in-flight Maestro action: `git reset --hard <pre_tag>`
- *  + `git stash apply <stash_ref>` in the target worktree, then mark
- *  the ledger row state='reverted'. */
-const MaestroRevertActionRequest = z.object({
-  actionId: z.string(),
-});
-const MaestroRevertActionResponse = z.object({
-  ok:     z.boolean(),
-  /** On stash-apply conflict we return ok=true with a non-null reason
-   *  explaining the partial revert (tree restored, but the stash
-   *  needs manual recovery). */
-  reason: z.string().nullable(),
-});
-
-/** Action ledger record returned by `maestro.listActions`. */
-const MaestroActionRecord = z.object({
-  actionId:        z.string(),
-  kind:            z.enum(['resume', 'initiate']),
-  targetSessionId: z.string().nullable(),
-  targetProjectId: z.string().nullable(),
-  /** Branch the `initiate` action created (when revert hasn't fired
-   *  yet). Used for the card's "spawned X" badge. */
-  targetBranch:    z.string().nullable(),
-  worktreePath:    z.string(),
-  preTag:          z.string().nullable(),
-  stashRef:        z.string().nullable(),
-  prompt:          z.string(),
-  rationale:       z.string().nullable(),
-  confidence:      z.number().nullable(),
-  state:           z.enum(['in_flight', 'reverted', 'failed']),
-  stateDetail:     z.string().nullable(),
-  createdAt:       z.number().int().nonnegative(),
-  revertedAt:      z.number().int().nullable(),
-});
-
-const MaestroListActionsRequest = z.object({
-  /** When set, only return actions targeting this session id; else
-   *  return the full ledger. */
-  targetSessionId: z.string().optional(),
-});
-const MaestroListActionsResponse = z.object({
-  actions: z.array(MaestroActionRecord),
-});
-
-const MaestroGetSessionRequest = z.object({
-  /** Max number of ticks to return, counted from the tail. Default
-   *  50 — enough for "yesterday + today" without dragging
-   *  multi-megabyte responses across IPC. */
-  tickLimit: z.number().int().positive().max(500).optional(),
-});
-const MaestroGetSessionResponse = z.object({
-  /** False when no master session exists or no JSONL was found on
-   *  disk. Renderer shows an empty state. */
-  available:      z.boolean(),
-  /** Pinned session id from state/session-id, when available. */
-  sessionId:      z.string().nullable(),
-  /** Absolute path of the JSONL on disk — surfaced as a "reveal in
-   *  Finder" affordance and in the terminal-pane header. */
-  transcriptPath: z.string().nullable(),
-  /** Last N ticks (chronological, oldest first). */
-  ticks:          z.array(MaestroSessionTick),
-  /** Total tick count observed (before tail truncation). */
-  totalTicks:     z.number().int().nonnegative(),
-});
-const MaestroGetStateResponse = z.object({
-  /** When false the rest of the response is essentially empty —
-   *  no PoC state on disk. Render the chip in an "uninitialized"
-   *  pose. */
-  installed: z.boolean(),
-  /** PoC session bookkeeping. Nullable when not yet bootstrapped. */
-  sessionId:       z.string().nullable(),
-  tickCount:       z.number().int().nonnegative(),
-  /** Most recent successful tick. Null until the first tick. */
-  lastTickAt:      z.string().nullable(),
-  /** Next tick estimate based on lastTickAt + intervalMin. Null
-   *  when we can't infer (no daemon, no prior tick). */
-  nextTickEtaAt:   z.string().nullable(),
-  /** Daemon cadence, in minutes. Defaults to 15 when no
-   *  MAESTRO_TICK_INTERVAL_MIN was seen yet. */
-  tickIntervalMin: z.number().positive(),
-  /** Idle-before-tick threshold, in minutes. The daemon polls at a
-   *  shorter cadence (MAESTRO_POLL_INTERVAL_SEC) and fires a tick
-   *  only when the user has been idle for at least this long. */
-  idleThresholdMin: z.number().positive(),
-  /** Wall-clock ms (renderer-supplied) when the user last touched
-   *  the app. Null when no heartbeat has been recorded yet — the
-   *  daemon treats that as "idle" and ticks unconditionally. */
-  lastActivityAt: z.number().nullable(),
-  /** Is maestrod.sh currently running? PoC checks for a pid file
-   *  and signals to it; v1.x will manage as a baton service. */
-  daemonRunning:   z.boolean(),
-  /** User has paused Maestro via the chip toggle. Daemon + tick
-   *  script both honor this flag (file at ~/.baton/maestro/paused).
-   *  When true the next tick is skipped with an explicit log line. */
-  paused:          z.boolean(),
-  /** Maestro mode (PRD F15.2):
-   *  - 'propose-first' (suggest): actions queue in the Inbox for
-   *    human Approve/Reject before any side effects.
-   *  - 'act-first' (run): actions execute immediately under
-   *    checkpoint+revert; the user reviews assumptions after.
-   *  PoC stage: this is a cosmetic flag until execution is wired —
-   *  the chip surfaces it now so the contract is stable when the
-   *  runtime catches up. Default 'propose-first'. */
-  mode:            z.enum(['propose-first', 'act-first']),
-  /** True after the bloat threshold was hit and not yet cleared. */
-  bloatWarning:    z.boolean(),
-  /** Latest plan from poc/maestro/option3-master-session/last-plan.json.
-   *  Null when no tick has run yet. */
-  plan: z.object({
-    tickAt:    z.string(),
-    skipReason: z.string().nullable(),
-    reasoning: z.string(),
-    actions:   z.array(MaestroAction),
-  }).nullable(),
 });
 
 /** Renderer tells main which session is currently focused in the UI
@@ -1622,21 +1344,12 @@ export const ControlVerbs = {
   'usage.getStats':      { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.getCodexStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.list':          { request: UsageListRequest,     response: UsageListResponse },
-  'maestro.getState':    { request: MaestroGetStateRequest, response: MaestroGetStateResponse },
-  'maestro.setPaused':   { request: MaestroSetPausedRequest, response: MaestroSetPausedResponse },
-  'maestro.setMode':     { request: MaestroSetModeRequest,   response: MaestroSetModeResponse },
   'maestro.getPrompts':  { request: MaestroGetPromptsRequest, response: MaestroGetPromptsResponse },
   'maestro.setPrompts':  { request: MaestroSetPromptsRequest, response: MaestroSetPromptsResponse },
   'maestro.getSuggestion':      { request: MaestroGetSuggestionRequest,      response: MaestroGetSuggestionResponse },
   'maestro.acceptSuggestion':   { request: MaestroAcceptSuggestionRequest,   response: MaestroAcceptSuggestionResponse },
   'maestro.dismissSuggestion':  { request: MaestroDismissSuggestionRequest,  response: MaestroDismissSuggestionResponse },
   'maestro.regenerateSuggestion': { request: MaestroRegenerateSuggestionRequest, response: MaestroRegenerateSuggestionResponse },
-  'maestro.reportActivity': { request: MaestroReportActivityRequest, response: MaestroReportActivityResponse },
-  'maestro.runNow':         { request: MaestroRunNowRequest,         response: MaestroRunNowResponse },
-  'maestro.getSession':     { request: MaestroGetSessionRequest,     response: MaestroGetSessionResponse },
-  'maestro.approveAction':  { request: MaestroApproveActionRequest,  response: MaestroApproveActionResponse },
-  'maestro.revertAction':   { request: MaestroRevertActionRequest,   response: MaestroRevertActionResponse },
-  'maestro.listActions':    { request: MaestroListActionsRequest,    response: MaestroListActionsResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },

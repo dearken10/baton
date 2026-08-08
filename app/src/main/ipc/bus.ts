@@ -57,14 +57,6 @@ import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
 import { buildUsageList } from '../services/usageList.js';
-import {
-  getMaestroState,
-  setMaestroPaused,
-  setMaestroMode,
-  reportMaestroActivity,
-  runMaestroNow,
-} from '../services/maestroState.js';
-import { getMaestroSession } from '../services/maestroSession.js';
 import { getMaestroPrompts, setMaestroPrompts } from '../services/maestroPrompts.js';
 import {
   getMaestroSuggestion,
@@ -72,7 +64,6 @@ import {
   dismissMaestroSuggestion,
   regenerateMaestroSuggestion,
 } from '../services/maestroSuggestion.js';
-import { approveAction, revertAction, listActions } from '../services/maestroAction.js';
 import { getDatabase } from '../database/index.js';
 import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
 
@@ -308,26 +299,12 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'usage.getStats': async () => getUsage(),
   'usage.getCodexStats': () => getCodexUsage(),
   'usage.list': async () => ({ items: await buildUsageList() }),
-  'maestro.getState': () => getMaestroState(),
-  'maestro.setPaused': (req) => setMaestroPaused(req.paused),
-  'maestro.setMode':   (req) => setMaestroMode(req.mode),
   'maestro.getSuggestion':      (req) => ({ suggestion: getMaestroSuggestion(req.sessionId) }),
   'maestro.acceptSuggestion':   (req) => acceptMaestroSuggestion(req.sessionId, req.prompt),
   'maestro.dismissSuggestion':  (req) => dismissMaestroSuggestion(req.sessionId),
   'maestro.regenerateSuggestion': (req) => regenerateMaestroSuggestion(req.sessionId),
   'maestro.getPrompts':     () => getMaestroPrompts(),
-  'maestro.setPrompts':     (req) => setMaestroPrompts({
-    nextAction:       req.nextAction,
-    outstandingTasks: req.outstandingTasks,
-    phase3FromDocs:   req.phase3FromDocs,
-    goal:             req.goal,
-  }),
-  'maestro.reportActivity': (req) => reportMaestroActivity(req.at),
-  'maestro.runNow':         () => runMaestroNow(),
-  'maestro.getSession':     (req) => getMaestroSession(req.tickLimit),
-  'maestro.approveAction':  (req) => approveAction({ action: req.action }),
-  'maestro.revertAction':   (req) => revertAction(req.actionId),
-  'maestro.listActions':    (req) => listActions(req.targetSessionId),
+  'maestro.setPrompts':     (req) => setMaestroPrompts({ goal: req.goal }),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);
