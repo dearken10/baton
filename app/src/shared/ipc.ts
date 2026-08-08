@@ -458,14 +458,9 @@ const UsageGetStatsResponse = z.object({
 });
 
 /* ────────────────────────────────────────────────────────────────
- *  Maestro (PRD F15) — autonomous orchestrator state for the chip
- *  in the titlebar (Direction A from the UI brainstorm).
- *
- *  This is a PoC-grade contract that talks to the option 3
- *  master-mind session via files on disk
- *  (poc/maestro/option3-master-session/state/) and the latest plan
- *  JSON. v1.x will move the source of truth into baton's session
- *  manager + a proper Maestro service.
+ *  Maestro (PRD F15) — inline PM suggestion dock above the terminal
+ *  input. The `goal.md` prompt drives the option5 PM proposer, which
+ *  produces the suggestion the user can accept, edit, or dismiss.
  * ──────────────────────────────────────────────────────────────── */
 
 /** Editable prompt body for the variant-A on-idle inline suggestion
