@@ -61,7 +61,24 @@ function saveCollapsed(v: boolean): void {
   catch { /* best-effort */ }
 }
 
-export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element {
+export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null {
+  // Effective Maestro flag for this session — three-tier resolution
+  // matching maestroSuggestion.ts's softIneligibleReason:
+  //   session.maestroEnabled ?? project.maestroEnabled ?? true
+  // When it resolves to false the dock is hidden entirely (no
+  // header, no manual Suggest button, no idle hint). Users who
+  // turned Maestro off for a project don't want a dead bar taking
+  // up terminal real estate. Snooze is intentionally NOT gated
+  // here — snoozing mutes notifications but keeps the on-demand
+  // Suggest button reachable.
+  const effectiveEnabled = useAppStore((s) => {
+    const sess = s.sessions[sessionId];
+    if (!sess) return true;
+    if (sess.maestroEnabled != null) return sess.maestroEnabled;
+    const proj = s.projects[sess.projectId];
+    return proj?.maestroEnabled ?? true;
+  });
+
   const suggestion = useAppStore(
     (s) => s.maestroSuggestions[sessionId] ?? null,
   );
@@ -206,6 +223,8 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element {
           : 'idle';
 
   const canSuggest = !proposing && !busy;
+
+  if (!effectiveEnabled) return null;
 
   return (
     <div
