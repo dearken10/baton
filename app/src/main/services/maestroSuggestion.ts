@@ -86,27 +86,39 @@ function proposerScriptPath(): string {
   );
 }
 
-/** F15.1 gate for a single session. Mirrors the filter in
- *  per-session-tick.mjs / inventory.mjs but works off the live
- *  in-memory Session + the project row. Returns null when eligible
- *  or a reason string for the debug log when not. */
-function ineligibleReason(session: Session): string | null {
+/** HARD gates — the proposer physically can't run without these.
+ *  Applied to both the auto (running → idle) trigger AND the manual
+ *  Suggest button. Returns null when clear, else a reason string. */
+function hardIneligibleReason(session: Session): string | null {
   if (session.backendId !== 'claude-code') return 'not-claude-code';
-  if (session.snoozedAt != null) return 'session-snoozed';
   if (!session.claudeSessionId) return 'no-jsonl';
-
   const project = getProject(session.projectId);
   if (!project) return 'unknown-project';
-  if (project.snoozedAt != null) return 'project-snoozed';
+  return null;
+}
 
+/** SOFT gates — the user opted out for auto mode (project or session
+ *  Maestro toggle, snooze). A manual Suggest click SHOULD still work,
+ *  so we only apply these on the auto path. F15.1 (the tick daemon's
+ *  gate) applies both, matching this pair together. */
+function softIneligibleReason(session: Session): string | null {
+  if (session.snoozedAt != null) return 'session-snoozed';
+  const project = getProject(session.projectId);
+  if (project?.snoozedAt != null) return 'project-snoozed';
   // Three-tier resolution: session override wins, then project.
   const effective =
     session.maestroEnabled != null
       ? session.maestroEnabled
-      : project.maestroEnabled;
+      : project?.maestroEnabled ?? true;
   if (!effective) return 'maestro-disabled';
-
   return null;
+}
+
+/** F15.1 gate for a single session — full check, both hard + soft.
+ *  Mirrors per-session-tick.mjs / inventory.mjs. Used by the auto
+ *  trigger; the manual Suggest path only checks the hard reasons. */
+function ineligibleReason(session: Session): string | null {
+  return hardIneligibleReason(session) ?? softIneligibleReason(session);
 }
 
 /** Kick off a proposer run for a session. Non-throwing — logs on
@@ -330,12 +342,17 @@ export function dismissMaestroSuggestion(sessionId: string): { ok: true } {
   return { ok: true as const };
 }
 
-/** User asked for a different suggestion. Fires a new proposer run;
- *  the existing suggestion stays visible until the new one lands. */
+/** User asked for a suggestion — either the ✨ Suggest button (first
+ *  time) or ↻ Regenerate (already have one). Manual clicks bypass
+ *  the SOFT gates (maestro_enabled off, session/project snoozed)
+ *  because the flag is for auto-mode opt-out; an explicit user
+ *  click is the strongest possible "yes, please run" signal. HARD
+ *  gates (must be claude-code, must have a JSONL) still apply since
+ *  the proposer physically can't run without them. */
 export async function regenerateMaestroSuggestion(sessionId: string): Promise<{ ok: boolean; reason: string | null }> {
   const session = getSessionManager().listAll().find((s) => s.id === sessionId);
   if (!session) return { ok: false, reason: 'no such session' };
-  const reason = ineligibleReason(session);
+  const reason = hardIneligibleReason(session);
   if (reason) return { ok: false, reason };
   void runProposer(sessionId);
   return { ok: true, reason: null };
