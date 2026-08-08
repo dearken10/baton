@@ -61,27 +61,28 @@ function saveCollapsed(v: boolean): void {
   catch { /* best-effort */ }
 }
 
-export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null {
-  // Effective Maestro flag for this session — three-tier resolution
-  // matching maestroSuggestion.ts's softIneligibleReason:
-  //   session.maestroEnabled ?? project.maestroEnabled ?? true
-  // When it resolves to false the dock is hidden entirely (no
-  // header, no manual Suggest button, no idle hint). Users who
-  // turned Maestro off for a project don't want a dead bar taking
-  // up terminal real estate. Snooze is intentionally NOT gated
-  // here — snoozing mutes notifications but keeps the on-demand
-  // Suggest button reachable.
-  const effectiveEnabled = useAppStore((s) => {
-    const sess = s.sessions[sessionId];
-    if (!sess) return true;
-    if (sess.maestroEnabled != null) return sess.maestroEnabled;
-    const proj = s.projects[sess.projectId];
-    return proj?.maestroEnabled ?? true;
-  });
-
+export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element {
   const suggestion = useAppStore(
     (s) => s.maestroSuggestions[sessionId] ?? null,
   );
+
+  // Read the per-session override + the project default so the
+  // header can render an "Auto" dropdown with three states:
+  //   Project default (null) — inherits project.maestroEnabled
+  //   On               (true) — force enable for this session
+  //   Off              (false) — force disable for this session
+  // Effective flag = session override ?? project default. When
+  // effective is false the auto (running → idle) trigger is silent,
+  // but the dock stays visible + Suggest still works — matches the
+  // "manual click bypasses soft gates" split in maestroSuggestion.ts.
+  const override = useAppStore(
+    (s) => s.sessions[sessionId]?.maestroEnabled ?? null,
+  );
+  const projectDefault = useAppStore((s) => {
+    const sess = s.sessions[sessionId];
+    if (!sess) return true;
+    return s.projects[sess.projectId]?.maestroEnabled ?? true;
+  });
 
   // Draft — starts from the proposer's prompt, decouples from the
   // store so the user can edit freely. Resets whenever a new
@@ -224,7 +225,16 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
 
   const canSuggest = !proposing && !busy;
 
-  if (!effectiveEnabled) return null;
+  const setAuto = useCallback(async (value: boolean | null): Promise<void> => {
+    try {
+      await window.baton.call('session.setMaestroEnabled', {
+        sessionId,
+        enabled: value,
+      });
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [sessionId]);
 
   return (
     <div
@@ -237,6 +247,9 @@ export function MaestroSuggestionCard({ sessionId }: Props): JSX.Element | null 
         suggestion={suggestion}
         collapsed={collapsed}
         canSuggest={canSuggest}
+        autoOverride={override}
+        projectDefault={projectDefault}
+        onSetAuto={(v) => void setAuto(v)}
         onSuggest={() => void suggest()}
         onToggleCollapsed={toggleCollapsed}
       />
@@ -264,6 +277,9 @@ function DockHeader({
   suggestion,
   collapsed,
   canSuggest,
+  autoOverride,
+  projectDefault,
+  onSetAuto,
   onSuggest,
   onToggleCollapsed,
 }: {
@@ -271,9 +287,13 @@ function DockHeader({
   suggestion: MaestroSuggestion | null;
   collapsed: boolean;
   canSuggest: boolean;
+  autoOverride: boolean | null;
+  projectDefault: boolean;
+  onSetAuto: (v: boolean | null) => void;
   onSuggest: () => void;
   onToggleCollapsed: () => void;
 }): JSX.Element {
+  const autoValue = autoOverride == null ? 'project' : autoOverride ? 'on' : 'off';
   return (
     <div className="mae-dock-head">
       <span className="mae-glyph" aria-hidden>🎼</span>
@@ -287,6 +307,31 @@ function DockHeader({
         </span>
       ) : null}
       <span className="mae-card-spacer" />
+      <label
+        className="mae-auto-toggle"
+        title={
+          autoValue === 'project'
+            ? `Auto — follow project (currently ${projectDefault ? 'on' : 'off'})`
+            : autoValue === 'on'
+              ? 'Auto — force ON for this session (Maestro fires when this session goes idle)'
+              : 'Auto — force OFF for this session (only manual Suggest fires the PM)'
+        }
+      >
+        <span className="mae-auto-label">Auto</span>
+        <select
+          className="mae-auto-select"
+          value={autoValue}
+          aria-label="Auto-suggest mode for this session"
+          onChange={(e) => {
+            const v = e.target.value;
+            onSetAuto(v === 'project' ? null : v === 'on');
+          }}
+        >
+          <option value="project">Project default ({projectDefault ? 'on' : 'off'})</option>
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
       <button
         type="button"
         className="mae-btn"

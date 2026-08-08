@@ -4441,6 +4441,34 @@ button.terminal-tab,
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
   min-width: 24px;
 }
+/* Auto-mode 3-way toggle in the dock header. "Auto" label + native
+ * select so keyboard + a11y are free. Native picker opens in its own
+ * OS window and doesn't collapse the dock. */
+.mae-auto-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.mae-auto-label {
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+}
+.mae-auto-select {
+  background: var(--bg-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.mae-auto-select:focus { border-color: var(--maestro); }
 
 .mae-dock-body {
   padding: 6px 12px 10px;
