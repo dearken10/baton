@@ -572,7 +572,7 @@ export class SessionManager {
       .prepare(
         `SELECT id, project_id, backend_id, branch, worktree_path, status,
                 started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
-                claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id
+                claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id, maestro_show, maestro_mode
            FROM sessions
           ORDER BY display_order ASC, started_at ASC`
       )
@@ -589,6 +589,8 @@ export class SessionManager {
         parent_session_id: string | null;
         jira_task_id: string | null;
         login_session_id: string | null;
+        maestro_show: number | null;
+        maestro_mode: string | null;
       }[];
 
     return rows.map((r) => {
@@ -615,6 +617,8 @@ export class SessionManager {
         parentSessionId: r.parent_session_id,
         jiraTaskId: r.jira_task_id,
         loginSessionId: r.login_session_id,
+        maestroShow: r.maestro_show == null ? null : r.maestro_show !== 0,
+        maestroMode: r.maestro_mode == null ? null : (r.maestro_mode as Session['maestroMode']),
       };
     });
   }
@@ -829,6 +833,8 @@ export class SessionManager {
       let savedTokensIn = 0;
       let savedTokensOut = 0;
       let savedSnoozedAt: number | null = null;
+      let savedMaestroShow: number | null = null;
+      let savedMaestroMode: string | null = null;
       // Preserve the prior last-activity time across resume/respawn.
       // Reconnecting a session on app launch is NOT user/agent activity
       // — if we re-stamped it to now (like startedAt does), the boot-time
@@ -839,9 +845,9 @@ export class SessionManager {
       if (opts.reuseSessionId) {
         try {
           const prev = getDatabase()
-            .prepare('SELECT last_summary, title, tokens_in, tokens_out, snoozed_at, last_active_at FROM sessions WHERE id = ?')
+            .prepare('SELECT last_summary, title, tokens_in, tokens_out, snoozed_at, last_active_at, maestro_show, maestro_mode FROM sessions WHERE id = ?')
             .get(opts.reuseSessionId) as
-            | { last_summary: string | null; title: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null; last_active_at: number | null }
+            | { last_summary: string | null; title: string | null; tokens_in: number; tokens_out: number; snoozed_at: number | null; last_active_at: number | null; maestro_show: number | null; maestro_mode: string | null }
             | undefined;
           if (prev) {
             savedSummary = prev.last_summary;
@@ -850,6 +856,8 @@ export class SessionManager {
             savedTokensOut = prev.tokens_out ?? 0;
             savedSnoozedAt = prev.snoozed_at;
             savedLastActiveAt = prev.last_active_at;
+            savedMaestroShow = prev.maestro_show;
+            savedMaestroMode = prev.maestro_mode;
           }
         } catch { /* best-effort */ }
       }
@@ -875,6 +883,10 @@ export class SessionManager {
         parentSessionId: opts.parentSessionId ?? null,
         jiraTaskId,
         loginSessionId,
+        maestroShow:
+          savedMaestroShow == null ? null : savedMaestroShow !== 0,
+        maestroMode:
+          savedMaestroMode == null ? null : (savedMaestroMode as Session['maestroMode']),
       };
 
       // Make the session visible to the hook handler IMMEDIATELY,
@@ -1663,6 +1675,30 @@ export class SessionManager {
     });
   }
 
+  /** Kill + wait-for-exit, suppressing the natural "errored" event
+   *  burst so the renderer doesn't briefly flash red between this kill
+   *  and the caller's follow-up respawn. Mirrors the YOLO-toggle and
+   *  Maestro-revert patterns — both want the same "stop the pty,
+   *  fiddle with disk, bring it back" sequence without exposing the
+   *  transient teardown to the rest of the app.
+   *
+   *  Returns once the live entry is gone (process exited, or we hit
+   *  the timeout and force-cleared). Always safe to call: a no-op
+   *  when the session isn't live. */
+  async killAndAwait(sessionId: string, timeoutMs = 2_000): Promise<void> {
+    if (!this.live.has(sessionId)) return;
+    this.intentionalKills.add(sessionId);
+    try { this.live.get(sessionId)?.handle.kill('SIGTERM'); }
+    catch { /* already gone */ }
+    const deadline = Date.now() + timeoutMs;
+    while (this.live.has(sessionId) && Date.now() < deadline) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 30));
+    }
+    // Even if the exit handler hasn't fired, force-clear so the
+    // caller's spawn() doesn't refuse with "Already live".
+    this.live.delete(sessionId);
+  }
+
   /**
    * Rename a worktree session's branch + move its dir to match.
    * Refuses for live sessions (files would shift while Claude is
@@ -1682,7 +1718,7 @@ export class SessionManager {
         .prepare(
           `SELECT id, project_id, backend_id, branch, worktree_path, status,
                   started_at, last_active_at, ended_at, tokens_in, tokens_out, last_summary, title,
-                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id
+                  claude_session_id, permission_mode, model, snoozed_at, parent_session_id, jira_task_id, login_session_id, maestro_show, maestro_mode
              FROM sessions WHERE id = ?`
         )
         .get(sessionId) as
@@ -1698,6 +1734,8 @@ export class SessionManager {
             parent_session_id: string | null;
             jira_task_id: string | null;
             login_session_id: string | null;
+            maestro_show: number | null;
+            maestro_mode: string | null;
           }
         | undefined;
       if (!row) throw new Error(`No such session: ${sessionId}`);
@@ -1748,6 +1786,8 @@ export class SessionManager {
         parentSessionId: row.parent_session_id,
         jiraTaskId: row.jira_task_id,
         loginSessionId: row.login_session_id,
+        maestroShow: row.maestro_show == null ? null : row.maestro_show !== 0,
+        maestroMode: row.maestro_mode == null ? null : (row.maestro_mode as Session['maestroMode']),
       };
       emit({
         type: 'session.renamed',
@@ -1851,6 +1891,39 @@ export class SessionManager {
     if (live) live.meta = { ...live.meta, snoozedAt: value };
     const session = this.listAll().find((s) => s.id === sessionId);
     if (!session) throw new Error(`Session disappeared after snooze toggle: ${sessionId}`);
+    emit({ type: 'session.refreshed', session });
+    return session;
+  }
+
+  /** Set (or clear) the per-session dock visibility override.
+   *  null → follow project, true/false → force show/hide.
+   *  Persistent; the suggestion service re-reads on every trigger. */
+  setMaestroShow(sessionId: string, show: boolean | null): Session {
+    // SQLite has no native boolean — persist as 0/1/NULL.
+    const value = show == null ? null : (show ? 1 : 0);
+    const res = getDatabase()
+      .prepare('UPDATE sessions SET maestro_show = ? WHERE id = ?')
+      .run(value, sessionId);
+    if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, maestroShow: show };
+    const session = this.listAll().find((s) => s.id === sessionId);
+    if (!session) throw new Error(`Session disappeared after Maestro toggle: ${sessionId}`);
+    emit({ type: 'session.refreshed', session });
+    return session;
+  }
+
+  /** Set (or clear) the per-session auto-fire mode override.
+   *  null → follow project, else pins the mode for this session. */
+  setMaestroMode(sessionId: string, mode: Session['maestroMode']): Session {
+    const res = getDatabase()
+      .prepare('UPDATE sessions SET maestro_mode = ? WHERE id = ?')
+      .run(mode, sessionId);
+    if (res.changes === 0) throw new Error(`No such session: ${sessionId}`);
+    const live = this.live.get(sessionId);
+    if (live) live.meta = { ...live.meta, maestroMode: mode };
+    const session = this.listAll().find((s) => s.id === sessionId);
+    if (!session) throw new Error(`Session disappeared after mode change: ${sessionId}`);
     emit({ type: 'session.refreshed', session });
     return session;
   }

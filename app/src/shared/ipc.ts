@@ -136,6 +136,14 @@ export const ConnectionProfile = z.object({
 });
 export type ConnectionProfile = z.infer<typeof ConnectionProfile>;
 
+/** How the PM proposer fires when a session goes idle.
+ *    suggest — fire and show the proposal in the dock for review (default)
+ *    execute — fire and auto-send the resulting prompt to the terminal
+ *    manual  — never fire automatically; only the Suggest button fires
+ *  Set per-project and (optionally) overridden per-session. */
+export const MaestroMode = z.enum(['suggest', 'execute', 'manual']);
+export type MaestroMode = z.infer<typeof MaestroMode>;
+
 export const Project = z.object({
   id: ProjectId,
   path: z.string(),
@@ -155,6 +163,19 @@ export const Project = z.object({
   /** Default Codex login session id for sessions in this project. Null →
    *  the built-in global login. */
   codexLoginSessionId: z.string().nullable(),
+  /** Per-project Maestro dock visibility. true (default) = the
+   *  MaestroSuggestionCard renders above the terminal for sessions
+   *  in this project; false = the dock is hidden entirely (no card,
+   *  no auto-fire). Independent of `snoozedAt` — the project stays
+   *  in the sidebar either way. */
+  maestroShow: z.boolean(),
+  /** Per-project Maestro auto-fire mode. Applied when the session
+   *  transitions running → idle/needs-input/done:
+   *    suggest — fire the PM, show the proposed prompt for review (default)
+   *    execute — fire the PM and auto-send the prompt to the terminal
+   *    manual  — never fire automatically; only the Suggest button does
+   *  Sessions can override via `session.maestroMode`. */
+  maestroMode: MaestroMode,
 });
 export type Project = z.infer<typeof Project>;
 
@@ -213,6 +234,15 @@ export const Session = z.object({
    *  the project's default for this backend (which itself falls back to
    *  the built-in global login). Persisted so it survives resume/respawn. */
   loginSessionId: z.string().nullable(),
+  /** Per-session override for the dock visibility. null → follow the
+   *  parent project's `maestroShow`; true/false → force show/hide for
+   *  this session only. */
+  maestroShow: z.boolean().nullable(),
+  /** Per-session override for the auto-fire mode. null → follow the
+   *  parent project's `maestroMode`; otherwise pins this session's
+   *  behaviour to one of suggest/execute/manual regardless of the
+   *  project default. */
+  maestroMode: MaestroMode.nullable(),
 });
 export type Session = z.infer<typeof Session>;
 
@@ -387,6 +417,23 @@ const ProjectRenameResponse = z.object({ project: Project });
 
 /** Toggle snoozed/active for a project. Snoozed projects stay in the
  *  DB with their sessions intact — only the left-column view changes. */
+/** Per-project Maestro dock visibility toggle. When show=false, the
+ *  MaestroSuggestionCard is hidden for every session in this project
+ *  and the auto-fire trigger is silent. Independent from mode — a
+ *  hidden project won't fire even if mode='execute'. */
+const ProjectSetMaestroShowRequest = z.object({
+  projectId: ProjectId,
+  show: z.boolean(),
+});
+const ProjectSetMaestroShowResponse = z.object({ project: Project });
+
+/** Per-project auto-fire mode. See MaestroMode for the semantics. */
+const ProjectSetMaestroModeRequest = z.object({
+  projectId: ProjectId,
+  mode: MaestroMode,
+});
+const ProjectSetMaestroModeResponse = z.object({ project: Project });
+
 const ProjectSetSnoozedRequest = z.object({
   projectId: ProjectId,
   snoozed: z.boolean(),
@@ -430,6 +477,100 @@ const UsageGetStatsResponse = z.object({
   /** Human-readable error when fetch failed (e.g. no token, 401);
    *  null on success. Renderer renders a fallback state when set. */
   error: z.string().nullable(),
+});
+
+/* ────────────────────────────────────────────────────────────────
+ *  Maestro (PRD F15) — inline PM suggestion dock above the terminal
+ *  input. The `goal.md` prompt drives the option5 PM proposer, which
+ *  produces the suggestion the user can accept, edit, or dismiss.
+ * ──────────────────────────────────────────────────────────────── */
+
+/** Editable prompt body for the variant-A on-idle inline suggestion
+ *  card. The only user-editable Maestro prompt after the tick-daemon
+ *  removal. See main/services/maestroPrompts.ts.
+ *
+ *  `defaults` echoes what ships in the repo so the settings UI can
+ *  render a "Reset to default" without a second round-trip.
+ *  `overridden` is true iff the user has saved a non-empty override
+ *  to <BATON_HOME>/maestro/prompts/goal.md. */
+const MaestroPromptBundle = z.object({
+  goal:      z.string(),
+  defaults:  z.object({ goal: z.string() }),
+  overridden: z.object({ goal: z.boolean() }),
+});
+const MaestroGetPromptsRequest = z.object({});
+const MaestroGetPromptsResponse = MaestroPromptBundle;
+const MaestroSetPromptsRequest = z.object({
+  goal: z.string(),
+});
+const MaestroSetPromptsResponse = MaestroPromptBundle;
+
+/** Per-session Maestro suggestion (variant A: inline card).
+ *  A proposal produced by option5's PM proposer after the target
+ *  session stopped processing (running → idle/needs-input/done).
+ *  Held in main memory only — a restart drops in-flight suggestions;
+ *  the next status transition regenerates. */
+export const MaestroSuggestion = z.object({
+  sessionId: SessionId,
+  /** Discriminator matching the proposer's action:
+   *    resume → concrete next prompt; card shows an editor + Send.
+   *    wait   → proposer sees a genuine user choice (e.g. an open
+   *             question at the end of the last turn); card shows the
+   *             rationale + Regenerate but no editor, so the user
+   *             knows Maestro ran and chose to defer to them.
+   *    defer  → proposer sees a HITL / paused / snoozed shape; same
+   *             passive treatment as wait. */
+  kind: z.enum(['resume', 'wait', 'defer']),
+  /** The user-voice prompt the proposer thinks should go next. The
+   *  renderer prefills its editor with this and lets the user edit
+   *  before Send. Empty string for `wait`/`defer` (no editor rendered). */
+  prompt: z.string(),
+  /** Human-readable "why this?" pulled from the proposer's rationale.
+   *  Rendered as small italic text on the card so the user can
+   *  sanity-check before hitting Send. */
+  rationale: z.string().nullable(),
+  /** Assumption the proposer stated it made. Null when omitted. */
+  assumption: z.string().nullable(),
+  /** What the proposer said would break if the assumption is wrong. */
+  ifWrong: z.string().nullable(),
+  /** 0..1 confidence — high (0.85+), medium (0.6), low (0.35), or
+   *  a numeric value if the proposer sent one directly. */
+  confidence: z.number(),
+  /** Wall-clock ms when the proposer finished. */
+  proposedAt: z.number().int().positive(),
+});
+export type MaestroSuggestion = z.infer<typeof MaestroSuggestion>;
+
+const MaestroGetSuggestionRequest = z.object({
+  sessionId: SessionId,
+});
+const MaestroGetSuggestionResponse = z.object({
+  suggestion: MaestroSuggestion.nullable(),
+});
+
+const MaestroAcceptSuggestionRequest = z.object({
+  sessionId: SessionId,
+  /** Whatever the user actually wants to send — may be verbatim from
+   *  the proposer or a hand-edited version. Trimmed on main. */
+  prompt: z.string(),
+});
+const MaestroAcceptSuggestionResponse = z.object({
+  ok: z.boolean(),
+  /** Human-readable reason on failure (pty gone, empty prompt, etc.). */
+  reason: z.string().nullable(),
+});
+
+const MaestroDismissSuggestionRequest = z.object({
+  sessionId: SessionId,
+});
+const MaestroDismissSuggestionResponse = z.object({ ok: z.literal(true) });
+
+const MaestroRegenerateSuggestionRequest = z.object({
+  sessionId: SessionId,
+});
+const MaestroRegenerateSuggestionResponse = z.object({
+  ok: z.boolean(),
+  reason: z.string().nullable(),
 });
 
 /** Renderer tells main which session is currently focused in the UI
@@ -718,6 +859,24 @@ const SessionSetSnoozedRequest = z.object({
   snoozed: z.boolean(),
 });
 const SessionSetSnoozedResponse = z.object({ session: Session });
+
+/** Set (or clear) the per-session dock visibility override.
+ *    show = null  → follow the parent project's `maestroShow`
+ *    show = true  → force show, even if the project is hidden
+ *    show = false → force hide, even if the project is visible */
+const SessionSetMaestroShowRequest = z.object({
+  sessionId: SessionId,
+  show: z.boolean().nullable(),
+});
+const SessionSetMaestroShowResponse = z.object({ session: Session });
+
+/** Set (or clear) the per-session auto-fire mode override.
+ *    mode = null → follow the parent project's `maestroMode` */
+const SessionSetMaestroModeRequest = z.object({
+  sessionId: SessionId,
+  mode: MaestroMode.nullable(),
+});
+const SessionSetMaestroModeResponse = z.object({ session: Session });
 
 /** Set (or clear) a session's title. An empty/whitespace-only string
  *  clears the title, reverting the row to its branch-name label. */
@@ -1193,6 +1352,8 @@ export const ControlVerbs = {
   'project.reorder':    { request: ProjectReorderRequest, response: ProjectReorderResponse },
   'project.rename':     { request: ProjectRenameRequest, response: ProjectRenameResponse },
   'project.setSnoozed': { request: ProjectSetSnoozedRequest, response: ProjectSetSnoozedResponse },
+  'project.setMaestroShow': { request: ProjectSetMaestroShowRequest, response: ProjectSetMaestroShowResponse },
+  'project.setMaestroMode': { request: ProjectSetMaestroModeRequest, response: ProjectSetMaestroModeResponse },
   'session.reorder':    { request: SessionReorderRequest, response: SessionReorderResponse },
 
   'connection.list':     { request: Empty,                     response: ConnectionListResponse },
@@ -1208,6 +1369,12 @@ export const ControlVerbs = {
   'usage.getStats':      { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.getCodexStats': { request: UsageGetStatsRequest, response: UsageGetStatsResponse },
   'usage.list':          { request: UsageListRequest,     response: UsageListResponse },
+  'maestro.getPrompts':  { request: MaestroGetPromptsRequest, response: MaestroGetPromptsResponse },
+  'maestro.setPrompts':  { request: MaestroSetPromptsRequest, response: MaestroSetPromptsResponse },
+  'maestro.getSuggestion':      { request: MaestroGetSuggestionRequest,      response: MaestroGetSuggestionResponse },
+  'maestro.acceptSuggestion':   { request: MaestroAcceptSuggestionRequest,   response: MaestroAcceptSuggestionResponse },
+  'maestro.dismissSuggestion':  { request: MaestroDismissSuggestionRequest,  response: MaestroDismissSuggestionResponse },
+  'maestro.regenerateSuggestion': { request: MaestroRegenerateSuggestionRequest, response: MaestroRegenerateSuggestionResponse },
   'session.spawn':  { request: SessionSpawnRequest, response: SessionSpawnResponse },
   'session.kill':   { request: SessionKillRequest, response: SessionKillResponse },
   'session.resume':     { request: SessionResumeRequest,     response: SessionResumeResponse },
@@ -1220,6 +1387,14 @@ export const ControlVerbs = {
   'session.delete':     { request: SessionDeleteRequest,     response: SessionDeleteResponse },
   'session.rename': { request: SessionRenameRequest, response: SessionRenameResponse },
   'session.setSnoozed': { request: SessionSetSnoozedRequest, response: SessionSetSnoozedResponse },
+  'session.setMaestroShow': {
+    request: SessionSetMaestroShowRequest,
+    response: SessionSetMaestroShowResponse,
+  },
+  'session.setMaestroMode': {
+    request: SessionSetMaestroModeRequest,
+    response: SessionSetMaestroModeResponse,
+  },
   'session.setTitle': { request: SessionSetTitleRequest, response: SessionSetTitleResponse },
   'session.setJiraTaskId': { request: SessionSetJiraTaskIdRequest, response: SessionSetJiraTaskIdResponse },
 
@@ -1296,6 +1471,11 @@ const ProjectReorderedEvent = EventEnvelope.extend({
 
 const ProjectRenamedEvent = EventEnvelope.extend({
   type: z.literal('project.renamed'),
+  project: Project,
+});
+
+const ProjectMaestroChangedEvent = EventEnvelope.extend({
+  type: z.literal('project.maestroChanged'),
   project: Project,
 });
 
@@ -1403,6 +1583,18 @@ const ConnectionRemovedEvent = EventEnvelope.extend({
   id: z.string().min(1),
 });
 
+/** Per-session Maestro suggestion changed — pushed whenever main
+ *  writes or clears the stored suggestion for a session. Renderer
+ *  keys off `sessionId` to update its per-session slice and re-render
+ *  the suggestion card in the middle column. `suggestion: null` means
+ *  the current suggestion (if any) was cleared — user dismissed, sent,
+ *  or a new proposer took over. */
+const MaestroSuggestionUpdatedEvent = EventEnvelope.extend({
+  type: z.literal('maestro.suggestion.updated'),
+  sessionId: SessionId,
+  suggestion: MaestroSuggestion.nullable(),
+});
+
 /** Progress of an in-flight browser login (see AccountsLoginStart).
  *  Phases: `browser_opened` (auth URL opened) → optionally `awaiting_code`
  *  (Claude's paste-the-code prompt) → `success` | `error`. */
@@ -1433,6 +1625,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ProjectReorderedEvent,
   ProjectRenamedEvent,
   ProjectSnoozeChangedEvent,
+  ProjectMaestroChangedEvent,
   SessionReorderedEvent,
   SessionSpawnedEvent,
   SessionStartingEvent,
@@ -1450,6 +1643,7 @@ export const AppEvent = z.discriminatedUnion('type', [
   ConnectionRemovedEvent,
   AccountLoginProgressEvent,
   LoginSessionReorderedEvent,
+  MaestroSuggestionUpdatedEvent,
 ]);
 export type AppEvent = z.infer<typeof AppEvent>;
 

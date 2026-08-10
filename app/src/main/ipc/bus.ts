@@ -27,7 +27,7 @@ import {
   type RequestOf,
   type ResponseOf,
 } from '../../shared/ipc.js';
-import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed, setProjectLoginDefaults } from '../services/projectStore.js';
+import { addProject, createProject, listProjects, getProject, removeProject, renameProject, reorderProjects, setProjectSnoozed, setProjectLoginDefaults, setProjectMaestroShow, setProjectMaestroMode } from '../services/projectStore.js';
 import { batonHome } from '../paths.js';
 import {
   listConnections,
@@ -57,6 +57,13 @@ import { listWorktrees, removeWorktree } from '../services/worktreeManager.js';
 import { getUsage } from '../services/claudeUsageApi.js';
 import { getCodexUsage } from '../services/codexUsageApi.js';
 import { buildUsageList } from '../services/usageList.js';
+import { getMaestroPrompts, setMaestroPrompts } from '../services/maestroPrompts.js';
+import {
+  getMaestroSuggestion,
+  acceptMaestroSuggestion,
+  dismissMaestroSuggestion,
+  regenerateMaestroSuggestion,
+} from '../services/maestroSuggestion.js';
 import { getDatabase } from '../database/index.js';
 import { getFs, getFsForProject, getFsForSession, reconnect as reconnectConnection, dropConnection } from '../services/fs/registry.js';
 
@@ -182,12 +189,34 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
     const project = setProjectSnoozed(req.projectId, req.snoozed);
     return { project };
   },
+  'project.setMaestroShow': (req) => {
+    const project = setProjectMaestroShow(req.projectId, req.show);
+    return { project };
+  },
+  'project.setMaestroMode': (req) => {
+    const project = setProjectMaestroMode(req.projectId, req.mode);
+    return { project };
+  },
   'session.reorder': (req) => {
     getSessionManager().reorderSessions(req.orderedIds);
     return { ok: true as const };
   },
   'session.setSnoozed': (req) => {
     const session = getSessionManager().setSnoozed(req.sessionId, req.snoozed);
+    return { session };
+  },
+  'session.setMaestroShow': (req) => {
+    const session = getSessionManager().setMaestroShow(
+      req.sessionId,
+      req.show,
+    );
+    return { session };
+  },
+  'session.setMaestroMode': (req) => {
+    const session = getSessionManager().setMaestroMode(
+      req.sessionId,
+      req.mode,
+    );
     return { session };
   },
   'session.setTitle': (req) => {
@@ -281,6 +310,12 @@ const handlers: { [V in ControlVerb]?: Handler<V> } = {
   'usage.getStats': async () => getUsage(),
   'usage.getCodexStats': () => getCodexUsage(),
   'usage.list': async () => ({ items: await buildUsageList() }),
+  'maestro.getSuggestion':      (req) => ({ suggestion: getMaestroSuggestion(req.sessionId) }),
+  'maestro.acceptSuggestion':   (req) => acceptMaestroSuggestion(req.sessionId, req.prompt),
+  'maestro.dismissSuggestion':  (req) => dismissMaestroSuggestion(req.sessionId),
+  'maestro.regenerateSuggestion': (req) => regenerateMaestroSuggestion(req.sessionId),
+  'maestro.getPrompts':     () => getMaestroPrompts(),
+  'maestro.setPrompts':     (req) => setMaestroPrompts({ goal: req.goal }),
   'session.spawn': async (req) => {
     const project = getProject(req.projectId);
     if (!project) throw new Error(`Unknown project: ${req.projectId}`);

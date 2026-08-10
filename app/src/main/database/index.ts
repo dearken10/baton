@@ -305,6 +305,107 @@ function runMigrations(d: Database.Database): void {
   );
   seedGlobal.run('global-claude-code', 'Global (machine login)', 'claude-code', now);
   seedGlobal.run('global-codex', 'Global (machine login)', 'codex', now);
+
+  // Maestro action ledger (PRD F15.6). Every Approve writes a row
+  // BEFORE the prompt is sent to the target agent — the prompt write
+  // is gated on a successful checkpoint. Revert reads the row, runs
+  // `git reset --hard <pre_tag>` + `git stash apply <stash_ref>`, then
+  // marks state='reverted'.
+  //
+  // We intentionally don't FK target_session_id with CASCADE: deleting
+  // a session shouldn't lose its action history (you might still want
+  // to know what was approved before the session row went away).
+  try {
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS maestro_actions (
+        action_id          TEXT PRIMARY KEY,
+        kind               TEXT NOT NULL,
+        target_session_id  TEXT,
+        target_project_id  TEXT,
+        worktree_path      TEXT NOT NULL,
+        pre_tag            TEXT,
+        stash_ref          TEXT,
+        prompt             TEXT NOT NULL,
+        rationale          TEXT,
+        confidence         REAL,
+        state              TEXT NOT NULL,
+        state_detail       TEXT,
+        created_at         INTEGER NOT NULL,
+        reverted_at        INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS maestro_actions_state_idx
+        ON maestro_actions(state);
+      CREATE INDEX IF NOT EXISTS maestro_actions_target_session_idx
+        ON maestro_actions(target_session_id);
+    `);
+  } catch { /* already migrated */ }
+
+  // Maestro session backup pointers — added so Revert can rewind the
+  // agent's Claude Code transcript as well as the worktree. We record
+  // the absolute path of the agent's JSONL and the byte offset at the
+  // moment we sent the prompt; truncating the file to that offset on
+  // revert + respawning `claude --resume <uuid>` rebuilds the agent
+  // with zero memory of the action we just rolled back.
+  try {
+    d.exec('ALTER TABLE maestro_actions ADD COLUMN jsonl_path TEXT');
+  } catch { /* already migrated */ }
+  try {
+    d.exec('ALTER TABLE maestro_actions ADD COLUMN jsonl_offset INTEGER');
+  } catch { /* already migrated */ }
+  // For `initiate` actions (PRD F15.6): the branch we created the
+  // worktree at. Revert removes the worktree via `git worktree
+  // remove --force` after killing the session, so we don't need a
+  // pre-tag for these.
+  try {
+    d.exec('ALTER TABLE maestro_actions ADD COLUMN target_branch TEXT');
+  } catch { /* already migrated */ }
+
+  // Per-project Maestro opt-out. 1 = Maestro may propose actions
+  // for this project's sessions; 0 = inventory drops them, and the
+  // gate is enforced before the planner even runs. Defaults ON so
+  // existing projects pre-feature behave exactly as before.
+  try {
+    d.exec(
+      `ALTER TABLE projects ADD COLUMN maestro_enabled INTEGER NOT NULL DEFAULT 1`
+    );
+  } catch { /* already migrated */ }
+
+  // Per-session Maestro override. NULL = follow the parent project's
+  // maestro_enabled (default behaviour); 1 = force-enable even if the
+  // project is off; 0 = force-disable even if the project is on. Kept
+  // nullable so the "follow project" default has a distinct third
+  // state from an explicit choice — the UI shows Follow / On / Off.
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN maestro_enabled INTEGER');
+  } catch { /* already migrated */ }
+
+  // Split the single Maestro toggle into two independent flags:
+  //   show  — dock visibility (renamed from maestro_enabled)
+  //   mode  — auto-fire mode: 'suggest' | 'execute' | 'manual'
+  // A row that previously had enabled=0 semantically meant "no
+  // auto-fire, dock still visible" — that maps to (show=1, mode='manual')
+  // in the new model, so preserve intent rather than accidentally
+  // hiding the dock on upgrade.
+  try {
+    d.exec('ALTER TABLE projects RENAME COLUMN maestro_enabled TO maestro_show');
+  } catch { /* already renamed */ }
+  try {
+    d.exec('ALTER TABLE sessions RENAME COLUMN maestro_enabled TO maestro_show');
+  } catch { /* already renamed */ }
+  try {
+    d.exec(
+      `ALTER TABLE projects ADD COLUMN maestro_mode TEXT NOT NULL DEFAULT 'suggest'`
+    );
+    d.exec(
+      `UPDATE projects SET maestro_mode = 'manual', maestro_show = 1 WHERE maestro_show = 0`
+    );
+  } catch { /* already migrated */ }
+  try {
+    d.exec('ALTER TABLE sessions ADD COLUMN maestro_mode TEXT');
+    d.exec(
+      `UPDATE sessions SET maestro_mode = 'manual', maestro_show = NULL WHERE maestro_show = 0`
+    );
+  } catch { /* already migrated */ }
 }
 
 export function getDatabase(): Database.Database {

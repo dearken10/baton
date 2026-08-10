@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'rea
 import { useAppStore, selectOpenFiles } from '../store.js';
 import { lazyWithRetry } from '../lib/lazyWithRetry.js';
 import { TerminalPane } from './TerminalPane.js';
+import { MaestroSuggestionCard } from './MaestroSuggestionCard.js';
 import { TurnsPane } from './TurnsPane.js';
 import { HSplitHandle } from './HSplitHandle.js';
 import { EditorErrorBoundary } from './EditorErrorBoundary.js';
@@ -513,6 +514,12 @@ export function MiddleColumn(): JSX.Element {
                 style={{ display: s.id === activeTerminalId ? 'flex' : 'none' }}
               >
                 <TerminalPane sessionId={s.id} />
+                {/* Variant A of the inline-suggestion mockup:
+                    a Maestro-purple card sits at the bottom of the
+                    terminal slot, above the xterm's own input cursor.
+                    Renders only when the per-session proposer produced
+                    a suggestion (see maestroSuggestion.ts). */}
+                <MaestroSuggestionCard sessionId={s.id} />
               </div>
             ))}
             {selected && view === 'turns' && !activeChild && isAgentSession ? (

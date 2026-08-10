@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { electronApp, optimizer, is } from '@electron-toolkit/utils';
 
 import { registerControlBus } from './ipc/bus.js';
+import { startMaestroSuggestion } from './services/maestroSuggestion.js';
 import { initDatabase, closeDatabase } from './database/index.js';
 import { getSessionManager } from './services/sessionManager.js';
 import { addProject } from './services/projectStore.js';
@@ -267,6 +268,16 @@ app.whenReady().then(() => {
   // Warm any saved SSH connections so the dropdown badges show
   // real status the first time the user opens AddProjectDialog.
   warmAllConnections();
+
+  // Per-session Maestro suggestion — fires the option5 PM proposer for
+  // one session immediately after it stops processing, so the
+  // MaestroSuggestionCard above the terminal input has something to
+  // show. See maestroSuggestion.ts. Best-effort; never throws.
+  try {
+    startMaestroSuggestion();
+  } catch (e) {
+    console.warn('[maestro] suggestion service failed to start:', e);
+  }
 
   createWindow();
 

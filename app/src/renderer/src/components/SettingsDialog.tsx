@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import type { OtelSettings } from '@shared/ipc.js';
+import type { OtelSettings, ResponseOf } from '@shared/ipc.js';
 import { setTheme, useTheme, type Theme } from '../lib/theme.js';
 import { LoginSessionsSection } from './LoginSessionsSection.js';
+
+type MaestroPromptBundle = ResponseOf<'maestro.getPrompts'>;
 
 interface Props {
   open: boolean;
@@ -14,6 +16,7 @@ interface Props {
 const SECTIONS = [
   { id: 'appearance', label: 'Appearance' },
   { id: 'logins', label: 'Login sessions' },
+  { id: 'maestro', label: 'Maestro' },
   { id: 'telemetry', label: 'Telemetry' },
 ] as const;
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -40,6 +43,13 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Maestro prompts — loaded on open, edited locally, committed on Save.
+  // `bundle` carries defaults + overridden flags so the panel can render
+  // "Reset to default" and a "custom" badge without a re-fetch.
+  const [promptBundle, setPromptBundle] = useState<MaestroPromptBundle | null>(null);
+  const [promptDraft, setPromptDraft] = useState<{
+    goal: string;
+  } | null>(null);
   const theme = useTheme();
   const firstFieldRef = useRef<HTMLButtonElement | null>(null);
 
@@ -49,10 +59,16 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
     if (!open) return;
     setError(null);
     setLoaded(false);
-    window.baton
-      .call('settings.getOtel', {})
-      .then((r) => {
-        setOtel(r.otel);
+    setPromptBundle(null);
+    setPromptDraft(null);
+    Promise.all([
+      window.baton.call('settings.getOtel', {}),
+      window.baton.call('maestro.getPrompts', {}),
+    ])
+      .then(([o, p]) => {
+        setOtel(o.otel);
+        setPromptBundle(p);
+        setPromptDraft({ goal: p.goal });
         setLoaded(true);
       })
       .catch((e) => setError(`Failed to load settings: ${String(e)}`));
@@ -89,6 +105,27 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
       onClose();
     } catch (e) {
       setError(`Failed to save: ${String(e)}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function savePrompts(): Promise<void> {
+    if (!promptDraft) return;
+    setSaving(true);
+    setError(null);
+    try {
+      // Trim trailing whitespace but preserve the body. An empty string
+      // is intentional — the main service treats it as "delete override,
+      // revert to default".
+      const bundle = await window.baton.call('maestro.setPrompts', {
+        goal: promptDraft.goal,
+      });
+      setPromptBundle(bundle);
+      setPromptDraft({ goal: bundle.goal });
+      onClose();
+    } catch (e) {
+      setError(`Failed to save prompts: ${String(e)}`);
     } finally {
       setSaving(false);
     }
@@ -132,6 +169,14 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
               <AppearanceSection theme={theme} onSetTheme={setTheme} />
             )}
             {active === 'logins' && <LoginSessionsSection />}
+            {active === 'maestro' && (
+              <MaestroSection
+                bundle={promptBundle}
+                draft={promptDraft}
+                setDraft={setPromptDraft}
+                disabled={!loaded}
+              />
+            )}
             {active === 'telemetry' && (
               <TelemetrySection otel={otel} setOtel={setOtel} disabled={!loaded} />
             )}
@@ -153,6 +198,16 @@ export function SettingsDialog({ open, onClose }: Props): JSX.Element | null {
               className="btn primary"
               onClick={() => void saveOtel()}
               disabled={!loaded || saving}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          )}
+          {active === 'maestro' && (
+            <button
+              type="button"
+              className="btn primary"
+              onClick={() => void savePrompts()}
+              disabled={!loaded || saving || !promptDraft}
             >
               {saving ? 'Saving…' : 'Save'}
             </button>
@@ -294,6 +349,100 @@ function TelemetrySection({
         Changes take effect on the next session spawn — running sessions keep
         the config they launched with.
       </p>
+    </>
+  );
+}
+
+/** Editable Maestro orchestrator prompts. The Goal prompt drives the
+ *  on-idle inline suggestion card (variant A); the three phase prompts
+ *  drive the periodic tick daemon. All are per-BATON_HOME overrides,
+ *  picked up on the next tick / next status transition without a restart. */
+function MaestroSection({
+  bundle,
+  draft,
+  setDraft,
+  disabled,
+}: {
+  bundle: MaestroPromptBundle | null;
+  draft: { goal: string } | null;
+  setDraft: React.Dispatch<React.SetStateAction<{ goal: string } | null>>;
+  disabled: boolean;
+}): JSX.Element {
+  if (!bundle || !draft) {
+    return (
+      <>
+        <h4 className="settings-section-title">Maestro prompts</h4>
+        <p className="dialog-hint">Loading…</p>
+      </>
+    );
+  }
+
+  const fields: Array<{
+    key: 'goal';
+    label: string;
+    hint: string;
+    default_: string;
+    overridden: boolean;
+  }> = [
+    {
+      key: 'goal',
+      label: 'Goal — on-idle inline suggestion',
+      hint: 'Fires when a claude-code session transitions running → idle/needs-input/done. The response prefills the editable card at the bottom of the terminal.',
+      default_: bundle.defaults.goal,
+      overridden: bundle.overridden.goal,
+    },
+  ];
+
+  return (
+    <>
+      <h4 className="settings-section-title">Maestro prompts</h4>
+      <p className="dialog-hint" style={{ marginBottom: 12 }}>
+        The prompt body the PM proposer sends. Overrides are saved to
+        <code className="mono"> &lt;BATON_HOME&gt;/maestro/prompts/goal.md</code>
+        {' '}and take effect on the next fire without a restart. Clear the
+        field and Save to revert to the shipped default.
+      </p>
+
+      {fields.map((f) => (
+        <div key={f.key} className="dialog-field">
+          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {f.label}
+            {f.overridden ? (
+              <span className="dim" style={{ fontSize: 11 }}>customized</span>
+            ) : null}
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={() =>
+                setDraft((d) => (d ? { ...d, [f.key]: f.default_ } : d))
+              }
+              disabled={disabled || draft[f.key] === f.default_}
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              title="Load the shipped default into the editor (does not save until you hit Save)"
+            >
+              Reset to default
+            </button>
+          </span>
+          <textarea
+            value={draft[f.key]}
+            onChange={(e) =>
+              setDraft((d) => (d ? { ...d, [f.key]: e.target.value } : d))
+            }
+            disabled={disabled}
+            spellCheck={false}
+            rows={10}
+            style={{
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontSize: 12,
+              lineHeight: 1.45,
+              resize: 'vertical',
+              minHeight: 160,
+            }}
+          />
+          <span className="dialog-hint">{f.hint}</span>
+        </div>
+      ))}
     </>
   );
 }

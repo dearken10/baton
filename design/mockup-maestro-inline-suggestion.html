@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>baton · Maestro inline suggestion mockups</title>
+<style>
+  :root {
+    --bg:#0a0b0d; --bg-1:#111316; --bg-2:#181a1f; --bg-3:#20232a;
+    --border:#2a2d35; --border-2:#3a3f4a;
+    --text:#e6e8eb; --text-dim:#8b9099; --text-faint:#7a8088;
+    --accent:#5b8def; --accent-2:#1f3866;
+    --user:#2b3a5c;
+    --success:#2fbf71; --danger:#ef5454; --warn:#f0a945;
+    --maestro:#a78bfa; --maestro-2:#1c1730; --maestro-fg:#0e0a1f;
+    --ghost:#5a5a6d;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin:0; padding:0; min-height:100vh; background:#050608; color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+    font-size:13px; line-height:1.45;
+    -webkit-font-smoothing:antialiased;
+  }
+  .mono { font-family:ui-monospace,'SF Mono',Menlo,monospace; }
+  .dim  { color:var(--text-dim); }
+  .faint{ color:var(--text-faint); }
+
+  /* ─── Page chrome ─── */
+  .page-head {
+    padding: 18px 24px 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    position: sticky; top: 0; z-index: 50;
+  }
+  .page-head h1 { margin: 0 0 4px 0; font-size: 17px; font-weight: 600; }
+  .page-head p  { margin: 0 0 14px 0; color: var(--text-dim); font-size: 12px; }
+  .picker { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .picker button {
+    background: var(--bg-2); color: var(--text-dim);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    text-align: left;
+    transition: all 0.15s ease;
+  }
+  .picker button:hover { background: var(--bg-3); color: var(--text); }
+  .picker button.active {
+    background: var(--maestro-2);
+    color: var(--maestro);
+    border-color: var(--maestro);
+  }
+  .picker button strong { display: block; font-size: 12.5px; margin-bottom: 3px; color: inherit; }
+  .picker button .pick-sub { font-size: 10.5px; color: var(--text-faint); }
+  .picker button.active .pick-sub { color: var(--maestro); opacity: 0.75; }
+
+  .preview-wrap { padding: 24px; display: flex; flex-direction: column; align-items: center; gap: 20px; }
+  .preview {
+    width: 1180px; max-width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border-2);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,0.5);
+  }
+  .notes {
+    width: 1180px; max-width: 100%;
+    background: var(--bg-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 22px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+  }
+  .notes h3 {
+    margin: 0 0 10px 0; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--text-dim);
+  }
+  .notes ul { margin: 0; padding-left: 18px; color: var(--text); }
+  .notes li { margin-bottom: 6px; line-height: 1.5; }
+  .notes .pro::marker  { color: var(--success); }
+  .notes .con::marker  { color: var(--warn); }
+
+  .variant { display: none; }
+  .variant.active { display: block; }
+
+  /* ─── Window chrome ─── */
+  .titlebar {
+    display:flex; align-items:center; gap:12px; padding:0 12px; height: 36px;
+    background:var(--bg-1); border-bottom:1px solid var(--border);
+    font-size: 12px;
+  }
+  .titlebar .brand { color: var(--text); font-weight: 600; }
+  .titlebar .spacer { flex: 1; }
+  .titlebar .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 8px; border-radius: 5px; font-size: 11px;
+    background: var(--bg-2); color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+  .titlebar .maestro-chip {
+    background: var(--maestro-2); color: var(--maestro);
+    border-color: rgba(167, 139, 250, 0.35);
+  }
+
+  /* ─── App layout ─── */
+  .app {
+    display: grid;
+    grid-template-columns: 240px 1fr;
+    height: 720px;
+  }
+  .col-left {
+    background: var(--bg-1); border-right: 1px solid var(--border);
+    padding: 10px 8px; overflow-y: auto;
+  }
+  .col-mid {
+    display: flex; flex-direction: column; min-height: 0;
+    background: var(--bg);
+  }
+
+  .sess-group { margin-bottom: 12px; }
+  .sess-proj {
+    padding: 6px 10px; font-size: 11px; color: var(--text-faint);
+    text-transform: uppercase; letter-spacing: 0.06em;
+    display: flex; align-items: center; gap: 6px;
+  }
+  .sess-row {
+    padding: 8px 10px; border-radius: 6px; cursor: pointer;
+    display: flex; flex-direction: column; gap: 3px;
+    font-size: 12.5px;
+  }
+  .sess-row:hover { background: var(--bg-2); }
+  .sess-row.active { background: var(--bg-3); }
+  .sess-row .row-1 { display: flex; align-items: center; gap: 6px; }
+  .sess-row .row-title { color: var(--text); font-weight: 500; flex: 1; }
+  .sess-row .row-branch { font-size: 11px; color: var(--text-dim); }
+  .sess-row .status-chip {
+    padding: 1px 6px; border-radius: 4px; font-size: 10px;
+    background: rgba(240, 169, 69, 0.15); color: var(--warn);
+    border: 1px solid rgba(240, 169, 69, 0.3);
+  }
+  .sess-row .status-idle {
+    background: rgba(139, 144, 153, 0.15); color: var(--text-dim);
+    border-color: rgba(139, 144, 153, 0.25);
+  }
+  .sess-row .status-maestro {
+    background: var(--maestro-2); color: var(--maestro);
+    border-color: rgba(167, 139, 250, 0.4);
+  }
+
+  /* ─── Middle column: terminal ─── */
+  .term-head {
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px;
+  }
+  .term-head .tab {
+    padding: 4px 10px; border-radius: 5px;
+    background: var(--bg-2); border: 1px solid var(--border);
+    color: var(--text-dim); font-size: 11px;
+  }
+  .term-head .tab.active { background: var(--bg-3); color: var(--text); border-color: var(--border-2); }
+  .term-head .spacer { flex: 1; }
+  .term-head .chip {
+    padding: 3px 8px; border-radius: 5px; font-size: 11px;
+    background: var(--bg-2); color: var(--text-dim);
+    border: 1px solid var(--border);
+  }
+
+  .term-body {
+    flex: 1; overflow-y: auto;
+    padding: 14px 18px;
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 12.5px; line-height: 1.55;
+    color: var(--text);
+    background:
+      radial-gradient(1200px 400px at 60% -10%, rgba(91,141,239,0.05), transparent 60%),
+      var(--bg);
+    min-height: 0;
+  }
+  .term-body .prompt { color: var(--maestro); }
+  .term-body .user-line { color: var(--text); }
+  .term-body .agent-out { color: var(--text); white-space: pre-wrap; }
+  .term-body .agent-out .k { color: var(--accent); }
+  .term-body .agent-out .n { color: var(--warn); }
+  .term-body .agent-out .s { color: var(--success); }
+  .term-body .agent-out .d { color: var(--text-dim); }
+  .term-body .idle-line { color: var(--text-dim); margin-top: 6px; }
+  .term-body .cursor {
+    display: inline-block; width: 8px; height: 14px;
+    background: var(--text); vertical-align: middle;
+    animation: blink 1s infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ─── Shared: Maestro suggestion primitives ─── */
+  .mae-glyph { color: var(--maestro); }
+  .mae-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 1px 6px; border-radius: 4px;
+    font-size: 10.5px; font-weight: 600;
+    background: var(--maestro-2); color: var(--maestro);
+    border: 1px solid rgba(167, 139, 250, 0.4);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .mae-conf {
+    font-size: 10.5px; color: var(--text-faint);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  }
+  .mae-btn {
+    padding: 5px 12px; border-radius: 5px;
+    font-size: 11.5px; font-family: inherit; font-weight: 500;
+    background: var(--bg-3); color: var(--text);
+    border: 1px solid var(--border-2); cursor: pointer;
+  }
+  .mae-btn:hover { background: var(--bg-2); border-color: var(--border-2); }
+  .mae-btn.primary {
+    background: var(--maestro); color: var(--maestro-fg);
+    border-color: var(--maestro);
+  }
+  .mae-btn.primary:hover { background: #b599ff; }
+  .mae-btn.ghost { background: transparent; color: var(--text-dim); border-color: transparent; }
+  .mae-btn.ghost:hover { color: var(--text); background: var(--bg-2); }
+
+  /* ═════════════════════════════════════════════════════════════════
+   * VARIANT A — inline card above the terminal input
+   * ═════════════════════════════════════════════════════════════════ */
+  #variantA .mae-card {
+    margin: 0 14px 8px;
+    background: linear-gradient(180deg, var(--maestro-2), #17131f);
+    border: 1px solid rgba(167, 139, 250, 0.45);
+    border-radius: 8px;
+    padding: 12px 14px 10px;
+  }
+  #variantA .mae-card-head {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 8px;
+    font-size: 12px;
+  }
+  #variantA .mae-card-head .mae-title {
+    color: var(--maestro); font-weight: 600; font-size: 12.5px;
+  }
+  #variantA .mae-card-head .spacer { flex: 1; }
+  #variantA .mae-editor {
+    width: 100%;
+    min-height: 60px;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(167, 139, 250, 0.28);
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+    font-size: 12.5px; line-height: 1.5;
+    resize: vertical; outline: none;
+  }
+  #variantA .mae-editor:focus { border-color: var(--maestro); }
+  #variantA .mae-card-actions {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: 10px;
+  }
+  #variantA .mae-card-actions .spacer { flex: 1; }
+  #variantA .mae-rationale {
+    font-size: 11px; color: var(--text-dim); font-style: italic;
+  }
+  #variantA .term-input {
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center;
+    background: var(--bg);
+  }
+  #variantA .term-input input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font-family: ui-monospace, monospace;
+    font-size: 13px;
+  }
+  #variantA .term-input .send-hint { color: var(--text-faint); font-size: 11px; }
+
+  /* ═════════════════════════════════════════════════════════════════
+   * VARIANT B — ghost text prefills the terminal input line
+   * ═════════════════════════════════════════════════════════════════ */
+  #variantB .term-input {
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center;
+    background: linear-gradient(180deg, transparent, rgba(167,139,250,0.06));
+    border-left: 3px solid var(--maestro);
+    position: relative;
+    font-family: ui-monospace, monospace; font-size: 13px;
+  }
+  #variantB .term-input .ghost {
+    flex: 1; color: var(--ghost);
+    white-space: pre-wrap; word-break: break-word;
+  }
+  #variantB .term-input .ghost strong { color: var(--maestro); font-weight: 500; }
+  #variantB .mae-mini-toolbar {
+    display: flex; gap: 6px; align-items: center;
+    padding: 6px 16px; border-top: 1px solid var(--border);
+    background: var(--bg-1);
+    font-size: 11px; color: var(--text-dim);
+  }
+  #variantB .mae-mini-toolbar .kbd {
+    display: inline-block; padding: 1px 5px; border-radius: 3px;
+    background: var(--bg-3); border: 1px solid var(--border-2);
+    font-family: ui-monospace, monospace; font-size: 10.5px;
+    color: var(--text); margin: 0 3px;
+  }
+  #variantB .mae-mini-toolbar .spacer { flex: 1; }
+  #variantB .mae-mini-toolbar .mae-rationale {
+    color: var(--text-faint); font-style: italic;
+  }
+
+  /* ═════════════════════════════════════════════════════════════════
+   * VARIANT C — floating chip, expandable
+   * ═════════════════════════════════════════════════════════════════ */
+  #variantC .term-body { position: relative; }
+  #variantC .mae-float-collapsed {
+    position: absolute; right: 20px; bottom: 20px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 14px 8px 10px;
+    background: linear-gradient(180deg, var(--maestro-2), #17131f);
+    border: 1px solid rgba(167, 139, 250, 0.5);
+    border-radius: 20px;
+    cursor: pointer;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+    font-size: 12px;
+    animation: floatPulse 2.5s ease-in-out infinite;
+  }
+  @keyframes floatPulse {
+    0%,100% { box-shadow: 0 8px 30px rgba(0,0,0,0.5); }
+    50%     { box-shadow: 0 8px 30px rgba(167,139,250,0.35); }
+  }
+  #variantC .mae-float-collapsed .mae-glyph { font-size: 14px; }
+  #variantC .mae-float-collapsed .mae-preview {
+    max-width: 340px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+    color: var(--text);
+  }
+  #variantC .mae-float-collapsed .dismiss {
+    color: var(--text-dim); padding: 0 4px; cursor: pointer;
+    border-radius: 3px;
+  }
+  #variantC .mae-float-collapsed .dismiss:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+
+  #variantC .mae-float-expanded {
+    position: absolute; right: 20px; bottom: 20px;
+    width: 480px;
+    background: linear-gradient(180deg, var(--maestro-2), #14101c);
+    border: 1px solid rgba(167, 139, 250, 0.55);
+    border-radius: 10px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    padding: 14px;
+    display: none;
+  }
+  #variantC.show-expanded .mae-float-collapsed { display: none; }
+  #variantC.show-expanded .mae-float-expanded  { display: block; }
+  #variantC .mae-float-expanded .mae-card-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+  }
+  #variantC .mae-float-expanded .mae-title { color: var(--maestro); font-weight: 600; font-size: 12.5px; }
+  #variantC .mae-float-expanded .spacer { flex: 1; }
+  #variantC .mae-editor {
+    width: 100%; min-height: 60px;
+    background: rgba(0,0,0,0.35);
+    border: 1px solid rgba(167, 139, 250, 0.28);
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.5;
+    resize: vertical; outline: none;
+  }
+  #variantC .mae-editor:focus { border-color: var(--maestro); }
+  #variantC .mae-rationale {
+    margin: 8px 0 10px; font-size: 11px; color: var(--text-dim); font-style: italic;
+  }
+  #variantC .mae-card-actions {
+    display: flex; align-items: center; gap: 8px;
+  }
+  #variantC .mae-card-actions .spacer { flex: 1; }
+
+  #variantC .term-input {
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center; background: var(--bg);
+  }
+  #variantC .term-input input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font-family: ui-monospace, monospace; font-size: 13px;
+  }
+  #variantC .term-input .send-hint { color: var(--text-faint); font-size: 11px; }
+
+  #variantC .toggle-note {
+    text-align: center; padding: 6px 0;
+    font-size: 11px; color: var(--text-faint);
+    background: var(--bg-1); border-top: 1px solid var(--border);
+    cursor: pointer;
+  }
+  #variantC .toggle-note:hover { color: var(--maestro); }
+
+  /* ═════════════════════════════════════════════════════════════════
+   * VARIANT D — inline transcript block (system message)
+   * ═════════════════════════════════════════════════════════════════ */
+  #variantD .term-body .mae-block {
+    margin: 10px 0 4px;
+    background: linear-gradient(180deg, rgba(167,139,250,0.07), transparent);
+    border-left: 3px solid var(--maestro);
+    border-radius: 0 6px 6px 0;
+    padding: 10px 14px 12px;
+    font-family: -apple-system, system-ui, sans-serif;
+    font-size: 12.5px;
+  }
+  #variantD .mae-block-head {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+  }
+  #variantD .mae-block-head .mae-title {
+    color: var(--maestro); font-weight: 600; font-size: 12px;
+  }
+  #variantD .mae-block-head .spacer { flex: 1; }
+  #variantD .mae-editor {
+    width: 100%; min-height: 56px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    color: var(--text);
+    font-family: ui-monospace, monospace; font-size: 12.5px; line-height: 1.5;
+    resize: vertical; outline: none;
+  }
+  #variantD .mae-editor:focus { border-color: var(--maestro); }
+  #variantD .mae-rationale {
+    margin: 8px 0 10px 0; font-size: 11px; color: var(--text-dim); font-style: italic;
+  }
+  #variantD .mae-block-actions {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  #variantD .mae-block-actions .spacer { flex: 1; }
+  #variantD .term-input {
+    padding: 12px 16px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; align-items: center; background: var(--bg);
+  }
+  #variantD .term-input input {
+    flex: 1; background: transparent; border: none; outline: none;
+    color: var(--text); font-family: ui-monospace, monospace; font-size: 13px;
+  }
+  #variantD .term-input .send-hint { color: var(--text-faint); font-size: 11px; }
+  #variantD .load-into-input {
+    font-size: 11px; color: var(--maestro); background: transparent; border: none;
+    cursor: pointer; text-decoration: underline;
+  }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>Maestro · inline suggestion after session stops</h1>
+  <p>
+    New approach: fire Maestro <strong>on session-becomes-idle</strong> (not on a periodic tick),
+    for <em>that one session</em>, and surface the suggested next prompt inside the terminal view
+    where the human can review, edit, and send. Four presentation variants — pick before we build.
+  </p>
+  <div class="picker" id="picker">
+    <button data-v="A" class="active">
+      <strong>A · Inline card above input</strong>
+      <span class="pick-sub">Dedicated card sits above the terminal input bar with an inline editor + Send / Regenerate / Dismiss.</span>
+    </button>
+    <button data-v="B">
+      <strong>B · Ghost text in input</strong>
+      <span class="pick-sub">Suggestion prefills the input line as dimmed text. Tab accepts + edits, Enter sends as-is, Esc dismisses.</span>
+    </button>
+    <button data-v="C">
+      <strong>C · Floating chip</strong>
+      <span class="pick-sub">Small chip in the corner. One click expands to an editor overlay. Zero baseline UI cost.</span>
+    </button>
+    <button data-v="D">
+      <strong>D · Inline transcript block</strong>
+      <span class="pick-sub">Suggestion appears as a Maestro block inside the transcript flow, right after the last agent turn.</span>
+    </button>
+  </div>
+</div>
+
+<div class="preview-wrap">
+
+  <!-- ═══════════════════════ VARIANT A ═══════════════════════ -->
+  <div class="preview variant active" id="variantA">
+    <div class="titlebar">
+      <span class="brand">baton</span>
+      <span class="dim">v0.0.1</span>
+      <span class="spacer"></span>
+      <span class="chip maestro-chip">🎼 on-idle · openball · b56d6403</span>
+      <span class="chip">5h 6%</span>
+    </div>
+    <div class="app">
+      <div class="col-left">
+        <div class="sess-group">
+          <div class="sess-proj">🎼 openball</div>
+          <div class="sess-row active">
+            <div class="row-1">
+              <span class="row-title">Refactor n8n loader</span>
+              <span class="status-chip status-maestro">◍ maestro</span>
+            </div>
+            <span class="row-branch">feat/imbee-8433</span>
+          </div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Widget embed tokens</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">web-widget</span>
+          </div>
+        </div>
+        <div class="sess-group">
+          <div class="sess-proj">🎼 baton</div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Agent inbox</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">feat/agent-inbox</span>
+          </div>
+        </div>
+      </div>
+      <div class="col-mid">
+        <div class="term-head">
+          <span class="tab active">Live</span>
+          <span class="tab">Turns</span>
+          <span class="tab">Files</span>
+          <span class="spacer"></span>
+          <span class="chip"><span class="mae-glyph">🎼</span> idle 42s — Maestro proposed</span>
+        </div>
+        <div class="term-body">
+<span class="prompt">❯</span> <span class="user-line">refactor the n8n node loader — swap the 90-line manual loader for MultiPackageNodeLoader</span>
+
+<span class="agent-out">I'll read the current loader, then draft the replacement.
+<span class="k">•</span> Read <span class="d">n8n-service/src/loader.ts</span> (114 lines)
+<span class="k">•</span> Grep <span class="d">MultiPackageNodeLoader</span> usage in <span class="d">n8n-core</span>
+<span class="k">•</span> Draft replacement (~30 lines)
+<span class="k">•</span> Update package.json — drop <span class="s">n8n</span> and <span class="s">faker</span>, add <span class="s">n8n-core</span></span>
+
+<span class="agent-out"><span class="s">✓</span> Refactor complete. 3 files changed, +34 -87.
+<span class="s">✓</span> Typecheck clean.
+<span class="d">Uncommitted. Ready for your review.</span></span>
+
+<span class="idle-line">— session idle · agent stopped —</span>
+        </div>
+
+        <div class="mae-card">
+          <div class="mae-card-head">
+            <span class="mae-glyph">🎼</span>
+            <span class="mae-title">Maestro suggests</span>
+            <span class="mae-conf">confidence 0.82</span>
+            <span class="spacer"></span>
+            <button class="mae-btn ghost" title="Ask Maestro for a different suggestion">↻ Regenerate</button>
+            <button class="mae-btn ghost" title="Dismiss and clear the field">✕ Dismiss</button>
+          </div>
+          <textarea class="mae-editor mono">commit the n8n loader refactor on feat/imbee-8433 (no push) — message should reference the -90 +30 line count and the n8n → n8n-core swap</textarea>
+          <div class="mae-card-actions">
+            <span class="mae-rationale">Agent stopped at a clean checkpoint (Uncommitted, typecheck clean). Next natural step is committing before advancing.</span>
+            <span class="spacer"></span>
+            <button class="mae-btn">Edit &amp; keep</button>
+            <button class="mae-btn primary">Send ↵</button>
+          </div>
+        </div>
+
+        <div class="term-input">
+          <span class="prompt mono">❯</span>
+          <input placeholder="Type here to bypass the suggestion — or click Send above." />
+          <span class="send-hint">Enter = send · Shift+Enter = newline</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ VARIANT B ═══════════════════════ -->
+  <div class="preview variant" id="variantB">
+    <div class="titlebar">
+      <span class="brand">baton</span>
+      <span class="dim">v0.0.1</span>
+      <span class="spacer"></span>
+      <span class="chip maestro-chip">🎼 on-idle · openball · b56d6403</span>
+      <span class="chip">5h 6%</span>
+    </div>
+    <div class="app">
+      <div class="col-left">
+        <div class="sess-group">
+          <div class="sess-proj">🎼 openball</div>
+          <div class="sess-row active">
+            <div class="row-1"><span class="row-title">Refactor n8n loader</span><span class="status-chip status-maestro">◍ maestro</span></div>
+            <span class="row-branch">feat/imbee-8433</span>
+          </div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Widget embed tokens</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">web-widget</span>
+          </div>
+        </div>
+        <div class="sess-group">
+          <div class="sess-proj">🎼 baton</div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Agent inbox</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">feat/agent-inbox</span>
+          </div>
+        </div>
+      </div>
+      <div class="col-mid">
+        <div class="term-head">
+          <span class="tab active">Live</span>
+          <span class="tab">Turns</span>
+          <span class="tab">Files</span>
+          <span class="spacer"></span>
+          <span class="chip"><span class="mae-glyph">🎼</span> idle 42s — suggestion in input</span>
+        </div>
+        <div class="term-body">
+<span class="prompt">❯</span> <span class="user-line">refactor the n8n node loader — swap the 90-line manual loader for MultiPackageNodeLoader</span>
+
+<span class="agent-out">I'll read the current loader, then draft the replacement.
+<span class="k">•</span> Read <span class="d">n8n-service/src/loader.ts</span> (114 lines)
+<span class="k">•</span> Grep <span class="d">MultiPackageNodeLoader</span> usage in <span class="d">n8n-core</span>
+<span class="k">•</span> Draft replacement (~30 lines)</span>
+
+<span class="agent-out"><span class="s">✓</span> Refactor complete. 3 files changed, +34 -87.
+<span class="s">✓</span> Typecheck clean.
+<span class="d">Uncommitted. Ready for your review.</span></span>
+
+<span class="idle-line">— session idle · agent stopped —</span>
+        </div>
+        <div class="term-input">
+          <span class="prompt mono">❯</span>
+          <div class="ghost"><strong>🎼</strong> commit the n8n loader refactor on feat/imbee-8433 (no push) — message should reference the -90 +30 line count and the n8n → n8n-core swap<span class="cursor" style="background: var(--ghost);"></span></div>
+        </div>
+        <div class="mae-mini-toolbar">
+          <span class="kbd">Tab</span> edit
+          <span class="kbd">↵</span> send as-is
+          <span class="kbd">Esc</span> dismiss
+          <span class="kbd">⌘R</span> regenerate
+          <span class="spacer"></span>
+          <span class="mae-rationale">Maestro · confidence 0.82 · rationale: clean checkpoint before advancing</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ VARIANT C ═══════════════════════ -->
+  <div class="preview variant" id="variantC">
+    <div class="titlebar">
+      <span class="brand">baton</span>
+      <span class="dim">v0.0.1</span>
+      <span class="spacer"></span>
+      <span class="chip maestro-chip">🎼 on-idle · openball · b56d6403</span>
+      <span class="chip">5h 6%</span>
+    </div>
+    <div class="app">
+      <div class="col-left">
+        <div class="sess-group">
+          <div class="sess-proj">🎼 openball</div>
+          <div class="sess-row active">
+            <div class="row-1"><span class="row-title">Refactor n8n loader</span><span class="status-chip status-maestro">◍ maestro</span></div>
+            <span class="row-branch">feat/imbee-8433</span>
+          </div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Widget embed tokens</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">web-widget</span>
+          </div>
+        </div>
+        <div class="sess-group">
+          <div class="sess-proj">🎼 baton</div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Agent inbox</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">feat/agent-inbox</span>
+          </div>
+        </div>
+      </div>
+      <div class="col-mid">
+        <div class="term-head">
+          <span class="tab active">Live</span>
+          <span class="tab">Turns</span>
+          <span class="tab">Files</span>
+          <span class="spacer"></span>
+          <span class="chip"><span class="mae-glyph">🎼</span> idle 42s — floating suggestion</span>
+        </div>
+        <div class="term-body">
+<span class="prompt">❯</span> <span class="user-line">refactor the n8n node loader — swap the 90-line manual loader for MultiPackageNodeLoader</span>
+
+<span class="agent-out">I'll read the current loader, then draft the replacement.
+<span class="k">•</span> Read <span class="d">n8n-service/src/loader.ts</span> (114 lines)
+<span class="k">•</span> Grep <span class="d">MultiPackageNodeLoader</span> usage in <span class="d">n8n-core</span>
+<span class="k">•</span> Draft replacement (~30 lines)
+<span class="k">•</span> Update package.json — drop <span class="s">n8n</span> and <span class="s">faker</span>, add <span class="s">n8n-core</span></span>
+
+<span class="agent-out"><span class="s">✓</span> Refactor complete. 3 files changed, +34 -87.
+<span class="s">✓</span> Typecheck clean.
+<span class="d">Uncommitted. Ready for your review.</span></span>
+
+<span class="idle-line">— session idle · agent stopped —</span>
+
+          <div class="mae-float-collapsed" title="Click to expand · Alt+M focuses">
+            <span class="mae-glyph">🎼</span>
+            <span class="mae-preview">commit the n8n loader refactor on feat/imbee-8433…</span>
+            <span class="mae-conf">0.82</span>
+            <span class="dismiss" title="Dismiss">✕</span>
+          </div>
+
+          <div class="mae-float-expanded">
+            <div class="mae-card-head">
+              <span class="mae-glyph">🎼</span>
+              <span class="mae-title">Maestro suggests</span>
+              <span class="mae-conf">confidence 0.82</span>
+              <span class="spacer"></span>
+              <button class="mae-btn ghost" title="Collapse">▼</button>
+            </div>
+            <textarea class="mae-editor mono">commit the n8n loader refactor on feat/imbee-8433 (no push) — message should reference the -90 +30 line count and the n8n → n8n-core swap</textarea>
+            <p class="mae-rationale">Agent stopped at a clean checkpoint (Uncommitted, typecheck clean). Next natural step is committing before advancing.</p>
+            <div class="mae-card-actions">
+              <button class="mae-btn ghost">↻ Regenerate</button>
+              <button class="mae-btn ghost">Dismiss</button>
+              <span class="spacer"></span>
+              <button class="mae-btn primary">Send ↵</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="term-input">
+          <span class="prompt mono">❯</span>
+          <input placeholder="Type here — the chip won't intercept your keystrokes." />
+          <span class="send-hint">Enter = send · Shift+Enter = newline</span>
+        </div>
+        <div class="toggle-note" onclick="document.getElementById('variantC').classList.toggle('show-expanded')">
+          (mockup toggle · click to show the expanded state)
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ VARIANT D ═══════════════════════ -->
+  <div class="preview variant" id="variantD">
+    <div class="titlebar">
+      <span class="brand">baton</span>
+      <span class="dim">v0.0.1</span>
+      <span class="spacer"></span>
+      <span class="chip maestro-chip">🎼 on-idle · openball · b56d6403</span>
+      <span class="chip">5h 6%</span>
+    </div>
+    <div class="app">
+      <div class="col-left">
+        <div class="sess-group">
+          <div class="sess-proj">🎼 openball</div>
+          <div class="sess-row active">
+            <div class="row-1"><span class="row-title">Refactor n8n loader</span><span class="status-chip status-maestro">◍ maestro</span></div>
+            <span class="row-branch">feat/imbee-8433</span>
+          </div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Widget embed tokens</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">web-widget</span>
+          </div>
+        </div>
+        <div class="sess-group">
+          <div class="sess-proj">🎼 baton</div>
+          <div class="sess-row">
+            <div class="row-1"><span class="row-title">Agent inbox</span><span class="status-chip status-idle">idle</span></div>
+            <span class="row-branch">feat/agent-inbox</span>
+          </div>
+        </div>
+      </div>
+      <div class="col-mid">
+        <div class="term-head">
+          <span class="tab active">Live</span>
+          <span class="tab">Turns</span>
+          <span class="tab">Files</span>
+          <span class="spacer"></span>
+          <span class="chip"><span class="mae-glyph">🎼</span> idle 42s — proposal in transcript</span>
+        </div>
+        <div class="term-body">
+<span class="prompt">❯</span> <span class="user-line">refactor the n8n node loader — swap the 90-line manual loader for MultiPackageNodeLoader</span>
+
+<span class="agent-out">I'll read the current loader, then draft the replacement.
+<span class="k">•</span> Read <span class="d">n8n-service/src/loader.ts</span> (114 lines)
+<span class="k">•</span> Grep <span class="d">MultiPackageNodeLoader</span> usage in <span class="d">n8n-core</span>
+<span class="k">•</span> Draft replacement (~30 lines)
+<span class="k">•</span> Update package.json — drop <span class="s">n8n</span> and <span class="s">faker</span>, add <span class="s">n8n-core</span></span>
+
+<span class="agent-out"><span class="s">✓</span> Refactor complete. 3 files changed, +34 -87.
+<span class="s">✓</span> Typecheck clean.
+<span class="d">Uncommitted. Ready for your review.</span></span>
+
+<span class="idle-line">— session idle · agent stopped —</span>
+
+          <div class="mae-block">
+            <div class="mae-block-head">
+              <span class="mae-glyph">🎼</span>
+              <span class="mae-title">Maestro · suggested next</span>
+              <span class="mae-conf">confidence 0.82</span>
+              <span class="spacer"></span>
+              <button class="load-into-input">↓ Load into input</button>
+            </div>
+            <textarea class="mae-editor mono">commit the n8n loader refactor on feat/imbee-8433 (no push) — message should reference the -90 +30 line count and the n8n → n8n-core swap</textarea>
+            <p class="mae-rationale">Agent stopped at a clean checkpoint (Uncommitted, typecheck clean). Next natural step is committing before advancing.</p>
+            <div class="mae-block-actions">
+              <button class="mae-btn ghost">↻ Regenerate</button>
+              <button class="mae-btn ghost">Dismiss</button>
+              <span class="spacer"></span>
+              <button class="mae-btn">Edit &amp; keep in input</button>
+              <button class="mae-btn primary">Send ↵</button>
+            </div>
+          </div>
+        </div>
+        <div class="term-input">
+          <span class="prompt mono">❯</span>
+          <input placeholder="Type here to write your own — or use the block above." />
+          <span class="send-hint">Enter = send · Shift+Enter = newline</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════ NOTES (updates per variant) ═══════════════════════ -->
+  <div class="notes" id="notesA">
+    <div>
+      <h3>Pros</h3>
+      <ul>
+        <li class="pro">Highest visibility — the suggestion sits exactly where the user's eye already is (above the input).</li>
+        <li class="pro">Editor is the primary surface, not an afterthought — encourages review before Send.</li>
+        <li class="pro">Rationale is inline, not tucked behind hover, so the "why this?" is answered without asking.</li>
+        <li class="pro">Handles multi-line prompts and long rationale gracefully.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Cons</h3>
+      <ul>
+        <li class="con">Steals ~120 px of vertical space whenever a session is idle — dense on small windows.</li>
+        <li class="con">Two edit surfaces (card + terminal input) may confuse "which one am I typing in?".</li>
+        <li class="con">If the user just wants to type freely, the card has to be dismissed first.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="notes" id="notesB" style="display:none;">
+    <div>
+      <h3>Pros</h3>
+      <ul>
+        <li class="pro">Zero extra chrome — no card, no strip, no toast. The input line does the work it always did, just prefilled.</li>
+        <li class="pro">Muscle-memory keys: Tab / Enter / Esc match how editor completions already feel.</li>
+        <li class="pro">Sends immediately when the user hits Enter — one keystroke fast path.</li>
+        <li class="pro">Rationale + confidence live in a slim toolbar below; low visual weight until you look.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Cons</h3>
+      <ul>
+        <li class="con">Ghost text is harder to review than an inline card — the eye may skim over it and hit Enter without reading.</li>
+        <li class="con">Multi-line proposals wrap awkwardly in a single-line input; may need a "pop out to editor" affordance.</li>
+        <li class="con">If the user starts typing without hitting Tab first, we have to decide: replace ghost with typed chars, or reject ghost silently?</li>
+        <li class="con">Screen readers need extra ARIA to announce "suggestion available" and its content.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="notes" id="notesC" style="display:none;">
+    <div>
+      <h3>Pros</h3>
+      <ul>
+        <li class="pro">Non-intrusive baseline — the terminal stays exactly as it was; the chip sits over dead space.</li>
+        <li class="pro">Zero interference with typing — the input line is untouched until the user chooses to engage.</li>
+        <li class="pro">The pulse animation on new suggestions gives a soft "hey, something new" without demanding attention.</li>
+        <li class="pro">Two-tier UX — glance (chip) vs. commit (expanded panel) — matches how the user actually reads suggestions.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Cons</h3>
+      <ul>
+        <li class="con">Hidden by default — users may miss it, especially with a very tall transcript.</li>
+        <li class="con">Extra click to reach the editor; friction if the user always wants to review + edit.</li>
+        <li class="con">Overlay can obscure the tail of the agent's last message on short terminals.</li>
+        <li class="con">Needs a "keyboard-first" story (e.g. Alt+M to expand) so power users aren't mouse-locked.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="notes" id="notesD" style="display:none;">
+    <div>
+      <h3>Pros</h3>
+      <ul>
+        <li class="pro">Reads naturally as part of the conversation — "the agent stopped, Maestro spoke, now it's your turn".</li>
+        <li class="pro">Scrollable — a stale suggestion doesn't clutter the input area; you can scroll past it later.</li>
+        <li class="pro">Doesn't fight the terminal input at all — user can type independently in the bar below.</li>
+        <li class="pro">Rationale + assumptions can expand generously without eating a chrome budget.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Cons</h3>
+      <ul>
+        <li class="con">Sits inside the transcript view — if that view has virtualization / auto-scroll on tail, it moves with new content.</li>
+        <li class="con">"Send" from a block that's above the input feels off — visual + input focus split.</li>
+        <li class="con">Requires a "load into input" hand-off flow so the user can polish the suggestion in the bar first.</li>
+        <li class="con">The block persists in scrollback after send — either becomes noise history, or needs an "archive on send" step.</li>
+      </ul>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  const picker = document.getElementById('picker');
+  picker.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    for (const b of picker.querySelectorAll('button')) b.classList.remove('active');
+    btn.classList.add('active');
+    const v = btn.dataset.v;
+    for (const el of document.querySelectorAll('.variant')) el.classList.remove('active');
+    document.getElementById('variant' + v).classList.add('active');
+    for (const n of ['A','B','C','D']) {
+      const el = document.getElementById('notes' + n);
+      if (el) el.style.display = n === v ? '' : 'none';
+    }
+  });
+</script>
+</body>
+</html>
