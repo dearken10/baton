@@ -11,7 +11,10 @@ You must read /Users/kenchu/Developments/imbee/automation/knowledge/tech/process
 
 You need to resolve the current working directory of the task from the converation
 You must read the aidlc.log, PRD, TD of the task if they are available
-You might reference the Design Mockup,Openspec,source codes etc.
+You might reference the Design Mockup,Openspec etc.
+
+## Move forward
+Push the task forward. If there is questions from the claude code, answer as much as possble. You have to read the PRD and make assumption and pass the assumption to claude and ask it to document any assumption You made for human review later.
 
 ## The claude code recent conversation
 
